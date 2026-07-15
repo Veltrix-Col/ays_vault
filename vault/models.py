@@ -4,6 +4,87 @@ from django.db import models
 from .crypto import decrypt, encrypt, fingerprint
 
 
+class PolicyConfiguration(models.Model):
+    """Configuracion operativa central. Solo puede existir la fila singleton=1."""
+
+    SESSION_POLICIES = [("REVOKE_PREVIOUS", "Revocar anterior"), ("BLOCK_NEW", "Bloquear nueva"), ("ALLOW_LIMIT", "Permitir segun limite")]
+    OUTSIDE_BEHAVIORS = [("ALLOW", "Permitir"), ("ALLOW_ALERT", "Permitir y alertar"), ("REAUTH", "Exigir reautenticacion"), ("BLOCK", "Bloquear")]
+
+    singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    timezone_name = models.CharField(max_length=64, default="America/Bogota")
+    weekday_start = models.TimeField(default="07:00")
+    weekday_end = models.TimeField(default="18:00")
+    saturday_enabled = models.BooleanField(default=False)
+    saturday_start = models.TimeField(default="08:00")
+    saturday_end = models.TimeField(default="12:00")
+    sunday_enabled = models.BooleanField(default=False)
+    session_inactivity_minutes = models.PositiveSmallIntegerField(default=10)
+    maximum_sessions = models.PositiveSmallIntegerField(default=1)
+    new_session_policy = models.CharField(max_length=24, choices=SESSION_POLICIES, default="REVOKE_PREVIOUS")
+    reauthentication_minutes = models.PositiveSmallIntegerField(default=5)
+    reauthentication_operations = models.JSONField(default=list, blank=True)
+    outside_hours_behavior = models.CharField(max_length=20, choices=OUTSIDE_BEHAVIORS, default="ALLOW_ALERT")
+    inactivity_login_days = models.PositiveSmallIntegerField(default=30)
+    inactivity_reveal_days = models.PositiveSmallIntegerField(default=30)
+    inactivity_copy_days = models.PositiveSmallIntegerField(default=30)
+    inactivity_general_days = models.PositiveSmallIntegerField(default=30)
+    inactive_user_days = models.PositiveSmallIntegerField(default=30)
+    operational_user_days = models.PositiveSmallIntegerField(default=45)
+    alert_review_hours = models.PositiveSmallIntegerField(default=24)
+    escalation_hours = models.PositiveSmallIntegerField(default=48)
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="vault_policies_updated")
+
+    def save(self, *args, **kwargs):
+        self.singleton = 1
+        return super().save(*args, **kwargs)
+
+
+class Holiday(models.Model):
+    date = models.DateField(unique=True)
+    name = models.CharField(max_length=140)
+    national = models.BooleanField(default=True)
+    internal = models.BooleanField(default=False)
+    working_day = models.BooleanField(default=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="vault_holidays_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["date"]
+        indexes = [models.Index(fields=["date", "working_day"], name="vault_holiday_lookup")]
+
+
+class AccessException(models.Model):
+    ALLOW = "ALLOW"; BLOCK = "BLOCK"; EXTEND = "EXTEND"; VACATION = "VACATION"
+    TYPES = [(ALLOW, "Permitir"), (BLOCK, "Bloquear"), (EXTEND, "Ampliar horario"), (VACATION, "Vacaciones o pausa operativa")]
+    ACTIVE = "ACTIVE"; REVOKED = "REVOKED"; EXPIRED = "EXPIRED"
+    STATUSES = [(ACTIVE, "Activa"), (REVOKED, "Revocada"), (EXPIRED, "Expirada")]
+
+    name = models.CharField(max_length=140)
+    exception_type = models.CharField(max_length=16, choices=TYPES)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.CASCADE, related_name="vault_access_exceptions")
+    role = models.CharField(max_length=10, blank=True, choices=[("ADMIN", "Administrador"), ("LEADER", "Lider de cartera"), ("ANALYST", "Analista")])
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    daily_start = models.TimeField(null=True, blank=True)
+    daily_end = models.TimeField(null=True, blank=True)
+    operations = models.JSONField(default=list, blank=True)
+    reason = models.CharField(max_length=240)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="vault_exceptions_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=12, choices=STATUSES, default=ACTIVE)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="vault_exceptions_revoked")
+    revocation_reason = models.CharField(max_length=240, blank=True)
+
+    class Meta:
+        ordering = ["-starts_at"]
+        constraints = [models.CheckConstraint(condition=models.Q(ends_at__gt=models.F("starts_at")), name="vault_exception_valid_period")]
+        indexes = [models.Index(fields=["status", "starts_at", "ends_at"], name="vault_exception_window")]
+
+
 class UserProfile(models.Model):
     ADMIN = "ADMIN"
     LEADER = "LEADER"
@@ -99,7 +180,11 @@ class AuditEvent(models.Model):
         ("DEVICE_UNBLOCKED", "Dispositivo desbloqueado"), ("REAUTH_SUCCESS", "Reautenticación exitosa"),
         ("REAUTH_FAILED", "Reautenticación fallida"), ("PASSWORD_CHANGED", "Contraseña cambiada"),
         ("ALERT_CREATED", "Alerta creada"), ("ALERT_REVIEWED", "Alerta revisada"),
-        ("ALERT_CLOSED", "Alerta cerrada"), ("CRITICAL_BLOCKED", "Operación crítica bloqueada"),
+        ("ALERT_CLOSED", "Alerta cerrada"), ("ALERT_ESCALATED", "Alerta escalada"),
+        ("ALERT_REOPENED", "Alerta reabierta"), ("POLICY_CHANGED", "Politica modificada"),
+        ("EXCEPTION_CREATED", "Excepcion creada"), ("EXCEPTION_REVOKED", "Excepcion revocada"),
+        ("EMAIL_SENT", "Correo enviado"), ("EMAIL_FAILED", "Fallo de correo"),
+        ("POLICY_EVALUATION", "Evaluacion programada"), ("CRITICAL_BLOCKED", "Operación crítica bloqueada"),
     ]
     RISK_LEVELS = [("LOW", "Bajo"), ("MEDIUM", "Medio"), ("HIGH", "Alto"), ("CRITICAL", "Crítico")]
 
@@ -221,6 +306,7 @@ class ReauthenticationGrant(models.Model):
 class SecurityAlert(models.Model):
     STATUSES = [("NEW", "Nueva"), ("REVIEWED", "Revisada"), ("JUSTIFIED", "Justificada"), ("ESCALATED", "Escalada"), ("CLOSED", "Cerrada")]
     SEVERITIES = [("LOW", "Baja"), ("MEDIUM", "Media"), ("HIGH", "Alta"), ("CRITICAL", "Crítica")]
+    STATUSES = [("NEW", "Nueva"), ("IN_REVIEW", "En revision"), ("REVIEWED", "Revisada"), ("JUSTIFIED", "Justificada"), ("ESCALATED", "Escalada"), ("CLOSED", "Cerrada"), ("REOPENED", "Reabierta")]
     event = models.OneToOneField(AuditEvent, on_delete=models.PROTECT)
     alert_type = models.CharField(max_length=40, default="SECURITY_EVENT")
     severity = models.CharField(max_length=10, choices=SEVERITIES, default="MEDIUM")
@@ -228,11 +314,94 @@ class SecurityAlert(models.Model):
     affected_user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="vault_alerts_received")
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     device = models.ForeignKey(UserDevice, null=True, blank=True, on_delete=models.SET_NULL, related_name="alerts")
+    policy = models.ForeignKey(PolicyConfiguration, null=True, blank=True, on_delete=models.PROTECT, related_name="alerts")
+    access_exception = models.ForeignKey(AccessException, null=True, blank=True, on_delete=models.PROTECT, related_name="alerts")
     description = models.CharField(max_length=240, blank=True)
     safe_metadata = models.JSONField(default=dict, blank=True)
+    recommendation = models.CharField(max_length=300, blank=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="vault_alerts_assigned")
+    escalated_to = models.CharField(max_length=200, blank=True)
+    idempotency_key = models.CharField(max_length=64, unique=True, null=True, blank=True, editable=False)
     status = models.CharField(max_length=20, choices=STATUSES, default="NEW")
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     review_note = models.TextField(blank=True)
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="vault_alerts_reviewed")
     closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "severity", "due_at"], name="vault_alert_queue"),
+            models.Index(fields=["alert_type", "created_at"], name="vault_alert_type_date"),
+        ]
+
+
+class AlertTransition(models.Model):
+    alert = models.ForeignKey(SecurityAlert, on_delete=models.PROTECT, related_name="transitions")
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20)
+    action = models.CharField(max_length=20)
+    comment = models.TextField(blank=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="vault_alert_transitions")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class NotificationRecipient(models.Model):
+    IMMEDIATE = "IMMEDIATE"; DAILY = "DAILY"; WEEKLY = "WEEKLY"
+    MODES = [(IMMEDIATE, "Inmediato"), (DAILY, "Resumen diario"), (WEEKLY, "Resumen semanal")]
+    name = models.CharField(max_length=120)
+    email = models.EmailField()
+    alert_types = models.JSONField(default=list, blank=True)
+    minimum_severity = models.CharField(max_length=10, choices=SecurityAlert.SEVERITIES, default="HIGH")
+    send_start = models.TimeField(null=True, blank=True)
+    send_end = models.TimeField(null=True, blank=True)
+    delivery_mode = models.CharField(max_length=12, choices=MODES, default=IMMEDIATE)
+    active = models.BooleanField(default=True)
+    is_primary = models.BooleanField(default=False)
+    is_leader = models.BooleanField(default=False)
+    is_alternate = models.BooleanField(default=False)
+    is_escalation = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="vault_recipients_updated")
+
+
+class NotificationRecord(models.Model):
+    PENDING = "PENDING"; SENT = "SENT"; FAILED = "FAILED"; RETRY = "RETRY"
+    RESULTS = [(PENDING, "Pendiente"), (SENT, "Enviado"), (FAILED, "Fallido"), (RETRY, "Reintento")]
+    alert = models.ForeignKey(SecurityAlert, null=True, blank=True, on_delete=models.PROTECT, related_name="notifications")
+    notification_type = models.CharField(max_length=60)
+    masked_recipient = models.CharField(max_length=254)
+    recipient_hash = models.CharField(max_length=64, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    result = models.CharField(max_length=12, choices=RESULTS, default=PENDING)
+    safe_error_code = models.CharField(max_length=80, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    backend = models.CharField(max_length=60)
+    external_id = models.CharField(max_length=160, blank=True)
+    idempotency_hash = models.CharField(max_length=64, unique=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["result", "next_attempt_at"], name="vault_notify_retry")]
+
+
+class PolicyEvaluationRun(models.Model):
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    dry_run = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, default="RUNNING")
+    checks = models.JSONField(default=dict, blank=True)
+    safe_error = models.CharField(max_length=160, blank=True)
+
+
+class AuditVerificationRun(models.Model):
+    checked_at = models.DateTimeField(auto_now_add=True)
+    valid = models.BooleanField()
+    position = models.PositiveBigIntegerField(default=0)
+    source = models.CharField(max_length=40, default="COMMAND")

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -6,6 +8,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
+from django.core.exceptions import PermissionDenied
 
 from .decorators import role_required
 from .forms import CardEditForm, CardForm, RevealForm
@@ -13,11 +16,22 @@ from .models import AuditEvent, PaymentCard, SecurityAlert, UserProfile
 from .security import audit, consume_copy_grant, create_reveal_grant, verify_audit_chain
 from .identity import has_recent_reauth
 from django.urls import reverse
+from .policies import evaluate_access_policy
 
 
 def _active_profile(request):
     profile = getattr(request.user, "vault_profile", None)
     return profile if profile and profile.active and profile.role else None
+
+
+def _enforce_schedule(request, operation):
+    decision = evaluate_access_policy(request.user, request.user.vault_profile.role, operation)
+    if decision.requires_block:
+        audit(request, "CRITICAL_BLOCKED", reason=decision.reason, result="DENIED", risk_level=decision.severity, metadata={"operation": operation, "policy_id": decision.policy_identifier, "exception_id": decision.exception_applied})
+        raise PermissionDenied("Operacion bloqueada por la politica de horario.")
+    if decision.requires_reauthentication and operation == "VIEW" and not has_recent_reauth(request, "outside_hours"):
+        return redirect(f"{reverse('vault:reauthenticate')}?purpose=outside_hours&next={request.path}")
+    return decision
 
 
 @login_required
@@ -26,6 +40,8 @@ def dashboard(request):
     if not profile:
         audit(request, "DENIED", result="DENIED", risk_level="HIGH", metadata={"reason": "profile_inactive_or_unassigned"})
         return render(request, "vault/access_denied.html", status=403)
+    if profile.role == UserProfile.ADMIN:
+        return redirect("vault:control_center")
     today = timezone.localdate()
     chain_ok, chain_position = verify_audit_chain()
     context = {
@@ -35,12 +51,20 @@ def dashboard(request):
         "recent": AuditEvent.objects.select_related("user", "card")[:10],
         "chain_ok": chain_ok,
         "chain_position": chain_position,
+        "usage_7": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=7)).count(),
+        "usage_30": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=30)).count(),
+        "usage_90": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=90)).count(),
+        "last_reveal": AuditEvent.objects.filter(user=request.user, action="REVEAL").order_by("-created_at").first(),
+        "last_copy": AuditEvent.objects.filter(user=request.user, action="COPY", result="SUCCESS").order_by("-created_at").first(),
+        "outside_access": AuditEvent.objects.filter(user=request.user, action="LOGIN", outside_office_hours=True, created_at__gte=timezone.now()-timedelta(days=30)).count(),
     }
     return render(request, "vault/dashboard.html", context)
 
 
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def card_list(request):
+    gate = _enforce_schedule(request, "VIEW")
+    if hasattr(gate, "status_code"): return gate
     cards = PaymentCard.objects.order_by("client_name")
     if request.user.vault_profile.role == UserProfile.ANALYST:
         cards = cards.filter(active=True)
@@ -49,6 +73,7 @@ def card_list(request):
 
 @role_required(UserProfile.LEADER)
 def card_create(request):
+    _enforce_schedule(request, "CREATE")
     if not has_recent_reauth(request, "cards_manage"):
         return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
     form = CardForm(request.POST or None)
@@ -63,6 +88,7 @@ def card_create(request):
 
 @role_required(UserProfile.LEADER)
 def card_edit(request, pk):
+    _enforce_schedule(request, "UPDATE")
     if not has_recent_reauth(request, "cards_manage"):
         return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
     card = get_object_or_404(PaymentCard, pk=pk)
@@ -79,6 +105,7 @@ def card_edit(request, pk):
 @require_POST
 @role_required(UserProfile.LEADER)
 def card_deactivate(request, pk):
+    _enforce_schedule(request, "DEACTIVATE")
     if not has_recent_reauth(request, "cards_manage"):
         return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={reverse('vault:card_detail', args=[pk])}")
     with transaction.atomic():
@@ -94,6 +121,8 @@ def card_deactivate(request, pk):
 @never_cache
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def card_detail(request, pk):
+    gate = _enforce_schedule(request, "VIEW")
+    if hasattr(gate, "status_code"): return gate
     cards = PaymentCard.objects.all()
     if request.user.vault_profile.role == UserProfile.ANALYST:
         cards = cards.filter(active=True)
@@ -107,6 +136,7 @@ def card_detail(request, pk):
 @require_POST
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def reveal(request, pk):
+    _enforce_schedule(request, "REVEAL")
     card = get_object_or_404(PaymentCard, pk=pk, active=True)
     if not has_recent_reauth(request, "reveal"):
         audit(request, "CRITICAL_BLOCKED", card, result="DENIED", risk_level="HIGH", reason="Reautenticación requerida")
@@ -130,6 +160,7 @@ def reveal(request, pk):
 @require_POST
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def copy_event(request, pk):
+    _enforce_schedule(request, "COPY")
     card = get_object_or_404(PaymentCard, pk=pk, active=True)
     grant = consume_copy_grant(request, card, request.POST.get("copy_token", ""))
     if not grant:
@@ -140,6 +171,6 @@ def copy_event(request, pk):
     return JsonResponse({"ok": result == "SUCCESS"}, status=200 if result == "SUCCESS" else 400)
 
 
-@role_required(UserProfile.ADMIN, UserProfile.LEADER)
+@role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
 def audit_list(request):
-    return render(request, "vault/audit.html", {"events": AuditEvent.objects.select_related("user", "card")[:250]})
+    return redirect("vault:timeline")

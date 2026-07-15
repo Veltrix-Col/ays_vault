@@ -30,7 +30,9 @@ El límite predeterminado es 600 segundos. `last_activity_at` se actualiza como 
 
 ## Reautenticación por propósito
 
-Los propósitos actuales son `reveal`, `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change` y `mfa_manage`. Cada grant dura como máximo cinco minutos y queda ligado a usuario y hash de sesión.
+Los propósitos actuales son `reveal`, `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change`, `mfa_manage`, `policy_admin` y `outside_hours`. Cada grant dura el periodo central configurado y queda ligado a usuario y hash de sesión.
+
+Cambiar politicas, festivos, excepciones, destinatarios o reintentar correo exige `policy_admin`. La politica de sesion permite revocar la anterior, bloquear una nueva o conservar sesiones hasta el limite configurado. El valor predeterminado mantiene una sola sesion y revoca la anterior.
 
 ## Procedimientos
 

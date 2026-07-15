@@ -60,6 +60,24 @@ La auditoría inicial detectó avisos en Django 5.2.15, cryptography 45.0.5 y py
 
 Consulte [docs/MFA_AND_SESSION_SECURITY.md](docs/MFA_AND_SESSION_SECURITY.md) y [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
 
+## Centro de Control y monitoreo operativo
+
+El Administrador dispone de un Centro de Control separado de la operacion de tarjetas. Resume integridad de auditoria, MFA, base de datos, correo, configuracion, alertas, excepciones, adopcion y ejecuciones programadas. La linea de tiempo tiene filtros, paginacion y alcance backend por rol; solo usa ID interno o ultimos cuatro digitos de tarjeta.
+
+Las politicas centrales administran horarios entre semana, sabado, domingo, zona `America/Bogota`, sesiones, reautenticacion, comportamiento fuera de horario e inactividad. Festivos y excepciones se resuelven localmente, sin API en tiempo real. Cargue los festivos nacionales con:
+
+```powershell
+python manage.py load_colombia_holidays --year 2026
+python manage.py evaluate_security_policies --dry-run
+python manage.py evaluate_security_policies
+```
+
+El comando de evaluacion es idempotente y revisa inactividad, usuarios sin uso/MFA, vencimientos, alertas vencidas e integridad. Puede ejecutarse desde cron o Task Scheduler y deja un registro seguro; la arquitectura permite moverlo a Celery sin cambiar las reglas.
+
+El correo usa una capa intercambiable. Desarrollo usa el backend de Django/console. Produccion puede usar Microsoft Graph con OAuth 2.0 client credentials mediante MSAL y permiso de aplicacion `Mail.Send`; limite el acceso de la aplicacion al buzon remitente en Microsoft 365. El fallo de correo se registra, admite reintento y nunca revierte la operacion sensible que genero la alerta.
+
+Documentacion operativa: [Centro de Control](docs/CONTROL_CENTER.md), [alertas y correo](docs/ALERTING_AND_EMAIL.md) y [politicas de acceso](docs/ACCESS_POLICIES.md).
+
 ## Variables nuevas
 
 - `SESSION_INACTIVITY_SECONDS=600`
@@ -67,6 +85,10 @@ Consulte [docs/MFA_AND_SESSION_SECURITY.md](docs/MFA_AND_SESSION_SECURITY.md) y 
 - `REAUTH_TTL_SECONDS=300`
 - `MFA_FAILURE_LIMIT=5`
 - `MFA_ISSUER=A&S Vault`
+- `ALERT_EMAIL_BACKEND=console|microsoft_graph`
+- `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`
+- `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`
+- `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES`, `VAULT_BASE_URL`
 
 ## Limitaciones y riesgos pendientes
 

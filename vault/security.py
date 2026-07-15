@@ -1,10 +1,8 @@
 import hashlib
 import json
 import secrets
-from datetime import time, timedelta
+from datetime import timedelta
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
@@ -13,15 +11,13 @@ from .models import AuditChainState, AuditEvent, RevealGrant, SecurityAlert
 
 def client_ip(request):
     # REMOTE_ADDR is authoritative unless a trusted reverse proxy sanitizes it.
-    return request.META.get("REMOTE_ADDR")
+    return request.META.get("REMOTE_ADDR") if request is not None else None
 
 
-def outside_hours():
-    now = timezone.localtime()
-    start = time.fromisoformat(settings.OFFICE_START)
-    end = time.fromisoformat(settings.OFFICE_END)
-    current = now.time().replace(tzinfo=None)
-    return now.weekday() >= 5 or not (start <= current <= end)
+def outside_hours(user=None, operation="ACCESS", at=None):
+    from .policies import evaluate_access_policy
+    role = getattr(getattr(user, "vault_profile", None), "role", "") if user else ""
+    return not evaluate_access_policy(user=user, role=role, operation=operation, at=at).within_schedule
 
 
 def _canonical(event):
@@ -56,10 +52,11 @@ def session_hash(request_or_key):
     return hashlib.sha256((raw or "").encode()).hexdigest() if raw else ""
 
 
-def audit(request, action, card=None, field_name="", reason="", metadata=None, result="SUCCESS", risk_level="LOW", user=None):
-    actor = user if user is not None else (request.user if request.user.is_authenticated else None)
+def audit(request, action, card=None, field_name="", reason="", metadata=None, result="SUCCESS", risk_level="LOW", user=None, occurred_at=None):
+    request_user = getattr(request, "user", None)
+    actor = user if user is not None else (request_user if request_user and request_user.is_authenticated else None)
     profile = getattr(actor, "vault_profile", None) if actor else None
-    is_outside = outside_hours()
+    is_outside = outside_hours(actor, action)
     if is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}:
         risk_level = "HIGH"
 
@@ -74,10 +71,10 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
             field_name=field_name,
             reason=reason,
             ip_address=client_ip(request),
-            user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
-            session_key=session_hash(request),
-            path=(request.path or "")[:300],
-            method=request.method or "",
+            user_agent=(request.META.get("HTTP_USER_AGENT", "")[:300] if request is not None else "system"),
+            session_key=session_hash(request) if request is not None else "",
+            path=((request.path or "")[:300] if request is not None else "management-command"),
+            method=(request.method or "" if request is not None else "SYSTEM"),
             result=result,
             risk_level=risk_level,
             outside_office_hours=is_outside,
@@ -85,6 +82,9 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
             previous_hash=state.last_hash,
             event_hash="0" * 64,
         )
+        if occurred_at is not None:
+            AuditEvent.objects.filter(pk=event.pk).update(created_at=occurred_at)
+            event.created_at = occurred_at
         event.event_hash = _event_hash(event)
         AuditEvent.objects.filter(pk=event.pk).update(event_hash=event.event_hash)
         state.last_sequence = event.sequence
@@ -93,21 +93,9 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
 
     if (is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}) or result != "SUCCESS":
         SecurityAlert.objects.get_or_create(event=event, defaults={"alert_type": action, "severity": "HIGH" if risk_level in {"HIGH", "CRITICAL"} else "MEDIUM", "actor": actor, "affected_user": actor, "ip_address": event.ip_address, "description": f"Evento de seguridad: {event.get_action_display()}"})
-        if settings.ALERT_EMAIL:
-            send_mail(
-                f"[A&S Vault] Alerta de seguridad: {event.get_action_display()}",
-                "\n".join([
-                    f"Usuario: {event.user or 'No identificado'}",
-                    f"Acción: {event.get_action_display()}",
-                    f"Tarjeta: **** {card.last4 if card else 'N/A'}",
-                    f"Fecha: {timezone.localtime(event.created_at)}",
-                    f"IP: {event.ip_address}",
-                    f"Resultado: {event.result}",
-                ]),
-                settings.DEFAULT_FROM_EMAIL,
-                [settings.ALERT_EMAIL],
-                fail_silently=True,
-            )
+        alert = SecurityAlert.objects.get(event=event)
+        from .notifications import notify_alert
+        transaction.on_commit(lambda: notify_alert(alert))
     return event
 
 

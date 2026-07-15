@@ -30,6 +30,12 @@ Cada autorización contiene usuario, hash de sesión, propósito, validación y 
 
 Las alertas contienen tipo, severidad, estado, actores, IP, dispositivo, descripción y metadatos seguros. No contienen PAN, vencimiento, OTP ni códigos. La auditoría encadena datos canónicos con SHA-256 y una secuencia serializada; detecta manipulación pero no reemplaza un registro externo inmutable.
 
+El Centro de Control agrega politicas, festivos, excepciones, transiciones de alertas, historial de notificaciones y ejecuciones programadas. Estas tablas referencian usuarios con borrado protegido cuando la trazabilidad administrativa lo exige. Alertas, transiciones y notificaciones no se pueden borrar desde las interfaces provistas.
+
+`evaluate_access_policy()` es la unica autoridad horaria. Devuelve permiso, pertenencia al horario, motivo, politica, severidad, necesidad de reautenticacion/alerta/bloqueo y excepcion aplicada. Vistas sensibles consumen esa decision sin duplicar calendarios.
+
+Microsoft Graph se autentica mediante MSAL y credenciales de aplicacion tomadas solo del entorno. No se persisten client secrets, access tokens ni contenido del mensaje. La bitacora de correo conserva destinatario enmascarado, hash, resultado, intentos, backend e identificador externo.
+
 ## Riesgos residuales
 
 Capturas o fotografías del dato revelado, portapapeles del sistema, administradores de infraestructura, llaves en proceso, falta de KMS/SIEM, ausencia de pruebas PostgreSQL/concurrencia y falta de pentest/QA visual. A&S Vault no debe recibir datos reales hasta cerrar estos riesgos y validar infraestructura y cumplimiento.

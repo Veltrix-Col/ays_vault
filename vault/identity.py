@@ -14,6 +14,7 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from .crypto import decrypt, encrypt
 from .models import MFARecoveryCode, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
 from .security import audit, client_ip, outside_hours, session_hash
+from .policies import get_policy
 
 
 def _ua_parts(user_agent):
@@ -36,6 +37,8 @@ def create_alert(request, event, alert_type, severity, affected_user=None, devic
         "affected_user": affected_user, "ip_address": client_ip(request), "device": device,
         "description": description[:240], "safe_metadata": metadata or {},
     })
+    from .notifications import notify_alert
+    transaction.on_commit(lambda: notify_alert(alert))
     return alert
 
 
@@ -129,6 +132,10 @@ def establish_secure_session(request, user, otp_device, device):
     current_hash = session_hash(request)
     with transaction.atomic():
         previous = list(SecureSession.objects.select_for_update().filter(user=user, status=SecureSession.ACTIVE).exclude(session_hash=current_hash))
+        policy = get_policy()
+        if policy.new_session_policy == "ALLOW_LIMIT":
+            keep_count = max(policy.maximum_sessions - 1, 0)
+            previous = sorted(previous, key=lambda item: item.last_activity_at, reverse=True)[keep_count:]
         for record in previous:
             revoke_session(record, actor=user, reason="Reemplazada por un nuevo inicio de sesión", request=request, action="SESSION_REPLACED")
         if previous:
@@ -138,7 +145,7 @@ def establish_secure_session(request, user, otp_device, device):
         now = timezone.now()
         record, _ = SecureSession.objects.update_or_create(session_hash=current_hash, defaults={
             "user": user, "encrypted_session_key": encrypt(request.session.session_key), "device": device,
-            "last_activity_at": now, "expires_at": now + timedelta(seconds=settings.SESSION_INACTIVITY_SECONDS),
+            "last_activity_at": now, "expires_at": now + timedelta(minutes=get_policy().session_inactivity_minutes),
             "initial_ip": client_ip(request), "last_ip": client_ip(request), "user_agent": device.user_agent,
             "browser": device.browser, "operating_system": device.operating_system, "device_type": device.device_type,
             "friendly_name": device.friendly_name, "status": SecureSession.ACTIVE, "mfa_completed": True,
@@ -160,7 +167,7 @@ def has_recent_reauth(request, purpose):
 def grant_reauthentication(request, purpose):
     now = timezone.now()
     ReauthenticationGrant.objects.filter(user=request.user, session_hash=session_hash(request), purpose=purpose, invalidated_at__isnull=True).update(invalidated_at=now)
-    grant = ReauthenticationGrant.objects.create(user=request.user, session_hash=session_hash(request), purpose=purpose, expires_at=now + timedelta(seconds=settings.REAUTH_TTL_SECONDS))
+    grant = ReauthenticationGrant.objects.create(user=request.user, session_hash=session_hash(request), purpose=purpose, expires_at=now + timedelta(minutes=get_policy().reauthentication_minutes))
     SecureSession.objects.filter(user=request.user, session_hash=session_hash(request)).update(last_reauthenticated_at=now)
     return grant
 

@@ -15,8 +15,9 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from .forms import MFAEnrollmentForm, OTPVerificationForm, PasswordLoginForm
 from .identity import confirmed_totp_device, consume_recovery_code, create_alert, establish_secure_session, generate_recovery_codes, get_or_register_device, verify_totp
-from .models import UserDevice, UserProfile
+from .models import SecureSession, UserDevice, UserProfile
 from .security import audit
+from .policies import evaluate_access_policy, get_policy
 
 
 PREAUTH_TTL = 300
@@ -39,9 +40,14 @@ def _preauth_user(request):
 
 
 def _complete_login(request, user, otp_device, device):
+    policy = get_policy()
+    if policy.new_session_policy == "BLOCK_NEW" and SecureSession.objects.filter(user=user, status=SecureSession.ACTIVE).exists():
+        audit(request, "CRITICAL_BLOCKED", user=user, reason="Politica de sesion nueva", result="DENIED", risk_level="HIGH", metadata={"session_policy": "BLOCK_NEW"})
+        return False
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     establish_secure_session(request, user, otp_device, device)
-    request.session.set_expiry(settings.SESSION_INACTIVITY_SECONDS)
+    request.session.set_expiry(policy.session_inactivity_minutes * 60)
+    return True
 
 
 def _mfa_failure(request, user, device):
@@ -66,6 +72,11 @@ def password_login(request):
         if not profile or not profile.active or not profile.role:
             form.add_error(None, "No fue posible completar el acceso.")
         else:
+            decision = evaluate_access_policy(user, profile.role, "LOGIN")
+            if decision.requires_block:
+                audit(request, "CRITICAL_BLOCKED", user=user, reason=decision.reason, result="DENIED", risk_level=decision.severity, metadata={"operation": "LOGIN", "policy_id": decision.policy_identifier, "exception_id": decision.exception_applied})
+                form.add_error(None, "El acceso no esta permitido en este horario.")
+                return render(request, "registration/login.html", {"form": form})
             device, _ = get_or_register_device(request, user)
             if device.status == UserDevice.BLOCKED:
                 event = audit(request, "DEVICE_BLOCKED", user=user, result="DENIED", risk_level="CRITICAL", metadata={"device_id": device.pk})
@@ -101,7 +112,9 @@ def mfa_verify(request):
             recovery_used = bool(form.cleaned_data.get("recovery_code"))
             user.vault_profile.mfa_failed_attempts = 0
             user.vault_profile.save(update_fields=["mfa_failed_attempts"])
-            _complete_login(request, user, otp_device, device)
+            if not _complete_login(request, user, otp_device, device):
+                form.add_error(None, "La politica vigente no permite una nueva sesion.")
+                return render(request, "registration/mfa_verify.html", {"form": form})
             event = audit(request, "MFA_RECOVERY_USED" if recovery_used else "MFA_SUCCESS", user=user, risk_level="HIGH" if recovery_used else "LOW")
             if recovery_used:
                 create_alert(request, event, "RECOVERY_CODE_USED", "HIGH", user, device, "Se utilizó un código de recuperación.")
@@ -132,7 +145,9 @@ def mfa_enroll(request):
             user.vault_profile.save(update_fields=["mfa_status", "mfa_enabled", "mfa_failed_attempts", "mfa_changed_at"])
             codes = generate_recovery_codes(user)
             browser_device, _ = get_or_register_device(request, user)
-            _complete_login(request, user, device, browser_device)
+            if not _complete_login(request, user, device, browser_device):
+                form.add_error(None, "La politica vigente no permite una nueva sesion.")
+                return render(request, "registration/mfa_enroll.html", {"form": form, "manual_key": "", "qr_data_uri": ""})
             request.session["recovery_codes_pending"] = True
             audit(request, "MFA_ENROLL_COMPLETE", user=user)
             return render(request, "registration/recovery_codes.html", {"codes": codes, "first_display": True})

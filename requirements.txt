@@ -6,3 +6,4 @@ python-dotenv==1.2.2
 segno==1.6.6
 whitenoise==6.9.0
 psycopg[binary]==3.2.9
+msal==1.37.0

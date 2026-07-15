@@ -1,8 +1,13 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
+from datetime import timedelta
+import hashlib
 
-from vault.models import PaymentCard, UserProfile
+from vault.management.commands.load_colombia_holidays import colombia_holidays
+from vault.models import AccessException, AuditEvent, Holiday, NotificationRecipient, NotificationRecord, PaymentCard, PolicyConfiguration, SecurityAlert, UserProfile
+from vault.security import audit
 
 
 def with_luhn_check_digit(prefix):
@@ -79,4 +84,52 @@ class Command(BaseCommand):
             card.set_expiry(f"{(index % 12) + 1:02d}/{27 + (index % 4):02d}")
             card.save()
 
-        self.stdout.write(self.style.SUCCESS("Demo lista: 30 tarjetas ficticias y tres usuarios individuales. Consulte README para credenciales."))
+        policy, _ = PolicyConfiguration.objects.get_or_create(singleton=1)
+        policy.updated_by = users[UserProfile.ADMIN]
+        policy.save(update_fields=["updated_by", "updated_at"])
+
+        current_year = timezone.localdate().year
+        for value, name in list(colombia_holidays(current_year).items())[:5]:
+            Holiday.objects.update_or_create(date=value, defaults={"name": name, "national": True, "internal": False})
+        Holiday.objects.update_or_create(date=timezone.localdate() + timedelta(days=20), defaults={"name": "Jornada interna demo", "national": False, "internal": True})
+
+        now = timezone.now()
+        AccessException.objects.update_or_create(
+            name="Excepcion activa demo",
+            defaults={"exception_type": AccessException.ALLOW, "role": UserProfile.LEADER, "starts_at": now - timedelta(hours=1), "ends_at": now + timedelta(hours=2), "operations": ["VIEW", "REVEAL", "COPY"], "reason": "Prueba controlada de continuidad operativa", "created_by": users[UserProfile.ADMIN], "status": AccessException.ACTIVE},
+        )
+        AccessException.objects.update_or_create(
+            name="Excepcion expirada demo",
+            defaults={"exception_type": AccessException.EXTEND, "starts_at": now - timedelta(days=5), "ends_at": now - timedelta(days=4), "reason": "Cierre mensual ficticio", "created_by": users[UserProfile.ADMIN], "status": AccessException.EXPIRED},
+        )
+
+        demo_events = [
+            ("demo-login-old", "LOGIN", users[UserProfile.LEADER], None, now - timedelta(days=35), "LOW", "SUCCESS"),
+            ("demo-reveal-old", "REVEAL", users[UserProfile.LEADER], PaymentCard.objects.filter(active=True).first(), now - timedelta(days=35), "LOW", "SUCCESS"),
+            ("demo-copy-old", "COPY", users[UserProfile.ANALYST], PaymentCard.objects.filter(active=True).first(), now - timedelta(days=35), "LOW", "SUCCESS"),
+            ("demo-device-new", "DEVICE_NEW", users[UserProfile.ANALYST], None, now - timedelta(hours=3), "MEDIUM", "SUCCESS"),
+            ("demo-outside-hours", "LOGIN", users[UserProfile.LEADER], None, now - timedelta(hours=2), "HIGH", "SUCCESS"),
+        ]
+        for key, action, user, card, occurred_at, risk, result in demo_events:
+            if not AuditEvent.objects.filter(metadata__demo_key=key).exists():
+                audit(None, action, user=user, card=card, reason="Evento ficticio de demostracion", metadata={"demo_key": key}, risk_level=risk, result=result, occurred_at=occurred_at)
+
+        alert_specs = [
+            ("demo-alert-critical", "AUDIT_INTEGRITY_REVIEW", "CRITICAL", "Revision ficticia de integridad."),
+            ("demo-alert-high", "POSSIBLE_PARALLEL_TOOL_USE", "HIGH", "El sistema no presenta actividad operativa reciente; validar adopcion del proceso."),
+            ("demo-alert-medium", "NEW_DEVICE", "MEDIUM", "Dispositivo nuevo ficticio."),
+            ("demo-alert-low", "HOLIDAY_UPCOMING", "LOW", "Festivo proximo."),
+        ]
+        for key, alert_type, severity, description in alert_specs:
+            event = AuditEvent.objects.filter(metadata__demo_key=key).first()
+            if not event:
+                event = audit(None, "ACCESS", user=users[UserProfile.ADMIN], reason="Alerta ficticia", metadata={"demo_key": key}, risk_level=severity)
+            SecurityAlert.objects.update_or_create(event=event, defaults={"alert_type": alert_type, "severity": severity, "affected_user": users[UserProfile.LEADER], "description": description, "recommendation": "Validar el caso con el responsable del proceso.", "due_at": now + timedelta(hours=24)})
+
+        recipient, _ = NotificationRecipient.objects.update_or_create(name="Administrador demo", defaults={"email": "administrador@example.invalid", "minimum_severity": "LOW", "active": True, "is_primary": True, "updated_by": users[UserProfile.ADMIN]})
+        demo_alert = SecurityAlert.objects.filter(alert_type="NEW_DEVICE").first()
+        if demo_alert:
+            idem = hashlib.sha256(f"demo-notification:{demo_alert.pk}".encode()).hexdigest()
+            NotificationRecord.objects.update_or_create(idempotency_hash=idem, defaults={"alert": demo_alert, "notification_type": demo_alert.alert_type, "masked_recipient": "a***@example.invalid", "recipient_hash": hashlib.sha256(recipient.email.encode()).hexdigest(), "result": NotificationRecord.SENT, "attempts": 1, "backend": "console", "sent_at": now})
+
+        self.stdout.write(self.style.SUCCESS("Demo lista: tarjetas, usuarios, politicas, festivos, excepciones, alertas y actividad ficticia."))

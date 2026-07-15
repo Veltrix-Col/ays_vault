@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth import authenticate
 
 from .crypto import fingerprint
-from .models import PaymentCard
+from .models import AccessException, Holiday, NotificationRecipient, PaymentCard, PolicyConfiguration
 
 
 def luhn_valid(number):
@@ -132,3 +132,44 @@ class ReauthenticationForm(forms.Form):
 
 class ReasonForm(forms.Form):
     reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
+
+
+class PolicyConfigurationForm(forms.ModelForm):
+    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
+
+    class Meta:
+        model = PolicyConfiguration
+        exclude = ["singleton", "updated_by", "updated_at"]
+        widgets = {"reauthentication_operations": forms.Textarea(attrs={"rows": 3})}
+
+
+class AccessExceptionForm(forms.ModelForm):
+    class Meta:
+        model = AccessException
+        fields = ["name", "exception_type", "user", "role", "starts_at", "ends_at", "daily_start", "daily_end", "operations", "reason"]
+        widgets = {"starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "operations": forms.Textarea(attrs={"rows": 3})}
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("starts_at") and cleaned.get("ends_at") and cleaned["ends_at"] <= cleaned["starts_at"]:
+            self.add_error("ends_at", "La fecha final debe ser posterior a la inicial.")
+        if cleaned.get("user") and cleaned.get("role"):
+            raise forms.ValidationError("Seleccione usuario o rol, no ambos.")
+        return cleaned
+
+
+class NotificationRecipientForm(forms.ModelForm):
+    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
+
+    class Meta:
+        model = NotificationRecipient
+        exclude = ["updated_by", "updated_at"]
+
+
+class HolidayForm(forms.ModelForm):
+    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
+
+    class Meta:
+        model = Holiday
+        fields = ["date", "name", "national", "internal", "working_day"]
+        widgets = {"date": forms.DateInput(attrs={"type": "date"})}

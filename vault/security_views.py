@@ -15,13 +15,13 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .decorators import role_required
 from .forms import ReasonForm, ReauthenticationForm
 from .identity import create_alert, current_secure_session, generate_recovery_codes, grant_reauthentication, has_recent_reauth, invalidate_authorizations, reset_user_mfa, revoke_session, verify_totp
-from .models import ReauthenticationGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
+from .models import AlertTransition, ReauthenticationGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
 from .security import audit
 from .security import session_hash
 from .crypto import encrypt
 
 
-PURPOSES = {"reveal", "cards_manage", "identity_admin", "session_manage", "device_manage", "alerts_manage", "password_change", "mfa_manage"}
+PURPOSES = {"reveal", "cards_manage", "identity_admin", "session_manage", "device_manage", "alerts_manage", "password_change", "mfa_manage", "policy_admin", "outside_hours"}
 
 
 def _safe_next(request, fallback="vault:dashboard"):
@@ -220,16 +220,33 @@ def alert_detail(request, pk):
     if request.method == "POST":
         if request.user.vault_profile.role not in {UserProfile.ADMIN, UserProfile.LEADER} or not has_recent_reauth(request, "alerts_manage"):
             return redirect(f"{reverse('vault:reauthenticate')}?purpose=alerts_manage&next={request.path}")
+        action = request.POST.get("action", "transition")
         status = request.POST.get("status")
         note = request.POST.get("review_note", "").strip()
+        if action == "assign":
+            assigned_id = request.POST.get("assigned_to")
+            alert.assigned_to = get_object_or_404(get_user_model(), pk=assigned_id) if assigned_id else request.user
+            alert.save(update_fields=["assigned_to"])
+            AlertTransition.objects.create(alert=alert, from_status=alert.status, to_status=alert.status, action="ASSIGN", comment=note, actor=request.user)
+            audit(request, "ALERT_REVIEWED", metadata={"alert_id": alert.pk, "action": "assign", "assigned_to": alert.assigned_to_id})
+            return redirect("vault:alert_detail", pk=alert.pk)
         if status not in dict(SecurityAlert.STATUSES) or status in {"JUSTIFIED", "CLOSED"} and len(note) < 5:
             return HttpResponseBadRequest("Estado o comentario inválido")
+        escalation = request.POST.get("escalated_to", "").strip()
+        if status == "ESCALATED" and not escalation:
+            return HttpResponseBadRequest("Escalamiento requiere destinatario o grupo")
+        previous = alert.status
         alert.status = status; alert.review_note = note; alert.reviewed_at = timezone.now(); alert.reviewed_by = request.user
+        if status == "ESCALATED": alert.escalated_to = escalation
         if status == "CLOSED": alert.closed_at = timezone.now()
-        alert.save(update_fields=["status", "review_note", "reviewed_at", "reviewed_by", "closed_at"])
-        audit(request, "ALERT_CLOSED" if status == "CLOSED" else "ALERT_REVIEWED", metadata={"alert_id": alert.pk, "status": status})
+        elif previous == "CLOSED": alert.closed_at = None
+        alert.save(update_fields=["status", "review_note", "reviewed_at", "reviewed_by", "closed_at", "escalated_to"])
+        AlertTransition.objects.create(alert=alert, from_status=previous, to_status=status, action=action.upper()[:20], comment=note, actor=request.user)
+        audit_action = "ALERT_CLOSED" if status == "CLOSED" else "ALERT_ESCALATED" if status == "ESCALATED" else "ALERT_REOPENED" if status == "REOPENED" else "ALERT_REVIEWED"
+        audit(request, audit_action, reason=note, metadata={"alert_id": alert.pk, "status": status, "previous_status": previous, "escalated_to": bool(escalation)})
         return redirect("vault:alert_detail", pk=alert.pk)
-    return render(request, "vault/security/alert_detail.html", {"alert": alert})
+    assignees = get_user_model().objects.filter(vault_profile__role__in=[UserProfile.ADMIN, UserProfile.LEADER], vault_profile__active=True)
+    return render(request, "vault/security/alert_detail.html", {"alert": alert, "assignees": assignees})
 
 
 @login_required

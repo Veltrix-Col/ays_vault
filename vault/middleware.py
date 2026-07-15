@@ -8,6 +8,7 @@ from datetime import timedelta
 
 from .identity import current_secure_session, invalidate_authorizations, revoke_session
 from .models import SecureSession, UserDevice
+from .policies import get_policy
 
 
 class SecurityHeadersMiddleware:
@@ -58,7 +59,8 @@ class SecureSessionMiddleware:
             logout(request)
             return redirect("login")
         now = timezone.now()
-        if record.status != SecureSession.ACTIVE or record.last_activity_at < now - timedelta(seconds=settings.SESSION_INACTIVITY_SECONDS):
+        inactivity_seconds = get_policy().session_inactivity_minutes * 60
+        if record.status != SecureSession.ACTIVE or record.last_activity_at < now - timedelta(seconds=inactivity_seconds):
             audit(request, "SESSION_EXPIRED", reason="Expiración por inactividad", metadata={"secure_session_id": record.pk})
             record.status = SecureSession.EXPIRED
             record.revoked_at = now
@@ -74,7 +76,7 @@ class SecureSessionMiddleware:
             return redirect("login")
         if record.last_activity_at < now - timedelta(seconds=settings.SESSION_ACTIVITY_THROTTLE_SECONDS):
             record.last_activity_at = now
-            record.expires_at = now + timedelta(seconds=settings.SESSION_INACTIVITY_SECONDS)
+            record.expires_at = now + timedelta(seconds=inactivity_seconds)
             record.last_ip = request.META.get("REMOTE_ADDR")
             record.save(update_fields=["last_activity_at", "expires_at", "last_ip"])
         return self.get_response(request)

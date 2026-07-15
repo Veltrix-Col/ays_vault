@@ -4,7 +4,7 @@ from django.contrib.auth.admin import UserAdmin
 from django.core.exceptions import PermissionDenied
 from django import forms
 
-from .models import AuditEvent, SecurityAlert, UserProfile
+from .models import AccessException, AlertTransition, AuditEvent, AuditVerificationRun, Holiday, NotificationRecipient, NotificationRecord, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, UserProfile
 from .security import audit
 from .identity import has_recent_reauth
 from django_otp.plugins.otp_totp.models import TOTPDevice
@@ -113,3 +113,19 @@ class SecurityAlertAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         audit(request, "UPDATE", reason="Cambio de estado de alerta", metadata={"alert_id": obj.pk, "status": obj.status})
+
+
+class ReadOnlyControlAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request): return False
+    def has_change_permission(self, request, obj=None): return False
+    def has_delete_permission(self, request, obj=None): return False
+
+
+admin.site.register(AccessException, ReadOnlyControlAdmin)
+admin.site.register(AlertTransition, ReadOnlyControlAdmin)
+admin.site.register(Holiday, ReadOnlyControlAdmin)
+admin.site.register(NotificationRecord, ReadOnlyControlAdmin)
+admin.site.register(PolicyEvaluationRun, ReadOnlyControlAdmin)
+admin.site.register(AuditVerificationRun, ReadOnlyControlAdmin)
+admin.site.register(PolicyConfiguration, ReadOnlyControlAdmin)
+admin.site.register(NotificationRecipient, ReadOnlyControlAdmin)
