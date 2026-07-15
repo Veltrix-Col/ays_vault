@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<div class="page-heading"><div><span class="section-kicker">MFA</span><h1>Regenerar códigos de recuperación</h1><p>Todos los códigos anteriores quedarán invalidados.</p></div></div><section class="panel"><form method="post">{% csrf_token %}<button class="btn danger">Regenerar y mostrar una vez</button></form></section>{% endblock %}

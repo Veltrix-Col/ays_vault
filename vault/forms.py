@@ -1,4 +1,5 @@
 from django import forms
+from django.contrib.auth import authenticate
 
 from .crypto import fingerprint
 from .models import PaymentCard
@@ -88,14 +89,46 @@ class RevealForm(forms.Form):
     field = forms.ChoiceField(choices=[("pan", "Número de tarjeta"), ("expiry", "Vencimiento")])
     reason = forms.CharField(max_length=240, min_length=5)
     reference = forms.CharField(max_length=120, required=False)
-    password = forms.CharField(widget=forms.PasswordInput)
-
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.user = user
 
-    def clean_password(self):
-        password = self.cleaned_data["password"]
-        if not self.user or not self.user.is_active or not self.user.check_password(password):
-            raise forms.ValidationError("No fue posible confirmar la identidad.")
-        return password
+
+class PasswordLoginForm(forms.Form):
+    username = forms.CharField(max_length=150, label="Usuario")
+    password = forms.CharField(widget=forms.PasswordInput, label="Contraseña")
+
+    def __init__(self, *args, request=None, **kwargs):
+        super().__init__(*args, **kwargs); self.request = request; self.user = None
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("username") and cleaned.get("password"):
+            self.user = authenticate(self.request, username=cleaned["username"], password=cleaned["password"])
+            if not self.user:
+                raise forms.ValidationError("No fue posible validar las credenciales.")
+        return cleaned
+
+
+class OTPVerificationForm(forms.Form):
+    token = forms.CharField(max_length=12, required=False, label="Código de autenticación", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
+    recovery_code = forms.CharField(max_length=20, required=False, label="Código de recuperación", widget=forms.TextInput(attrs={"autocomplete": "off"}))
+
+    def clean(self):
+        cleaned = super().clean()
+        if bool(cleaned.get("token")) == bool(cleaned.get("recovery_code")):
+            raise forms.ValidationError("Ingrese un código de autenticación o uno de recuperación.")
+        return cleaned
+
+
+class MFAEnrollmentForm(forms.Form):
+    password = forms.CharField(widget=forms.PasswordInput, label="Contraseña")
+    token = forms.CharField(max_length=12, label="Primer código TOTP", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
+
+
+class ReauthenticationForm(forms.Form):
+    password = forms.CharField(widget=forms.PasswordInput, label="Contraseña")
+    token = forms.CharField(max_length=12, label="Código TOTP", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
+
+
+class ReasonForm(forms.Form):
+    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")

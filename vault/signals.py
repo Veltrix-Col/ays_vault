@@ -5,6 +5,9 @@ from django.dispatch import receiver
 
 from .models import UserProfile
 from .security import audit
+from .security import session_hash
+from .models import ReauthenticationGrant, RevealGrant, SecureSession
+from django.utils import timezone
 
 
 @receiver(post_save, sender=get_user_model())
@@ -23,6 +26,11 @@ def record_login(sender, request, user, **kwargs):
 def record_logout(sender, request, user, **kwargs):
     if request is not None:
         audit(request, "LOGOUT", user=user)
+        if user:
+            identifier = session_hash(request)
+            SecureSession.objects.filter(user=user, session_hash=identifier, status=SecureSession.ACTIVE).update(status=SecureSession.REVOKED, revoked_at=timezone.now(), revocation_reason="Cierre de sesión")
+            ReauthenticationGrant.objects.filter(user=user, session_hash=identifier, invalidated_at__isnull=True).update(invalidated_at=timezone.now())
+            RevealGrant.objects.filter(user=user, session_key=identifier).delete()
 
 
 @receiver(user_login_failed)

@@ -11,6 +11,8 @@ from .decorators import role_required
 from .forms import CardEditForm, CardForm, RevealForm
 from .models import AuditEvent, PaymentCard, SecurityAlert, UserProfile
 from .security import audit, consume_copy_grant, create_reveal_grant, verify_audit_chain
+from .identity import has_recent_reauth
+from django.urls import reverse
 
 
 def _active_profile(request):
@@ -47,6 +49,8 @@ def card_list(request):
 
 @role_required(UserProfile.LEADER)
 def card_create(request):
+    if not has_recent_reauth(request, "cards_manage"):
+        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
     form = CardForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
@@ -59,6 +63,8 @@ def card_create(request):
 
 @role_required(UserProfile.LEADER)
 def card_edit(request, pk):
+    if not has_recent_reauth(request, "cards_manage"):
+        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
     card = get_object_or_404(PaymentCard, pk=pk)
     form = CardEditForm(request.POST or None, instance=card)
     if request.method == "POST" and form.is_valid():
@@ -73,6 +79,8 @@ def card_edit(request, pk):
 @require_POST
 @role_required(UserProfile.LEADER)
 def card_deactivate(request, pk):
+    if not has_recent_reauth(request, "cards_manage"):
+        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={reverse('vault:card_detail', args=[pk])}")
     with transaction.atomic():
         card = get_object_or_404(PaymentCard.objects.select_for_update(), pk=pk, active=True)
         card.active = False
@@ -100,6 +108,9 @@ def card_detail(request, pk):
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def reveal(request, pk):
     card = get_object_or_404(PaymentCard, pk=pk, active=True)
+    if not has_recent_reauth(request, "reveal"):
+        audit(request, "CRITICAL_BLOCKED", card, result="DENIED", risk_level="HIGH", reason="Reautenticación requerida")
+        return JsonResponse({"ok": False, "reauth_required": True, "reauth_url": f"{reverse('vault:reauthenticate')}?purpose=reveal&next={reverse('vault:card_detail', args=[pk])}"}, status=428)
     form = RevealForm(request.POST, user=request.user)
     if not form.is_valid():
         audit(request, "REVEAL", card, reason="Validación de revelado fallida", result="DENIED", risk_level="HIGH")

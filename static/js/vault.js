@@ -14,7 +14,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
     const response = await fetch(form.action, { method: "POST", body: data, headers: { "X-CSRFToken": csrf }, cache: "no-store" });
     const payload = await response.json();
-    if (!response.ok) { window.alert("No fue posible confirmar. Verifique identidad, motivo y permisos."); return; }
+    if (response.status === 428 && payload.reauth_url) { window.location.assign(payload.reauth_url); return; }
+    if (!response.ok) { window.alert("No fue posible confirmar. Verifique el motivo y los permisos."); return; }
     const field = payload.field;
     const target = document.querySelector(`#value-${field}`);
     target.textContent = payload.value;

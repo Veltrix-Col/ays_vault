@@ -51,6 +51,11 @@ def _event_hash(event):
     return hashlib.sha256(_canonical(event).encode()).hexdigest()
 
 
+def session_hash(request_or_key):
+    raw = request_or_key.session.session_key if hasattr(request_or_key, "session") else request_or_key
+    return hashlib.sha256((raw or "").encode()).hexdigest() if raw else ""
+
+
 def audit(request, action, card=None, field_name="", reason="", metadata=None, result="SUCCESS", risk_level="LOW", user=None):
     actor = user if user is not None else (request.user if request.user.is_authenticated else None)
     profile = getattr(actor, "vault_profile", None) if actor else None
@@ -70,7 +75,7 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
             reason=reason,
             ip_address=client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
-            session_key=request.session.session_key or "",
+            session_key=session_hash(request),
             path=(request.path or "")[:300],
             method=request.method or "",
             result=result,
@@ -87,7 +92,7 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
         state.save(update_fields=["last_sequence", "last_hash"])
 
     if (is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}) or result != "SUCCESS":
-        SecurityAlert.objects.get_or_create(event=event)
+        SecurityAlert.objects.get_or_create(event=event, defaults={"alert_type": action, "severity": "HIGH" if risk_level in {"HIGH", "CRITICAL"} else "MEDIUM", "actor": actor, "affected_user": actor, "ip_address": event.ip_address, "description": f"Evento de seguridad: {event.get_action_display()}"})
         if settings.ALERT_EMAIL:
             send_mail(
                 f"[A&S Vault] Alerta de seguridad: {event.get_action_display()}",
@@ -114,7 +119,7 @@ def create_reveal_grant(request, card, field_name, reason):
         card=card,
         field_name=field_name,
         reason=reason,
-        session_key=request.session.session_key or "",
+        session_key=session_hash(request),
         expires_at=timezone.now() + timedelta(seconds=25),
     )
     return token
@@ -127,7 +132,7 @@ def consume_copy_grant(request, card, token):
             token_hash=token_hash,
             user=request.user,
             card=card,
-            session_key=request.session.session_key or "",
+            session_key=session_hash(request),
             copied_at__isnull=True,
             expires_at__gte=timezone.now(),
         ).first()

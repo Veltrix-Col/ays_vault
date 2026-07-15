@@ -1,10 +1,13 @@
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
+from django.core.exceptions import PermissionDenied
 from django import forms
 
 from .models import AuditEvent, SecurityAlert, UserProfile
 from .security import audit
+from .identity import has_recent_reauth
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 
 class SecurityAlertAdminForm(forms.ModelForm):
@@ -23,6 +26,9 @@ admin.site.site_header = "A&S Vault — Administración"
 admin.site.site_title = "A&S Vault"
 admin.site.index_title = "Administración restringida"
 
+if admin.site.is_registered(TOTPDevice):
+    admin.site.unregister(TOTPDevice)
+
 
 User = get_user_model()
 admin.site.unregister(User)
@@ -30,10 +36,23 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class VaultUserAdmin(UserAdmin):
+    def user_change_password(self, request, id, form_url=""):
+        raise PermissionDenied("Use el flujo seguro de cambio de contraseña de A&S Vault.")
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and has_recent_reauth(request, "identity_admin")
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and has_recent_reauth(request, "identity_admin")
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         safe_fields = [name for name in form.changed_data if name not in {"password"}]
         audit(request, "UPDATE", reason="Cambio administrativo de usuario", metadata={"target_user_id": obj.pk, "changed_fields": safe_fields})
+        if "is_active" in safe_fields and not obj.is_active:
+            from .identity import invalidate_authorizations, revoke_session
+            invalidate_authorizations(obj)
+            for record in obj.vault_sessions.filter(status="ACTIVE"):
+                revoke_session(record, actor=request.user, reason="Usuario desactivado administrativamente", request=request)
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -43,11 +62,19 @@ class VaultUserAdmin(UserAdmin):
 class UserProfileAdmin(admin.ModelAdmin):
     list_display = ("user", "role", "active", "mfa_enabled")
     list_filter = ("role", "active", "mfa_enabled")
-    readonly_fields = ("mfa_enabled", "password_changed_at")
+    readonly_fields = ("mfa_enabled", "mfa_status", "mfa_failed_attempts", "mfa_changed_at", "password_changed_at")
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and has_recent_reauth(request, "identity_admin")
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         audit(request, "UPDATE", reason="Cambio administrativo de perfil", metadata={"profile_user_id": obj.user_id, "changed_fields": list(form.changed_data)})
+        if set(form.changed_data) & {"role", "active"}:
+            from .identity import invalidate_authorizations, revoke_session
+            invalidate_authorizations(obj.user)
+            for record in obj.user.vault_sessions.filter(status="ACTIVE"):
+                revoke_session(record, actor=request.user, reason="Cambio administrativo de rol o estado", request=request)
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -75,6 +102,12 @@ class SecurityAlertAdmin(admin.ModelAdmin):
     readonly_fields = ("event", "created_at")
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False
 
     def save_model(self, request, obj, form, change):

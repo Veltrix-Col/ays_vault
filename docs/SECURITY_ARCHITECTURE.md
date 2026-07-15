@@ -1,48 +1,35 @@
 # Arquitectura de seguridad de A&S Vault
 
-## Alcance y activos
+## Activos y amenazas
 
-Los activos principales son PAN, vencimiento, identidad del titular, asociación con cliente, credenciales, sesiones, llaves criptográficas y trazabilidad. CVV/CVC, PIN, banda magnética y fotografías completas están fuera de alcance y no deben almacenarse.
+Los activos son PAN, vencimiento, identidad del titular, asociaciones de cliente, credenciales, factores OTP, sesiones, llaves y trazabilidad. Se consideran abuso interno, cuentas comprometidas, IDOR, fuerza bruta, robo/fijación de sesión, exposición frontend/logs, manipulación de auditoría, compromiso de base de datos y pérdida de llaves.
 
-## Amenazas y límites de confianza
+CVV/CVC, PIN, banda magnética y fotografías completas están prohibidos. Existe un requerimiento empresarial adicional relacionado con un código de seguridad de tarjeta, pero permanece pendiente de concepto formal y decisión arquitectónica; no se creó ningún campo ni flujo.
 
-Se consideran abuso interno, cuentas comprometidas, IDOR, fuerza bruta, copia no trazada, exposición en HTML/JSON/logs, manipulación de auditoría, robo de sesión, inyección, compromiso de base de datos y pérdida de llaves. Navegador, aplicación, base de datos, correo y futuro KMS son límites separados. El backend es la autoridad de permisos; ocultar botones no concede seguridad.
+## Límites y roles
 
-La aplicación no puede impedir de forma absoluta capturas de pantalla, fotografías, herramientas del sistema operativo ni todas las variantes de copiar/pegar. Controla y audita sus propios botones y minimiza el tiempo visible.
-
-## Roles
-
-- Administrador: usuarios, configuración, alertas, auditoría e integridad; sin rutas de tarjetas, revelado o copia.
-- Líder de cartera: alta, edición, desactivación lógica, consulta, revelado y copia.
-- Analista: consulta de tarjetas activas, revelado y copia.
-- Sin rol/inactivo: acceso denegado por defecto.
+Navegador, aplicación, base de datos, correo y futuro KMS son límites separados. El backend es la autoridad. El Administrador gestiona identidad, sesiones, dispositivos, alertas y auditoría sin rutas de tarjetas. Líder y Analista mantienen sus permisos operativos definidos; un perfil nuevo queda inactivo y sin rol.
 
 ## Cifrado y llaves
 
-PAN y vencimiento usan Fernet mediante una capa dedicada. Un HMAC-SHA256 con secreto independiente permite detectar duplicados. Los últimos cuatro dígitos quedan visibles. Las llaves llegan por entorno solo en desarrollo; producción debe usar Azure Key Vault, AWS KMS o equivalente, identidad administrada, versionado y rotación auditada. Nunca deben aparecer en código, logs o backups sin cifrar.
+PAN y vencimiento usan Fernet. Un HMAC con secreto independiente identifica duplicados. La session key Django solo se conserva cifrada para revocación; auditorías, grants y relaciones usan SHA-256. Producción requiere KMS/HSM, identidad administrada, versionado y recifrado auditado.
 
-## Revelado y copia
+## MFA, sesiones y dispositivos
 
-El revelado exige usuario activo, rol, tarjeta activa, motivo, campo explícito y contraseña. Solo devuelve ese campo con `Cache-Control: no-store`. La copia requiere un token aleatorio almacenado como hash, ligado a usuario, sesión, tarjeta y campo, expira en 25 segundos y se consume una vez. El valor copiado no se audita.
+`django-otp` implementa TOTP estándar. La contraseña genera únicamente una preautenticación de cinco minutos; la sesión Django completa nace después de TOTP o recuperación. Los secretos TOTP no se registran, no se envían y se excluyen del Admin.
 
-## Auditoría e integridad
+Los códigos de recuperación usan el hasher de contraseñas de Django y se consumen una vez. Las sesiones se revocan tanto en el modelo de seguridad como en `django_session`. Solo una puede permanecer activa. La actividad se actualiza con throttling y expira tras diez minutos.
 
-Los eventos guardan actor, rol, acción, objeto interno, tiempo, IP, User-Agent, sesión, ruta, método, resultado, riesgo, motivo y metadatos no sensibles. Una fila singleton serializa la secuencia; cada hash cubre el hash anterior y datos canónicos. `verify_audit_chain` valida continuidad y contenido. Esto detecta manipulación, pero no reemplaza almacenamiento externo append-only.
+El dispositivo se identifica prudentemente mediante HMAC del User-Agent normalizado, sin fingerprinting invasivo. Ser reconocido no elimina controles. Bloquearlo revoca sus sesiones; solo el Administrador puede desbloquearlo mediante motivo y reautenticación.
 
-## Sesiones, HTTP y fuerza bruta
+## Reautenticación
 
-La sesión expira tras 10 minutos de inactividad y al cerrar navegador. Cookies HttpOnly/SameSite, CSRF, CSP, Permissions Policy, anti-clickjacking y no-cache protegen el canal web. Secure cookies, redirección HTTPS y HSTS se activan cuando `DEBUG=False`. Axes limita intentos por usuario e IP. Un proxy confiable debe sobrescribir la IP remota; la aplicación no confía directamente en `X-Forwarded-For`.
+Cada autorización contiene usuario, hash de sesión, propósito, validación y vencimiento. No existe un booleano global. Cerrar/revocar/expirar la sesión, cambiar contraseña o reiniciar MFA invalida grants y revelados.
 
-## Alertas y riesgo
+## Alertas y auditoría
 
-El MVP clasifica operaciones fuera de horario y resultados fallidos como riesgo alto, crea alertas persistentes y puede enviar correo sin datos completos. Estados previstos: Nueva, Revisada, Justificada, Escalada y Cerrada. Aún faltan interfaz de gestión, comentario obligatorio, umbrales configurables y detección de IP/dispositivo nuevos.
+Las alertas contienen tipo, severidad, estado, actores, IP, dispositivo, descripción y metadatos seguros. No contienen PAN, vencimiento, OTP ni códigos. La auditoría encadena datos canónicos con SHA-256 y una secuencia serializada; detecta manipulación pero no reemplaza un registro externo inmutable.
 
-## MFA y riesgos residuales
+## Riesgos residuales
 
-MFA todavía no está implementado. Debe integrarse con `django-otp` o equivalente mantenido, códigos de respaldo, recuperación controlada y reautenticación reforzada. Hasta entonces no se permite uso con datos reales.
-
-Riesgos residuales adicionales: llaves en proceso/entorno, portapapeles del sistema, endpoint de correo, superusuarios de infraestructura, SQLite local, falta de sesión única, ausencia de calendario de festivos y falta de SIEM inmutable.
-
-## Infraestructura requerida
-
-PostgreSQL administrado, TLS extremo a extremo, KMS/HSM, secretos administrados, VPN o allowlist, mínimos privilegios, WAF/reverse proxy, logs inmutables/SIEM, backups cifrados y probados, monitoreo/alertamiento, EDR, escaneo de dependencias, pruebas de penetración, revisión PCI/legal y procedimientos de altas/bajas, incidentes, rotación y recuperación.
+Capturas o fotografías del dato revelado, portapapeles del sistema, administradores de infraestructura, llaves en proceso, falta de KMS/SIEM, ausencia de pruebas PostgreSQL/concurrencia y falta de pentest/QA visual. A&S Vault no debe recibir datos reales hasta cerrar estos riesgos y validar infraestructura y cumplimiento.

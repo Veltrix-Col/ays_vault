@@ -11,8 +11,8 @@ DEBUG=env_bool('DEBUG',APP_ENV=='development')
 SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if DEBUG else '')
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','axes','vault.apps.VaultConfig']
-MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.AuditAccessMiddleware']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig']
+MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
 TEMPLATES=[{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[BASE_DIR/'templates'],'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','vault.context_processors.profile']}}]
@@ -27,6 +27,9 @@ STATIC_URL='/static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; STATICFILES_DIRS=[BAS
 DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'; LOGIN_URL='login'; LOGIN_REDIRECT_URL='vault:dashboard'; LOGOUT_REDIRECT_URL='login'
 CSRF_COOKIE_HTTPONLY=True; SESSION_COOKIE_HTTPONLY=True; SESSION_COOKIE_SAMESITE='Lax'; CSRF_COOKIE_SAMESITE='Lax'; X_FRAME_OPTIONS='DENY'; SECURE_CONTENT_TYPE_NOSNIFF=True; SECURE_REFERRER_POLICY='same-origin'
 SESSION_COOKIE_AGE=600; SESSION_SAVE_EVERY_REQUEST=True; SESSION_EXPIRE_AT_BROWSER_CLOSE=True
+SESSION_INACTIVITY_SECONDS=int(os.getenv('SESSION_INACTIVITY_SECONDS','600')); SESSION_ACTIVITY_THROTTLE_SECONDS=int(os.getenv('SESSION_ACTIVITY_THROTTLE_SECONDS','60'))
+REAUTH_TTL_SECONDS=int(os.getenv('REAUTH_TTL_SECONDS','300')); MFA_FAILURE_LIMIT=int(os.getenv('MFA_FAILURE_LIMIT','5')); MFA_ISSUER=os.getenv('MFA_ISSUER','A&S Vault')
+OTP_TOTP_ISSUER=MFA_ISSUER; OTP_TOTP_THROTTLE_FACTOR=1
 AXES_FAILURE_LIMIT=5; AXES_COOLOFF_TIME=timedelta(minutes=30); AXES_RESET_ON_SUCCESS=True; AXES_LOCKOUT_PARAMETERS=[['username','ip_address']]
 FIELD_ENCRYPTION_KEY=os.getenv('FIELD_ENCRYPTION_KEY','')
 FIELD_FINGERPRINT_KEY=os.getenv('FIELD_FINGERPRINT_KEY','')

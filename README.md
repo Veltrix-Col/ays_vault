@@ -2,31 +2,32 @@
 
 **Custodia segura de información sensible**
 
-A&S Vault es una aplicación interna Django para sustituir el archivo operativo de tarjetas por una bóveda con cifrado, enmascaramiento, separación de funciones, revelado temporal y auditoría verificable. No es un CRUD genérico ni una certificación PCI DSS.
+A&S Vault es una bóveda interna Django para reemplazar el archivo operativo de medios de pago mediante cifrado, separación de funciones, MFA, sesiones controladas y auditoría verificable. No es un CRUD genérico ni una certificación PCI DSS.
 
-> **No use datos reales.** El sistema aún requiere MFA, gestión externa de llaves, infraestructura productiva y revisión formal de seguridad antes de operar información real.
+> **No use datos reales todavía.** Siguen siendo obligatorios un KMS/Key Vault, PostgreSQL probado bajo concurrencia, auditoría externa inmutable, infraestructura productiva y pruebas de penetración.
 
-## Arquitectura y controles actuales
+## Controles implementados
 
-- Roles funcionales: Administrador, Líder de cartera y Analista. Un perfil nuevo queda inactivo y sin rol.
-- El Administrador no tiene rutas de tarjetas ni el modelo `PaymentCard` en Django Admin.
-- Solo el Líder crea, edita y desactiva tarjetas; el Analista solo consulta tarjetas activas.
-- PAN y vencimiento se cifran con Fernet. Un HMAC independiente permite detectar duplicados sin descifrar búsquedas.
-- Validación Luhn y coherencia básica de franquicia antes de guardar.
-- Revelado por campo con contraseña, motivo y autorización de copia de 25 segundos, ligada a usuario y sesión, de un solo uso.
-- Auditoría con secuencia y hash encadenado; el valor sensible nunca se registra.
-- Alertas persistentes para operaciones fuera de horario o fallidas.
-- Sesión por inactividad de 10 minutos, cookies HttpOnly/SameSite, CSRF, CSP, Permissions Policy y endurecimiento HTTPS condicionado al entorno.
-- Protección de fuerza bruta mediante `django-axes`.
+- Roles Administrador, Líder de cartera y Analista, validados en backend.
+- El Administrador no tiene acceso a tarjetas. Solo el Líder crea, edita y desactiva; el Analista consulta únicamente activas.
+- PAN y vencimiento cifrados con Fernet; detección de duplicados mediante HMAC independiente, Luhn y franquicia.
+- MFA TOTP obligatorio mediante `django-otp`, compatible con aplicaciones autenticadoras estándar.
+- Enrolamiento con contraseña, QR generado en memoria, clave manual mostrada solo durante el flujo y primer TOTP obligatorio.
+- Diez códigos de recuperación almacenados exclusivamente mediante hash, de un solo uso y regenerables tras reautenticación.
+- Login en dos etapas: la contraseña correcta no crea una sesión autenticada hasta validar MFA o recuperación.
+- Una sesión activa por usuario, identificador por hash, session key cifrada para revocación real y expiración tras 10 minutos de inactividad.
+- Registro prudente de navegador, sistema, tipo de dispositivo e IP; estados Nuevo, Reconocido, Bloqueado y Revocado.
+- Reautenticación de 5 minutos ligada a usuario, sesión y propósito para operaciones críticas.
+- Alertas persistentes para dispositivo/IP nueva, MFA/reautenticación fallidos, recuperación, reinicio MFA, sesiones reemplazadas, bloqueos y cambios sensibles.
+- Auditoría secuencial con hash encadenado y verificación mediante `verify_audit_chain`.
+- CSP, Permissions Policy, no-cache, CSRF, Axes y endurecimiento HTTPS condicionado al entorno.
 
-La separación interna principal está en `vault/crypto.py`, `vault/security.py`, `vault/forms.py`, `vault/decorators.py` y `vault/views.py`. Consulte [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
-
-## Instalación local (PowerShell)
+## Instalación local
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 python -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -35,45 +36,42 @@ python manage.py seed_demo
 python manage.py check
 python manage.py test
 python manage.py verify_audit_chain
-python manage.py runserver
 ```
 
-Pegue valores independientes en `FIELD_ENCRYPTION_KEY` y `FIELD_FINGERPRINT_KEY`. Mantenga `.env` fuera de Git.
+Configure valores independientes en `FIELD_ENCRYPTION_KEY` y `FIELD_FINGERPRINT_KEY`. SQLite es únicamente para desarrollo; con `DEBUG=False` se exige PostgreSQL.
 
-## Variables de entorno
+## Dependencias
 
-`APP_ENV`, `DEBUG`, `SECRET_KEY`, `ALLOWED_HOSTS`, `DB_ENGINE`, variables `DB_*`, `FIELD_ENCRYPTION_KEY`, `FIELD_FINGERPRINT_KEY`, `OFFICE_START`, `OFFICE_END`, `ALERT_EMAIL`, `DEFAULT_FROM_EMAIL` y `EMAIL_BACKEND`.
+Las versiones están fijadas en `requirements.txt`. MFA usa `django-otp==1.7.0`; Segno genera el QR sin archivos temporales. `pip-audit==2.10.1` está separado en `requirements-dev.txt` y no es una dependencia productiva.
 
-En producción use PostgreSQL (`DB_ENGINE=postgresql`), `DEBUG=False`, secretos externos y TLS. SQLite es solo para desarrollo.
+La auditoría inicial detectó avisos en Django 5.2.15, cryptography 45.0.5 y python-dotenv 1.1.1. Se actualizaron respectivamente a 5.2.16, 48.0.1 y 1.2.2, se repitieron todas las pruebas y el resultado final fue `No known vulnerabilities found`.
 
 ## Datos demo
 
-`python manage.py seed_demo` es idempotente. `--reset-demo` reinicia únicamente registros cuyo cliente empieza por `Cliente Demo `. Crea 30 tarjetas ficticias sin CVV y tres cuentas personales:
+`python manage.py seed_demo` crea idempotentemente 30 tarjetas ficticias y tres usuarios individuales: `admin.seguridad`, `laura.cartera` y `andres.analista`, con contraseña local inicial `DemoSeguro2026!`. Todos deben enrolar MFA antes de ingresar. Cambie o elimine estas credenciales antes de cualquier despliegue.
 
-- `admin.seguridad`: Administrador.
-- `laura.cartera`: Líder de cartera.
-- `andres.analista`: Analista.
+## Operación de seguridad
 
-Contraseña local inicial: `DemoSeguro2026!`. Los correos usan `.invalid`. Cambie o elimine todas las credenciales antes de cualquier despliegue.
+- El usuario administra sus sesiones y dispositivos desde las interfaces propias.
+- El Administrador consulta identidades, revoca sesiones, desbloquea dispositivos y reinicia MFA sin ver secretos ni adquirir acceso a tarjetas.
+- Reiniciar MFA elimina dispositivos TOTP y códigos, revoca sesiones/autorizaciones/revelados y obliga nuevo enrolamiento.
+- Reconocer un dispositivo solo reduce alertas; nunca evita MFA, permisos, horario, reautenticación o revelado.
+- Los códigos de recuperación solo se muestran al generarse. No se guardan en archivos ni se envían por correo.
 
-## Auditoría e integridad
+Consulte [docs/MFA_AND_SESSION_SECURITY.md](docs/MFA_AND_SESSION_SECURITY.md) y [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
 
-```powershell
-python manage.py verify_audit_chain
-```
+## Variables nuevas
 
-El hash encadenado detecta alteraciones, eliminaciones y discontinuidades, pero una cuenta con control total de base de datos y aplicación podría reconstruir la cadena. Producción requiere envío simultáneo a un registro externo inmutable/SIEM.
+- `SESSION_INACTIVITY_SECONDS=600`
+- `SESSION_ACTIVITY_THROTTLE_SECONDS=60`
+- `REAUTH_TTL_SECONDS=300`
+- `MFA_FAILURE_LIMIT=5`
+- `MFA_ISSUER=A&S Vault`
 
-## Horario, correo y alertas
+## Limitaciones y riesgos pendientes
 
-El MVP usa `America/Bogota`, `OFFICE_START` y `OFFICE_END`; fines de semana se consideran fuera de horario. La política actual permite y alerta. Festivos, excepciones, bloqueo/aprobación y gestión completa de estados de alerta siguen pendientes. Configure un backend SMTP real y `ALERT_EMAIL` fuera de desarrollo.
+Faltan KMS/Key Vault, rotación operativa de llaves, SIEM/log externo inmutable, pruebas PostgreSQL y de concurrencia, pentest, QA visual completo, VPN/allowlist, backups cifrados probados y revisión formal de cumplimiento. El restablecimiento de contraseña por correo no se habilitó: antes requiere diseño anti-enumeración y recuperación organizacional controlada.
 
-## MFA y producción
+### Requerimiento empresarial adicional pendiente
 
-El modelo registra el estado futuro de MFA, pero **MFA todavía no está implementado ni debe marcarse manualmente como protección real**. La siguiente fase debe integrar una librería mantenida como `django-otp`, recuperación controlada y pruebas, sin OTP casero.
-
-También están pendientes: KMS/Key Vault y rotación con recifrado, política robusta de sesión única y revocación remota, calendario de festivos/excepciones, gestión de alertas, métricas/riesgo avanzados, logs externos inmutables, backups cifrados, VPN/allowlist, EDR, monitoreo, pruebas de penetración y revisión de cumplimiento.
-
-## Rotación de llaves
-
-No cambie `FIELD_ENCRYPTION_KEY` directamente: volvería ilegibles los registros. La rotación debe usar una versión de llave, descifrar/recifrar por lotes dentro de transacciones auditadas y conservar temporalmente la llave anterior para reversión controlada. El HMAC de duplicados también debe recalcularse de forma coordinada al rotar `FIELD_FINGERPRINT_KEY`.
+Existe un requerimiento relacionado con un código adicional de seguridad asociado a las tarjetas. **No fue implementado**: no existen modelo, migración, formulario, persistencia, demo, revelado ni copia. Requiere concepto formal de seguridad/cumplimiento y decisión arquitectónica antes de cualquier desarrollo.
