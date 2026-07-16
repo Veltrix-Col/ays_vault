@@ -189,6 +189,25 @@ class ControlCenterPermissionTests(TestCase):
         self.assertEqual(self.login(self.admin).get(reverse("vault:control_center")).status_code, 200)
         self.assertEqual(self.login(self.analyst).get(reverse("vault:control_center")).status_code, 403)
 
+    def test_initial_route_and_menu_are_distinct_for_each_role(self):
+        admin_client = self.login(self.admin)
+        admin_start = admin_client.get(reverse("vault:dashboard"))
+        self.assertRedirects(admin_start, reverse("vault:control_center"), fetch_redirect_response=False)
+        admin_control = admin_client.get(reverse("vault:control_center"))
+        self.assertContains(admin_control, ">Centro de Control<")
+        self.assertNotContains(admin_control, ">Resumen<")
+
+        leader_start = self.login(self.leader).get(reverse("vault:dashboard"))
+        self.assertEqual(leader_start.status_code, 200)
+        self.assertContains(leader_start, "Resumen operativo")
+
+        analyst_start = self.login(self.analyst).get(reverse("vault:dashboard"))
+        self.assertEqual(analyst_start.status_code, 200)
+        self.assertContains(analyst_start, "Resumen personal")
+
+    def test_leader_cannot_access_administrative_control_center(self):
+        self.assertEqual(self.login(self.leader).get(reverse("vault:control_center")).status_code, 403)
+
     def test_leader_and_analyst_timeline_is_backend_scoped(self):
         admin_event = audit(None, "MFA_RESET", user=self.admin)
         analyst_event = audit(None, "VIEW", user=self.analyst)

@@ -91,7 +91,10 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
         state.last_hash = event.event_hash
         state.save(update_fields=["last_sequence", "last_hash"])
 
-    if (is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}) or result != "SUCCESS":
+    should_create_alert = (
+        is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}
+    ) or (result != "SUCCESS" and action != "REPORT_EXPORT")
+    if should_create_alert:
         SecurityAlert.objects.get_or_create(event=event, defaults={"alert_type": action, "severity": "HIGH" if risk_level in {"HIGH", "CRITICAL"} else "MEDIUM", "actor": actor, "affected_user": actor, "ip_address": event.ip_address, "description": f"Evento de seguridad: {event.get_action_display()}"})
         alert = SecurityAlert.objects.get(event=event)
         from .notifications import notify_alert_async

@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import connection, transaction
+from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -42,13 +43,18 @@ def dashboard(request):
         return render(request, "vault/access_denied.html", status=403)
     if profile.role == UserProfile.ADMIN:
         return redirect("vault:control_center")
-    today = timezone.localdate()
     chain_ok, chain_position = cached_chain_status()
+    operational_actions = ["VIEW", "REVEAL", "COPY", "COPY_ATTEMPT", "CREATE", "UPDATE", "DEACTIVATE", "DENIED"]
+    if profile.role == UserProfile.LEADER:
+        recent = AuditEvent.objects.select_related("user", "card").filter(action__in=operational_actions)
+        visible_alerts = SecurityAlert.objects.filter(Q(affected_user=request.user) | Q(alert_type__in=["COPY", "REVEAL", "OUTSIDE_HOURS", "CRITICAL_BLOCKED"]))
+    else:
+        recent = AuditEvent.objects.select_related("user", "card").filter(user=request.user)
+        visible_alerts = SecurityAlert.objects.filter(affected_user=request.user)
     context = {
         "cards": PaymentCard.objects.filter(active=True).count(),
-        "events_today": AuditEvent.objects.filter(created_at__date=today).count(),
-        "alerts": SecurityAlert.objects.filter(status="NEW").count(),
-        "recent": AuditEvent.objects.select_related("user", "card")[:10],
+        "alerts": visible_alerts.filter(status="NEW").count(),
+        "recent": recent[:10],
         "chain_ok": chain_ok,
         "chain_position": chain_position,
         "usage_7": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=7)).count(),

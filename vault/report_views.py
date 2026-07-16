@@ -1,3 +1,4 @@
+import logging
 from time import monotonic
 from urllib.parse import quote
 
@@ -25,6 +26,7 @@ from .reporting import (
 )
 from .security import audit, client_ip
 
+logger = logging.getLogger(__name__)
 
 REPORT_CARDS = {
     "TIMELINE": "Trazabilidad cronológica con objetos y motivos protegidos.",
@@ -73,32 +75,57 @@ def _filters_for_export(request, report_type):
     return {"date_from": form.cleaned_data.get("date_from"), "date_to": form.cleaned_data.get("date_to")}, form
 
 
+def _export_record(request, report_type, export_format, safe_filters=None, result="PENDING", safe_error=""):
+    return ReportExport.objects.create(
+        report_type=report_type,
+        export_format=export_format,
+        user=request.user,
+        actor_role=request.user.vault_profile.role,
+        safe_filters=safe_filters or {},
+        result=result,
+        safe_error=safe_error,
+        finished_at=timezone.now() if result != "PENDING" else None,
+        ip_address=client_ip(request),
+        user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
+    )
+
+
+def _technical_error_code(stage, error):
+    if isinstance(error, (ImportError, ModuleNotFoundError)):
+        return "DEPENDENCY_MISSING"
+    if stage == "XLSX":
+        return "EXCEL_RENDER_ERROR"
+    if stage == "PDF":
+        return "PDF_RENDER_ERROR"
+    return "REPORT_DATA_ERROR"
+
+
 @require_POST
 @never_cache
 @role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
 def export_report(request, report_type, export_format):
     report_type = report_type.upper()
     export_format = export_format.upper()
-    if report_type not in allowed_report_types(request.user) or export_format not in {"XLSX", "PDF"}:
+    known_types = dict(ReportExport.TYPES)
+    if report_type not in known_types or export_format not in {"XLSX", "PDF"}:
+        raise PermissionDenied
+    if report_type not in allowed_report_types(request.user):
+        _export_record(request, report_type, export_format, result="FAILED", safe_error="PERMISSION_DENIED")
+        audit(request, "REPORT_EXPORT", reason="Exportación rechazada por permisos.", metadata={"report_type": report_type, "format": export_format}, result="DENIED", risk_level="MEDIUM")
         raise PermissionDenied
     filters, form = _filters_for_export(request, report_type)
     if filters is None:
+        _export_record(request, report_type, export_format, result="FAILED", safe_error="FILTER_INVALID")
+        audit(request, "REPORT_EXPORT", reason="Exportación rechazada por filtros inválidos.", metadata={"report_type": report_type, "format": export_format}, result="DENIED", risk_level="LOW")
         error_text = " ".join(message for errors in form.errors.values() for message in errors)
         return HttpResponseBadRequest(f"No fue posible generar el informe: {error_text}")
 
     limit = settings.REPORT_XLSX_MAX_ROWS if export_format == "XLSX" else settings.REPORT_PDF_MAX_ROWS
     filters["_row_limit"] = limit
     safe_filters = safe_filter_summary(filters)
-    record = ReportExport.objects.create(
-        report_type=report_type,
-        export_format=export_format,
-        user=request.user,
-        actor_role=request.user.vault_profile.role,
-        safe_filters=safe_filters,
-        ip_address=client_ip(request),
-        user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
-    )
+    record = _export_record(request, report_type, export_format, safe_filters=safe_filters)
     started = monotonic()
+    stage = "DATA"
     try:
         data = build_report(report_type, request.user, filters)
         if len(data.rows) > limit:
@@ -113,9 +140,11 @@ def export_report(request, report_type, export_format):
 
         filename = report_filename(data, export_format)
         if export_format == "XLSX":
+            stage = "XLSX"
             content = build_excel(data, request.user, request.user.vault_profile.role)
             content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         else:
+            stage = "PDF"
             orientation = request.POST.get("orientation", "auto")
             if orientation not in {"auto", "portrait", "landscape"}:
                 orientation = "auto"
@@ -145,12 +174,17 @@ def export_report(request, report_type, export_format):
         record.save(update_fields=["result", "safe_error", "duration_ms", "finished_at"])
         audit(request, "REPORT_EXPORT", reason="Exportación rechazada por alcance.", metadata={"report_type": report_type, "format": export_format}, result="DENIED", risk_level="MEDIUM")
         raise PermissionDenied
-    except Exception:
+    except Exception as error:
+        error_code = _technical_error_code(stage, error)
         record.result = "FAILED"
-        record.safe_error = "RENDERING_ERROR"
+        record.safe_error = error_code
         record.duration_ms = int((monotonic() - started) * 1000)
         record.finished_at = timezone.now()
         record.save(update_fields=["result", "safe_error", "duration_ms", "finished_at"])
-        audit(request, "REPORT_EXPORT", reason="La generación del informe falló de forma segura.", metadata={"report_type": report_type, "format": export_format}, result="FAILED", risk_level="HIGH")
+        logger.exception(
+            "Fallo técnico al generar informe export_id=%s report_type=%s format=%s code=%s",
+            record.pk, report_type, export_format, error_code,
+        )
+        audit(request, "REPORT_EXPORT", reason="La generación del informe falló de forma segura.", metadata={"report_type": report_type, "format": export_format, "error_code": error_code}, result="FAILED", risk_level="LOW")
         messages.error(request, "No fue posible generar el informe. El intento quedó registrado sin exponer detalles técnicos.")
         return redirect("vault:report_center")

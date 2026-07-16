@@ -1,5 +1,6 @@
 from io import BytesIO
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
@@ -10,8 +11,9 @@ from openpyxl import load_workbook
 
 from .forms import TimelineFilterForm
 from .crypto import encrypt
-from .models import AuditEvent, PaymentCard, PolicyConfiguration, ReportExport, SecureSession, UserProfile
+from .models import AuditEvent, PaymentCard, PolicyConfiguration, ReportExport, SecureSession, SecurityAlert, UserProfile
 from .reporting import excel_safe
+from .report_views import _technical_error_code
 from .security import audit, session_hash, verify_audit_chain
 
 
@@ -81,6 +83,18 @@ class ReportingTests(TestCase):
         self.assertContains(response, "Exportar Excel")
         self.assertEqual(response.context["page"].paginator.per_page, 25)
 
+    def test_timeline_renders_actor_and_system_events_with_null_relations(self):
+        audit(None, "VIEW", user=self.admin)
+        audit(None, "POLICY_EVALUATION", user=None)
+        client = self.login(self.admin)
+        for params in ({"view": "compact"}, {"view": "detail"}, {"period": "7d"}):
+            response = client.get(reverse("vault:timeline"), params)
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, "Ana")
+            self.assertContains(response, "Sistema")
+            self.assertContains(response, "No disponible")
+            self.assertContains(response, "No aplica")
+
     def test_analyst_timeline_and_report_are_scoped_to_self(self):
         own = audit(None, "VIEW", user=self.analyst, card=self.card)
         other = audit(None, "VIEW", user=self.leader, card=self.card)
@@ -128,6 +142,39 @@ class ReportingTests(TestCase):
         self.assertNotIn(b"4111111111111111", response.content)
         self.assertNotIn(b"12/29", response.content)
         self.assertTrue(ReportExport.objects.filter(user=self.admin, result="SUCCESS", export_format="PDF").exists())
+
+    def test_excel_failure_is_logged_and_stored_without_security_alert(self):
+        client = self.login(self.admin)
+        alerts_before = SecurityAlert.objects.count()
+        with patch("vault.report_views.build_excel", side_effect=RuntimeError("fallo simulado de Excel")):
+            with self.assertLogs("vault.report_views", level="ERROR") as captured:
+                response = client.post(reverse("vault:export_report", args=["TIMELINE", "XLSX"]), follow=True)
+        record = ReportExport.objects.latest("created_at")
+        self.assertEqual(record.result, "FAILED")
+        self.assertEqual(record.safe_error, "EXCEL_RENDER_ERROR")
+        self.assertContains(response, "No fue posible generar el informe")
+        log_text = " ".join(captured.output)
+        self.assertNotIn("4111111111111111", log_text)
+        self.assertNotIn("12/29", log_text)
+        self.assertEqual(SecurityAlert.objects.count(), alerts_before)
+
+    def test_pdf_failure_is_logged_and_classified(self):
+        client = self.login(self.admin)
+        with patch("vault.report_views.build_pdf", side_effect=RuntimeError("fallo simulado de PDF")):
+            with self.assertLogs("vault.report_views", level="ERROR"):
+                response = client.post(reverse("vault:export_report", args=["TIMELINE", "PDF"]), follow=True)
+        self.assertContains(response, "El intento quedó registrado sin exponer detalles técnicos")
+        self.assertEqual(ReportExport.objects.latest("created_at").safe_error, "PDF_RENDER_ERROR")
+
+    def test_missing_dependency_has_distinct_safe_code(self):
+        self.assertEqual(_technical_error_code("XLSX", ModuleNotFoundError("openpyxl")), "DEPENDENCY_MISSING")
+
+    def test_successful_export_does_not_create_unnecessary_critical_alert(self):
+        client = self.login(self.admin)
+        critical_before = SecurityAlert.objects.filter(severity="CRITICAL").count()
+        response = client.post(reverse("vault:export_report", args=["TIMELINE", "XLSX"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(SecurityAlert.objects.filter(severity="CRITICAL").count(), critical_before)
 
     def test_role_matrix_blocks_admin_cards_and_allows_leader(self):
         admin = self.login(self.admin)
