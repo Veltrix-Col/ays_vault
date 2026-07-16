@@ -39,8 +39,13 @@
       {% with current=request.resolver_match.url_name %}
       <nav class="side-nav">
         <span class="nav-label">Principal</span>
-        <a href="{% url 'vault:dashboard' %}" {% if current == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">R</span>Resumen</a>
-        {% if vault_profile.role == 'ADMIN' %}<a href="{% url 'vault:control_center' %}" {% if current == 'control_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">C</span>Centro de Control</a>{% endif %}
+        {% if vault_profile.role == 'ADMIN' %}
+          <a href="{% url 'vault:control_center' %}" {% if current == 'control_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">C</span>Centro de Control</a>
+        {% elif vault_profile.role == 'LEADER' %}
+          <a href="{% url 'vault:dashboard' %}" {% if current == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">R</span>Resumen operativo</a>
+        {% elif vault_profile.role == 'ANALYST' %}
+          <a href="{% url 'vault:dashboard' %}" {% if current == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">R</span>Resumen personal</a>
+        {% endif %}
 
         <span class="nav-label">Seguridad</span>
         <a href="{% url 'vault:alerts' %}" {% if current == 'alerts' or current == 'alert_detail' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">A</span>Alertas</a>

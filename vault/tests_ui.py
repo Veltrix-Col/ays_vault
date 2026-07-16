@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
 from django.forms.models import model_to_dict
+from django.template import Context, Template
 from django.template.loader import render_to_string
-from django.test import RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase
 
 from .forms import AccessExceptionForm, NotificationRecipientForm, PolicyConfigurationForm
 from .models import PolicyConfiguration, UserProfile
@@ -52,15 +53,20 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
 
     def test_admin_sidebar_is_grouped_and_does_not_expose_vault(self):
         html = self.render_shell(UserProfile.ADMIN)
+        self.assertIn(">Centro de Control<", html)
+        self.assertNotIn(">Resumen<", html)
         self.assertIn("Configuración de Seguridad", html)
         self.assertIn("Correo y destinatarios", html)
         self.assertNotIn(">Bóveda<", html)
 
     def test_operational_sidebar_respects_role(self):
         html = self.render_shell(UserProfile.LEADER)
+        self.assertIn("Resumen operativo", html)
         self.assertIn(">Bóveda<", html)
         self.assertIn("Nueva tarjeta", html)
         self.assertNotIn("Correo y destinatarios", html)
+        analyst_html = self.render_shell(UserProfile.ANALYST)
+        self.assertIn("Resumen personal", analyst_html)
 
     def test_shell_has_accessible_drawer_and_bounded_logo(self):
         html = self.render_shell(UserProfile.ADMIN)
@@ -68,6 +74,23 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         self.assertIn('aria-expanded="false"', html)
         self.assertIn('class="brand-logo-image"', html)
         self.assertIn('class="sidebar-backdrop"', html)
+
+    def test_favicon_reference_and_root_route_are_valid(self):
+        html = self.render_shell(UserProfile.ADMIN)
+        self.assertIn('/static/img/branding/favicon.ico', html)
+        response = Client().get('/favicon.ico')
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response.url, '/static/img/branding/favicon.ico')
+
+    def test_internal_event_codes_have_spanish_labels(self):
+        template = Template("{% load vault_ui %}{{ value|alert_type_label }}")
+        expected = {
+            "SESSION_REPLACED": "Sesión reemplazada",
+            "REPORT_EXPORT": "Exportación de informe",
+            "LOGIN": "Inicio de sesión",
+        }
+        for value, label in expected.items():
+            self.assertEqual(template.render(Context({"value": value})), label)
 
     def test_policy_form_keeps_json_storage_without_raw_json_control(self):
         policy = PolicyConfiguration.objects.create(singleton=1)

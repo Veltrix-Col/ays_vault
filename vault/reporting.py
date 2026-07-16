@@ -43,6 +43,19 @@ REPORT_TYPES_BY_ROLE = {
     UserProfile.ANALYST: ["TIMELINE", "ALERTS", "ACCESS"],
 }
 ROLE_LABELS = dict(UserProfile.ROLES)
+EVENT_LABELS = dict(AuditEvent.ACTIONS)
+EVENT_LABELS.update({"LOGIN": "Inicio de sesión", "SESSION_REPLACED": "Sesión reemplazada", "REPORT_EXPORT": "Exportación de informe"})
+ALERT_LABELS = {
+    "LOGIN": "Inicio de sesión", "LOGIN_FAILED": "Inicio de sesión fallido",
+    "SESSION_REPLACED": "Sesión reemplazada", "REPORT_EXPORT": "Exportación de informe",
+    "OUTSIDE_HOURS": "Acceso fuera de horario", "NEW_DEVICE": "Dispositivo nuevo",
+    "MFA_BLOCKED": "MFA bloqueado", "USER_BLOCKED": "Usuario bloqueado",
+    "POLICY_CHANGED": "Política modificada", "EXCEPTION_CREATED": "Excepción creada",
+    "EXCEPTION_REVOKED": "Excepción revocada", "SYSTEM_INACTIVITY": "Sistema sin uso",
+    "POSSIBLE_PARALLEL_TOOL_USE": "Posible uso paralelo de herramienta no autorizada",
+    "AUDIT_INTEGRITY_REVIEW": "Revisión de integridad de auditoría", "CRITICAL_ALERT": "Alerta crítica",
+    "EMAIL_FAILURE": "Fallo de correo", "INACTIVE_USER": "Usuario inactivo",
+}
 RESULT_LABELS = {"SUCCESS": "Exitoso", "FAILED": "Fallido", "DENIED": "Denegado", "BLOCKED": "Bloqueado"}
 SCHEDULE_LABELS = {"inside": "Dentro del horario", "outside": "Fuera del horario"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
@@ -210,7 +223,7 @@ def _timeline_data(user, filters):
         day, hour = _local_parts(event.created_at)
         alert_id = getattr(getattr(event, "securityalert", None), "pk", None)
         safe_object = f"Tarjeta #{event.card_id} · **** {event.card.last4}" if event.card else "—"
-        rows.append([day, hour, event.user.get_full_name() or event.user.username if event.user else "Sistema", ROLE_LABELS.get(event.actor_role, "Sistema"), event.get_action_display(), RESULT_LABELS.get(event.result, event.result), event.get_risk_level_display(), str(event.ip_address or "—"), safe_device(event.user_agent), "Fuera" if event.outside_office_hours else "Dentro", safe_object, f"Alerta #{alert_id}" if alert_id else "—", safe_reason(event.reason)])
+        rows.append([day, hour, event.user.get_full_name() or event.user.username if event.user else "Sistema", ROLE_LABELS.get(event.actor_role, "Sistema"), EVENT_LABELS.get(event.action, "Evento del sistema"), RESULT_LABELS.get(event.result, event.result), event.get_risk_level_display(), str(event.ip_address or "—"), safe_device(event.user_agent), "Fuera" if event.outside_office_hours else "Dentro", safe_object, f"Alerta #{alert_id}" if alert_id else "—", safe_reason(event.reason)])
     return ReportData("Informe de Línea de Tiempo", ["Fecha", "Hora", "Usuario", "Rol", "Evento", "Resultado", "Severidad", "IP", "Dispositivo", "Horario", "Objeto seguro", "Alerta relacionada", "Motivo seguro"], rows, safe_filter_summary(filters))
 
 
@@ -236,7 +249,7 @@ def _alerts_data(user, filters):
     rows = []
     items = _date_filter(_scoped_alerts(user), filters).order_by("-created_at")
     for item in items[: filters.get("_row_limit", settings.REPORT_XLSX_MAX_ROWS) + 1]:
-        rows.append([item.pk, item.alert_type.replace("_", " ").title(), item.get_severity_display(), item.get_status_display(), timezone.localtime(item.created_at).strftime("%d/%m/%Y %H:%M"), str(item.actor or "Sistema"), str(item.affected_user or "—"), str(item.ip_address or "—"), safe_device(item.device.friendly_name if item.device else "—"), f"#{item.policy_id}" if item.policy_id else "—", f"#{item.access_exception_id}" if item.access_exception_id else "—", timezone.localtime(item.due_at).strftime("%d/%m/%Y %H:%M") if item.due_at else "—", str(item.assigned_to or "—"), safe_reason(item.review_note), timezone.localtime(item.closed_at).strftime("%d/%m/%Y %H:%M") if item.closed_at else "—"])
+        rows.append([item.pk, ALERT_LABELS.get(item.alert_type, EVENT_LABELS.get(item.alert_type, "Alerta de seguridad")), item.get_severity_display(), item.get_status_display(), timezone.localtime(item.created_at).strftime("%d/%m/%Y %H:%M"), str(item.actor or "Sistema"), str(item.affected_user or "—"), str(item.ip_address or "—"), safe_device(item.device.friendly_name if item.device else "—"), f"#{item.policy_id}" if item.policy_id else "—", f"#{item.access_exception_id}" if item.access_exception_id else "—", timezone.localtime(item.due_at).strftime("%d/%m/%Y %H:%M") if item.due_at else "—", str(item.assigned_to or "—"), safe_reason(item.review_note), timezone.localtime(item.closed_at).strftime("%d/%m/%Y %H:%M") if item.closed_at else "—"])
     return ReportData("Informe de Alertas", ["ID", "Tipo", "Severidad", "Estado", "Fecha", "Actor", "Usuario afectado", "IP", "Dispositivo", "Política", "Excepción", "Fecha límite", "Responsable", "Comentario de cierre", "Fecha de cierre"], rows, safe_filter_summary(filters))
 
 
