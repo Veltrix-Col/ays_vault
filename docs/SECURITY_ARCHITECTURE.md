@@ -36,6 +36,12 @@ El Centro de Control agrega politicas, festivos, excepciones, transiciones de al
 
 Microsoft Graph se autentica mediante MSAL y credenciales de aplicacion tomadas solo del entorno. No se persisten client secrets, access tokens ni contenido del mensaje. La bitacora de correo conserva destinatario enmascarado, hash, resultado, intentos, backend e identificador externo.
 
+## Informes y limites de datos
+
+La autorizacion de informes se resuelve en backend antes de consultar datos. La Linea de Tiempo, su pantalla y sus exportadores comparten un servicio de filtrado; primero se aplica el alcance del rol y despues los filtros validados. `ReportExport` conserva tipo, formato, actor, filtros seguros, cantidad, resultado, duracion, IP, dispositivo y nombre saneado, pero nunca el archivo ni los registros exportados.
+
+Los generadores no llaman `get_pan()` ni `get_expiry()` y no seleccionan los campos cifrados. Los motivos se truncan y redactan ante patrones de PAN o vencimiento. Excel neutraliza valores que comienzan con `=`, `+`, `-` o `@`. PDF se crea en memoria, y ambas respuestas llevan `no-store` y `nosniff`. Los limites centrales evitan exportaciones accidentales de alto volumen y las generaciones inusuales crean alerta.
+
 ## Riesgos residuales
 
 Capturas o fotografías del dato revelado, portapapeles del sistema, administradores de infraestructura, llaves en proceso, falta de KMS/SIEM, ausencia de pruebas PostgreSQL/concurrencia y falta de pentest/QA visual. A&S Vault no debe recibir datos reales hasta cerrar estos riesgos y validar infraestructura y cumplimiento.

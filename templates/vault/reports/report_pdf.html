@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>{{ report.title }}</title>
+<style>
+  @page { size: A4 {{ orientation }}; margin: 18mm 12mm 18mm; @bottom-left { content: "A&S Vault · Uso interno y confidencial"; color: #5e7185; font-size: 8pt; } @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #5e7185; font-size: 8pt; } }
+  * { box-sizing: border-box; } body { margin: 0; color: #17324d; font: 9pt Arial, sans-serif; }
+  header { border-bottom: 2px solid #168db1; display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
+  header img { width: 130px; max-height: 44px; object-fit: contain; } h1 { color: #123d6a; font-size: 18pt; margin: 14px 0 4px; } h2 { color: #123d6a; font-size: 11pt; margin: 14px 0 6px; }
+  .meta { background: #eef5f8; border: 1px solid #d3e0e7; border-radius: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px 18px; padding: 10px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 5px; } .chip { background: #e4f2f7; border: 1px solid #b7dbe6; border-radius: 12px; padding: 3px 8px; }
+  table { border-collapse: collapse; width: 100%; table-layout: auto; } thead { display: table-header-group; } tr { break-inside: avoid; } th { background: #123d6a; color: white; font-size: 7.5pt; padding: 5px; text-align: left; } td { border-bottom: 1px solid #dce4e9; font-size: 7.2pt; overflow-wrap: anywhere; padding: 5px; vertical-align: top; } tbody tr:nth-child(even) { background: #f6f9fb; }
+  .warning { border-left: 4px solid #168db1; color: #36546f; margin-top: 12px; padding: 7px 10px; background: #eef7fa; } .empty { padding: 18px; text-align: center; }
+</style></head><body>
+<header>{% if logo_uri %}<img src="{{ logo_uri }}" alt="A&amp;S Vault">{% else %}<strong>A&amp;S Vault</strong>{% endif %}<span>Informe seguro</span></header>
+<h1>{{ report.title }}</h1>
+<div class="meta"><div><strong>Generado:</strong> {{ generated_at|date:'d/m/Y H:i' }}</div><div><strong>Generado por:</strong> {{ generated_by.get_full_name|default:generated_by.username }}</div><div><strong>Rol:</strong> {{ actor_role }}</div><div><strong>Total:</strong> {{ report.rows|length }} registros</div></div>
+<h2>Filtros utilizados</h2><div class="filters">{% for key,value in report.filters.items %}<span class="chip"><strong>{{ key }}:</strong> {{ value }}</span>{% empty %}<span>Sin filtros adicionales; se aplicó el alcance autorizado del rol.</span>{% endfor %}</div>
+<h2>Detalle</h2><table><thead><tr>{% for column in report.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in report.rows %}<tr>{% for value in row %}<td>{{ value }}</td>{% endfor %}</tr>{% empty %}<tr><td class="empty" colspan="20">No se encontraron registros para los filtros seleccionados.</td></tr>{% endfor %}</tbody></table>
+<p class="warning"><strong>Confidencialidad:</strong> {{ confidentiality }}<br>{{ report.observations }}</p>
+</body></html>

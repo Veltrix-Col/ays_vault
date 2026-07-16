@@ -1,12 +1,14 @@
-A&S Vault - {{ alert.alert_type }}
+{% load vault_ui %}A&S Vault — Centro de Control
+
+Tipo de evento: {{ alert.alert_type|alert_type_label }}
 Severidad: {{ alert.get_severity_display }}
 Usuario: {{ alert.affected_user|default:"No identificado" }}
-Fecha: {{ alert.created_at|date:"d/m/Y" }}
-Hora: {{ alert.created_at|date:"H:i:s" }}
+Fecha y hora: {{ alert.created_at|date:"d/m/Y H:i:s" }}
 IP: {{ alert.ip_address|default:"No disponible" }}
 Dispositivo: {% if alert.device %}{{ alert.device.friendly_name|default:alert.device.device_type }}{% else %}No disponible{% endif %}
 Motivo: {{ alert.description }}
-Recomendacion: {{ alert.recommendation|default:"Revisar en el Centro de Control." }}
-Detalle: {{ detail_url }}
+Recomendación: {{ alert.recommendation|default:"Revisar el caso en el Centro de Control." }}
 
-Este mensaje excluye PAN, vencimiento, valores revelados, secretos, tokens y codigos MFA.
+Detalle seguro: {{ detail_url }}
+
+Este mensaje excluye números de tarjeta, vencimientos, valores revelados, secretos, tokens y códigos MFA.

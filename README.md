@@ -76,7 +76,13 @@ El comando de evaluacion es idempotente y revisa inactividad, usuarios sin uso/M
 
 El correo usa una capa intercambiable. Desarrollo usa el backend de Django/console. Produccion puede usar Microsoft Graph con OAuth 2.0 client credentials mediante MSAL y permiso de aplicacion `Mail.Send`; limite el acceso de la aplicacion al buzon remitente en Microsoft 365. El fallo de correo se registra, admite reintento y nunca revierte la operacion sensible que genero la alerta.
 
-Documentacion operativa: [Centro de Control](docs/CONTROL_CENTER.md), [alertas y correo](docs/ALERTING_AND_EMAIL.md) y [politicas de acceso](docs/ACCESS_POLICIES.md).
+Documentacion operativa: [Centro de Control](docs/CONTROL_CENTER.md), [alertas y correo](docs/ALERTING_AND_EMAIL.md), [politicas de acceso](docs/ACCESS_POLICIES.md) e [informes y exportaciones](docs/REPORTING_AND_EXPORTS.md).
+
+## Informes seguros
+
+La Linea de Tiempo dispone de filtros rapidos, cuadricula principal, panel avanzado, chips removibles, orden y paginacion de 25/50/100 filas. Excel y PDF reutilizan el mismo queryset previamente limitado por rol. El Centro de Informes ofrece inicialmente Linea de Tiempo, Alertas, Accesos, Adopcion, Tarjetas (solo Lider) y Salud Operativa (solo Administrador).
+
+Excel se genera con `openpyxl==3.1.5`, sin macros ni formulas procedentes de datos. PDF se genera en memoria con `WeasyPrint==69.0`; no se crean archivos publicos ni temporales persistentes. Toda generacion exige POST con CSRF, registra resultado y filtros seguros en `ReportExport`, y crea un evento `REPORT_EXPORT` en la cadena de auditoria. Los valores predeterminados son 5.000 filas para Excel, 1.000 para PDF y 90 dias por consulta.
 
 ## Variables nuevas
 
@@ -89,6 +95,10 @@ Documentacion operativa: [Centro de Control](docs/CONTROL_CENTER.md), [alertas y
 - `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`
 - `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`
 - `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES`, `VAULT_BASE_URL`
+- `REPORT_XLSX_MAX_ROWS=5000`
+- `REPORT_PDF_MAX_ROWS=1000`
+- `REPORT_DEFAULT_MAX_DAYS=90`
+- `REPORT_LARGE_EXPORT_ALERT_THRESHOLD=1000`
 
 ## Limitaciones y riesgos pendientes
 

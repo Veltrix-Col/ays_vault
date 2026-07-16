@@ -28,7 +28,7 @@ def _enforce_schedule(request, operation):
     decision = evaluate_access_policy(request.user, request.user.vault_profile.role, operation)
     if decision.requires_block:
         audit(request, "CRITICAL_BLOCKED", reason=decision.reason, result="DENIED", risk_level=decision.severity, metadata={"operation": operation, "policy_id": decision.policy_identifier, "exception_id": decision.exception_applied})
-        raise PermissionDenied("Operacion bloqueada por la politica de horario.")
+        raise PermissionDenied("Operación bloqueada por la política de horario.")
     if decision.requires_reauthentication and operation == "VIEW" and not has_recent_reauth(request, "outside_hours"):
         return redirect(f"{reverse('vault:reauthenticate')}?purpose=outside_hours&next={request.path}")
     return decision

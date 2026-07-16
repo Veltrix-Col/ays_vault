@@ -1,0 +1,41 @@
+{% extends 'base.html' %}{% load vault_ui %}
+{% block title %}Informes · A&amp;S Vault{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><span class="section-kicker">Exportación controlada</span><h1>Centro de Informes</h1><p>Genere archivos profesionales limitados a la información autorizada para su rol.</p></div>
+</div>
+
+<div class="report-grid">
+  {% for card in report_cards %}
+  <article class="panel report-card">
+    <div class="report-card-icon" aria-hidden="true">{{ card.name|first }}</div>
+    <div><h2>{{ card.name }}</h2><p>{{ card.description }}</p></div>
+    <dl class="report-meta"><div><dt>Formatos</dt><dd>Excel y PDF</dd></div><div><dt>Última generación</dt><dd>{% if card.last %}{{ card.last.created_at|date:'d/m/Y H:i' }}{% else %}Sin generaciones{% endif %}</dd></div></dl>
+    <details class="report-config">
+      <summary class="btn secondary">Configurar informe</summary>
+      <form method="post" class="report-config-form" data-report-form>
+        {% csrf_token %}
+        <div class="form-grid two-cols">
+          <label>Fecha inicial<input type="date" name="date_from"></label>
+          <label>Fecha final<input type="date" name="date_to"></label>
+          <label>Orientación del PDF<select name="orientation"><option value="auto">Automática</option><option value="portrait">Vertical</option><option value="landscape">Horizontal</option></select></label>
+          <label>Nivel de detalle<select name="detail"><option value="detail">Detallado</option><option value="summary">Resumen</option></select></label>
+        </div>
+        <p class="field-help">El periodo máximo normal es de 90 días. Los límites son 5.000 filas para Excel y 1.000 para PDF.</p>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" formaction="{% url 'vault:export_report' card.type 'XLSX' %}">Generar Excel</button>
+          <button class="btn secondary" type="submit" formaction="{% url 'vault:export_report' card.type 'PDF' %}">Generar PDF</button>
+        </div>
+      </form>
+    </details>
+  </article>
+  {% endfor %}
+</div>
+
+<section class="panel table-panel">
+  <div class="panel-head"><div><h2>Historial de informes</h2><p>Se conserva la trazabilidad, no los archivos ni su contenido.</p></div></div>
+  <div class="table-wrap"><table class="table responsive-table"><thead><tr><th>Fecha</th><th>Informe</th><th>Formato</th><th>Usuario</th><th>Registros</th><th>Resultado</th><th>Duración</th></tr></thead><tbody>
+  {% for item in history %}<tr><td data-label="Fecha">{{ item.created_at|date:'d/m/Y H:i' }}</td><td data-label="Informe">{{ item.get_report_type_display }}</td><td data-label="Formato">{{ item.get_export_format_display }}</td><td data-label="Usuario">{{ item.user }}</td><td data-label="Registros">{{ item.record_count }}</td><td data-label="Resultado"><span class="badge {{ item.result }}">{{ item.get_result_display }}</span></td><td data-label="Duración">{{ item.duration_ms }} ms</td></tr>{% empty %}<tr><td colspan="7">Aún no se han generado informes.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

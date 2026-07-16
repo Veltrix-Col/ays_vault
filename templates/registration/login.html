@@ -1,3 +1,3 @@
-{% extends 'base.html' %}
-{% block title %}Ingresar · A&S Vault{% endblock %}
-{% block content %}<section class="login-card"><span class="login-kicker">A&S Vault · Acceso restringido</span><h1>A&S Vault</h1><p>Custodia segura de información sensible. Todo acceso y operación queda registrado.</p><form method="post" class="form-card">{% csrf_token %}{{ form.as_p }}<button class="btn primary full">Ingresar</button></form><small class="security-note">La sesión expira tras 10 minutos de inactividad.</small></section>{% endblock %}
+{% extends 'base.html' %}{% load static %}
+{% block title %}Ingresar · A&amp;S Vault{% endblock %}
+{% block content %}<section class="login-card"><img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en seguros"><span class="login-kicker">Acceso restringido</span><h1>A&amp;S Vault</h1><p>Custodia segura de información sensible. Todo acceso y operación queda registrado.</p><form method="post" class="form-card" novalidate>{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}{% include 'includes/form_field.html' with field=field %}{% endfor %}<button class="btn primary full" type="submit">Ingresar</button></form><small class="security-note">La sesión expira según la política de inactividad vigente.</small></section>{% endblock %}

@@ -42,7 +42,7 @@ def _preauth_user(request):
 def _complete_login(request, user, otp_device, device):
     policy = get_policy()
     if policy.new_session_policy == "BLOCK_NEW" and SecureSession.objects.filter(user=user, status=SecureSession.ACTIVE).exists():
-        audit(request, "CRITICAL_BLOCKED", user=user, reason="Politica de sesion nueva", result="DENIED", risk_level="HIGH", metadata={"session_policy": "BLOCK_NEW"})
+        audit(request, "CRITICAL_BLOCKED", user=user, reason="Política de sesión nueva", result="DENIED", risk_level="HIGH", metadata={"session_policy": "BLOCK_NEW"})
         return False
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     establish_secure_session(request, user, otp_device, device)
@@ -113,7 +113,7 @@ def mfa_verify(request):
             user.vault_profile.mfa_failed_attempts = 0
             user.vault_profile.save(update_fields=["mfa_failed_attempts"])
             if not _complete_login(request, user, otp_device, device):
-                form.add_error(None, "La politica vigente no permite una nueva sesion.")
+                form.add_error(None, "La política vigente no permite una nueva sesión.")
                 return render(request, "registration/mfa_verify.html", {"form": form})
             event = audit(request, "MFA_RECOVERY_USED" if recovery_used else "MFA_SUCCESS", user=user, risk_level="HIGH" if recovery_used else "LOW")
             if recovery_used:
@@ -146,7 +146,7 @@ def mfa_enroll(request):
             codes = generate_recovery_codes(user)
             browser_device, _ = get_or_register_device(request, user)
             if not _complete_login(request, user, device, browser_device):
-                form.add_error(None, "La politica vigente no permite una nueva sesion.")
+                form.add_error(None, "La política vigente no permite una nueva sesión.")
                 return render(request, "registration/mfa_enroll.html", {"form": form, "manual_key": "", "qr_data_uri": ""})
             request.session["recovery_codes_pending"] = True
             audit(request, "MFA_ENROLL_COMPLETE", user=user)

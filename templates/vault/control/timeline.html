@@ -1,1 +1,82 @@
-{% extends 'base.html' %}{% block title %}Linea de tiempo · A&S Vault{% endblock %}{% block content %}<div class="page-heading"><div><span class="section-kicker">Trazabilidad segura</span><h1>Linea de tiempo central</h1><p>Solo identificadores internos y ultimos cuatro digitos; nunca datos revelados.</p></div></div><section class="panel"><form method="get" class="filter-grid"><input type="date" name="date_from" value="{{ filters.date_from }}"><input type="date" name="date_to" value="{{ filters.date_to }}"><select name="user"><option value="">Usuario</option>{% for item in users %}<option value="{{ item.pk }}">{{ item.username }}</option>{% endfor %}</select><select name="role"><option value="">Rol</option><option>ADMIN</option><option>LEADER</option><option>ANALYST</option></select><select name="event_type"><option value="">Tipo</option>{% for value,label in action_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select><select name="severity"><option value="">Riesgo</option><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select><input name="result" placeholder="Resultado" value="{{ filters.result }}"><input name="ip" placeholder="IP exacta" value="{{ filters.ip }}"><input name="device" placeholder="Dispositivo" value="{{ filters.device }}"><select name="schedule"><option value="">Horario</option><option value="inside">Dentro</option><option value="outside">Fuera</option></select><input name="card" placeholder="ID o ultimos 4" value="{{ filters.card }}"><input name="alert" placeholder="ID alerta" value="{{ filters.alert }}"><input name="q" placeholder="Busqueda segura" value="{{ filters.q }}"><select name="view"><option value="compact">Compacta</option><option value="detail">Detallada</option></select><button class="btn primary">Filtrar</button></form></section><section class="panel"><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Usuario / rol</th><th>Tipo</th><th>Resultado</th><th>IP / dispositivo</th><th>Horario</th><th>Objeto seguro</th><th>Riesgo</th>{% if not compact %}<th>Motivo</th>{% endif %}</tr></thead><tbody>{% for e in page %}<tr><td>{{ e.created_at|date:'d/m/Y H:i:s' }}</td><td>{{ e.user|default:'Sistema' }}<br><small>{{ e.actor_role|default:'—' }}</small></td><td>{{ e.get_action_display }}</td><td>{{ e.result }}</td><td>{{ e.ip_address|default:'—' }}<br><small>{{ e.user_agent|truncatechars:45|default:'—' }}</small></td><td>{% if e.outside_office_hours %}Fuera{% else %}Dentro{% endif %}</td><td>{% if e.card %}#{{ e.card_id }} / **** {{ e.card.last4 }}{% else %}—{% endif %}</td><td>{{ e.get_risk_level_display }}</td>{% if not compact %}<td>{{ e.reason|default:'—' }}</td>{% endif %}</tr>{% empty %}<tr><td colspan="9">Sin resultados.</td></tr>{% endfor %}</tbody></table></div><nav class="pagination">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Anterior</a>{% endif %}<span>Pagina {{ page.number }} de {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?page={{ page.next_page_number }}">Siguiente</a>{% endif %}</nav></section>{% endblock %}
+{% extends 'base.html' %}{% load vault_ui %}
+{% block title %}Línea de tiempo · A&amp;S Vault{% endblock %}
+{% block content %}
+<div class="page-heading"><div><span class="section-kicker">Trazabilidad segura</span><h1>Línea de tiempo central</h1><p>Consulte eventos autorizados mediante identificadores internos y datos protegidos.</p></div><a class="btn secondary" href="{% url 'vault:report_center' %}">Centro de Informes</a></div>
+
+<section class="panel timeline-filter-panel">
+  <div class="panel-head"><div><h2>Buscar eventos</h2><p>Use accesos rápidos o combine los criterios necesarios.</p></div></div>
+  <form method="get" id="timeline-filters" data-timeline-filters novalidate>
+    <input type="hidden" name="period" id="id_period" value="{{ filters.period }}">
+    <input type="hidden" name="quick_event" id="id_quick_event" value="{{ filters.quick_event }}">
+    <input type="hidden" name="advanced" id="id_advanced" value="{% if advanced_open %}1{% endif %}">
+    <div class="quick-filter-bar" aria-label="Filtros rápidos">
+      <span class="quick-filter-label">Periodo</span>
+      <button type="button" class="quick-chip {% if filters.period == 'today' %}active{% endif %}" data-quick-period="today">Hoy</button>
+      <button type="button" class="quick-chip {% if filters.period == '7d' %}active{% endif %}" data-quick-period="7d">Últimos 7 días</button>
+      <button type="button" class="quick-chip {% if filters.period == '30d' %}active{% endif %}" data-quick-period="30d">Últimos 30 días</button>
+      <button type="button" class="quick-chip {% if filters.period == 'month' %}active{% endif %}" data-quick-period="month">Este mes</button>
+      <button type="button" class="quick-chip {% if filters.period == 'previous_month' %}active{% endif %}" data-quick-period="previous_month">Mes anterior</button>
+      <span class="quick-filter-separator" aria-hidden="true"></span><span class="quick-filter-label">Evento</span>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'accesses' %}active{% endif %}" data-quick-event="accesses">Accesos</button>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'reveals' %}active{% endif %}" data-quick-event="reveals">Revelados</button>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'copies' %}active{% endif %}" data-quick-event="copies">Copias</button>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'alerts' %}active{% endif %}" data-quick-event="alerts">Alertas</button>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'outside' %}active{% endif %}" data-quick-event="outside">Fuera de horario</button>
+      <button type="button" class="quick-chip {% if filters.quick_event == 'failed' %}active{% endif %}" data-quick-event="failed">Fallidos</button>
+      <a class="quick-clear" href="{% url 'vault:timeline' %}">Limpiar filtros</a>
+    </div>
+
+    {% if filter_form.errors %}<div class="form-errors" role="alert"><strong>Revise los filtros:</strong>{{ filter_form.non_field_errors }}{% for field in filter_form %}{% for error in field.errors %}<span>{{ field.label }}: {{ error }}</span>{% endfor %}{% endfor %}</div>{% endif %}
+    <div class="timeline-actions top-actions">
+      <button class="btn primary" type="submit">Aplicar filtros</button><a class="btn ghost" href="{% url 'vault:timeline' %}">Limpiar</a>
+      <button class="btn excel" type="submit" form="timeline-export-xlsx">Exportar Excel</button><button class="btn pdf" type="submit" form="timeline-export-pdf">Exportar PDF</button>
+    </div>
+
+    <div class="timeline-filter-grid">
+      <label for="{{ filter_form.date_from.id_for_label }}">{{ filter_form.date_from.label }}{{ filter_form.date_from }}</label>
+      <label for="{{ filter_form.date_to.id_for_label }}">{{ filter_form.date_to.label }}{{ filter_form.date_to }}</label>
+      <label for="{{ filter_form.user.id_for_label }}">{{ filter_form.user.label }}{{ filter_form.user }}</label>
+      <label for="{{ filter_form.event_type.id_for_label }}">{{ filter_form.event_type.label }}{{ filter_form.event_type }}</label>
+      <label for="{{ filter_form.role.id_for_label }}">{{ filter_form.role.label }}{{ filter_form.role }}</label>
+      <label for="{{ filter_form.severity.id_for_label }}">{{ filter_form.severity.label }}{{ filter_form.severity }}</label>
+      <label for="{{ filter_form.result.id_for_label }}">{{ filter_form.result.label }}{{ filter_form.result }}</label>
+      <label for="{{ filter_form.schedule.id_for_label }}">{{ filter_form.schedule.label }}{{ filter_form.schedule }}</label>
+      <label for="{{ filter_form.device.id_for_label }}">{{ filter_form.device.label }}{{ filter_form.device }}</label>
+      <label for="{{ filter_form.ip.id_for_label }}">{{ filter_form.ip.label }}{{ filter_form.ip }}<small>{{ filter_form.ip.help_text }}</small></label>
+      <label for="{{ filter_form.card.id_for_label }}">Tarjeta o últimos cuatro dígitos{{ filter_form.card }}<small>{{ filter_form.card.help_text }}</small></label>
+      <label for="{{ filter_form.alert.id_for_label }}">{{ filter_form.alert.label }}{{ filter_form.alert }}</label>
+    </div>
+
+    <details class="advanced-filters" {% if advanced_open %}open{% endif %} data-advanced-filters>
+      <summary>Más filtros <span>Opciones técnicas y criterios especiales</span></summary>
+      <div class="timeline-filter-grid advanced-grid">
+        <label>{{ filter_form.method.label }}{{ filter_form.method }}</label><label>{{ filter_form.path.label }}{{ filter_form.path }}</label>
+        <label>{{ filter_form.device_type.label }}{{ filter_form.device_type }}</label><label>{{ filter_form.browser.label }}{{ filter_form.browser }}</label>
+        <label>{{ filter_form.operating_system.label }}{{ filter_form.operating_system }}</label><label>{{ filter_form.session.label }}{{ filter_form.session }}<small>{{ filter_form.session.help_text }}</small></label>
+        <label>{{ filter_form.alert_status.label }}{{ filter_form.alert_status }}</label><label>{{ filter_form.policy.label }}{{ filter_form.policy }}</label><label>{{ filter_form.exception.label }}{{ filter_form.exception }}</label>
+        <fieldset class="advanced-checks"><legend>Criterios especiales</legend>
+          <label>{{ filter_form.sensitive_only }} <span>{{ filter_form.sensitive_only.label }}</span></label><label>{{ filter_form.with_alert }} <span>{{ filter_form.with_alert.label }}</span></label>
+          <label>{{ filter_form.failed_only }} <span>{{ filter_form.failed_only.label }}</span></label><label>{{ filter_form.critical_only }} <span>{{ filter_form.critical_only.label }}</span></label>
+        </fieldset>
+      </div>
+    </details>
+    <div class="result-preferences"><label>{{ filter_form.view.label }}{{ filter_form.view }}</label><label>{{ filter_form.order.label }}{{ filter_form.order }}</label><label>{{ filter_form.page_size.label }}{{ filter_form.page_size }}</label></div>
+    <div class="timeline-actions bottom-actions"><button class="btn primary" type="submit">Aplicar filtros</button><a class="btn ghost" href="{% url 'vault:timeline' %}">Limpiar</a><button class="btn excel" type="submit" form="timeline-export-xlsx">Exportar Excel</button><button class="btn pdf" type="submit" form="timeline-export-pdf">Exportar PDF</button></div>
+  </form>
+  <form method="post" action="{% url 'vault:export_report' 'TIMELINE' 'XLSX' %}" id="timeline-export-xlsx">{% csrf_token %}{% for key,value in export_params %}<input type="hidden" name="{{ key }}" value="{{ value }}" data-synced-filter>{% endfor %}</form>
+  <form method="post" action="{% url 'vault:export_report' 'TIMELINE' 'PDF' %}" id="timeline-export-pdf">{% csrf_token %}{% for key,value in export_params %}<input type="hidden" name="{{ key }}" value="{{ value }}" data-synced-filter>{% endfor %}<input type="hidden" name="orientation" value="auto"></form>
+</section>
+
+<section class="filter-summary" aria-live="polite" aria-label="Resumen de filtros aplicados">
+  <div><strong>{{ result_count }} evento{{ result_count|pluralize }} encontrado{{ result_count|pluralize }}</strong><span>Alcance limitado por su rol.</span></div>
+  {% if active_chips %}<div class="active-filter-chips">{% for chip in active_chips %}<a class="active-filter-chip" href="{{ chip.remove_url }}" aria-label="Retirar filtro {{ chip.label }}"><span>{{ chip.label }}: {{ chip.value }}</span><b aria-hidden="true">×</b></a>{% endfor %}</div>{% endif %}
+</section>
+
+<section class="panel table-panel timeline-results"><div class="panel-head"><div><h2>Eventos</h2><p>{% if compact %}Vista compacta{% else %}Vista detallada{% endif %}, con la información sensible excluida.</p></div></div>
+  <div class="table-wrap"><table class="table responsive-table timeline-table"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Evento</th><th>Resultado</th><th>Severidad</th><th>IP y dispositivo</th><th>Horario</th><th>Objeto seguro</th><th>Detalle</th></tr></thead><tbody>
+  {% for e in page %}<tr><td data-label="Fecha y hora">{{ e.created_at|date:'d/m/Y' }}<br><small>{{ e.created_at|date:'H:i:s' }}</small></td><td data-label="Usuario">{{ e.user.get_full_name|default:e.user.username|default:'Sistema' }}<br><small>{{ e.actor_role|role_label }}</small></td><td data-label="Evento"><strong>{{ e.get_action_display }}</strong></td><td data-label="Resultado"><span class="badge {{ e.result }}">{{ e.result|result_label }}</span></td><td data-label="Severidad"><span class="badge {{ e.risk_level }}">{{ e.get_risk_level_display }}</span></td><td data-label="IP y dispositivo"><span>{{ e.ip_address|default:'—' }}</span><br><small>{{ e.user_agent|truncatechars:48|default:'—' }}</small></td><td data-label="Horario">{% if e.outside_office_hours %}<span class="badge HIGH">Fuera</span>{% else %}<span class="badge LOW">Dentro</span>{% endif %}</td><td data-label="Objeto seguro">{% if e.card %}Tarjeta #{{ e.card_id }} · **** {{ e.card.last4 }}{% else %}—{% endif %}</td><td data-label="Detalle"><details class="event-detail"><summary aria-label="Ver detalle seguro del evento">Ver</summary><dl><div><dt>Método</dt><dd>{{ e.method|default:'—' }}</dd></div><div><dt>Ruta</dt><dd>{{ e.path|default:'—' }}</dd></div><div><dt>Motivo</dt><dd>{{ e.reason|default:'—' }}</dd></div>{% if e.securityalert %}<div><dt>Alerta</dt><dd><a href="{% url 'vault:alert_detail' e.securityalert.pk %}">#{{ e.securityalert.pk }}</a></dd></div>{% endif %}</dl></details></td></tr>
+  {% empty %}<tr><td colspan="9">No hay resultados para los filtros seleccionados.</td></tr>{% endfor %}
+  </tbody></table></div>
+  <nav class="pagination" aria-label="Paginación de eventos"><div>{% if page.has_previous %}<a class="btn ghost" href="?{% if querystring %}{{ querystring }}&amp;{% endif %}page={{ page.previous_page_number }}">Anterior</a>{% endif %}{% if page.has_next %}<a class="btn ghost" href="?{% if querystring %}{{ querystring }}&amp;{% endif %}page={{ page.next_page_number }}">Siguiente</a>{% endif %}</div><span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span></nav>
+</section>
+{% endblock %}

@@ -10,6 +10,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from .models import NotificationRecipient, NotificationRecord
+from .forms import ALERT_TYPE_CHOICES
 
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
@@ -116,7 +117,8 @@ def send_alert_notification(alert, recipient, force_retry=False):
     if not created and not force_retry and record.attempts >= settings.EMAIL_MAX_RETRIES:
         return record
     context = {"alert": alert, "detail_url": f"{settings.VAULT_BASE_URL}/security/alerts/{alert.pk}/"}
-    subject = f"[A&S Vault] {alert.get_severity_display()}: {alert.alert_type}"
+    alert_label = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
+    subject = f"[A&S Vault] {alert.get_severity_display()}: {alert_label}"
     text_body = render_to_string("vault/email/alert.txt", context)
     html_body = render_to_string("vault/email/alert.html", context)
     backend = get_backend()

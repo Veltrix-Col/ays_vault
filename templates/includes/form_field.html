@@ -1,0 +1,10 @@
+<div class="form-field {% if full %}full{% endif %}">
+  {% if field.field.widget.input_type == 'checkbox' %}
+    <label class="check-control" for="{{ field.id_for_label }}">{{ field }} <span>{{ field.label }}{% if field.field.required %} <span class="required-mark" aria-hidden="true">*</span>{% endif %}</span></label>
+  {% else %}
+    <label for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} <span class="required-mark" aria-hidden="true">*</span>{% endif %}</label>
+    {{ field }}
+  {% endif %}
+  {% if field.help_text %}<span class="field-help" id="{{ field.id_for_label }}_help">{{ field.help_text }}</span>{% endif %}
+  {% for error in field.errors %}<span class="field-error" id="{{ field.id_for_label }}_error">{{ error }}</span>{% endfor %}
+</div>

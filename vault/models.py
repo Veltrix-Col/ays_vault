@@ -185,6 +185,7 @@ class AuditEvent(models.Model):
         ("EXCEPTION_CREATED", "Excepcion creada"), ("EXCEPTION_REVOKED", "Excepcion revocada"),
         ("EMAIL_SENT", "Correo enviado"), ("EMAIL_FAILED", "Fallo de correo"),
         ("POLICY_EVALUATION", "Evaluacion programada"), ("CRITICAL_BLOCKED", "Operación crítica bloqueada"),
+        ("REPORT_EXPORT", "Informe exportado"),
     ]
     RISK_LEVELS = [("LOW", "Bajo"), ("MEDIUM", "Medio"), ("HIGH", "Alto"), ("CRITICAL", "Crítico")]
 
@@ -389,6 +390,37 @@ class NotificationRecord(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["result", "next_attempt_at"], name="vault_notify_retry")]
+
+
+class ReportExport(models.Model):
+    TYPES = [
+        ("TIMELINE", "Línea de tiempo"), ("ALERTS", "Alertas"), ("ACCESS", "Accesos"),
+        ("ADOPTION", "Adopción"), ("CARDS", "Tarjetas"), ("HEALTH", "Salud operativa"),
+    ]
+    FORMATS = [("XLSX", "Excel"), ("PDF", "PDF")]
+    RESULTS = [("PENDING", "Pendiente"), ("SUCCESS", "Exitoso"), ("FAILED", "Fallido"), ("LIMITED", "Límite excedido")]
+
+    report_type = models.CharField(max_length=20, choices=TYPES)
+    export_format = models.CharField(max_length=8, choices=FORMATS)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="vault_report_exports")
+    actor_role = models.CharField(max_length=10)
+    safe_filters = models.JSONField(default=dict, blank=True)
+    record_count = models.PositiveIntegerField(default=0)
+    result = models.CharField(max_length=12, choices=RESULTS, default="PENDING")
+    duration_ms = models.PositiveIntegerField(default=0)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True)
+    filename = models.CharField(max_length=180, blank=True)
+    safe_error = models.CharField(max_length=120, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"], name="vault_report_user_date"),
+            models.Index(fields=["report_type", "result"], name="vault_report_type_result"),
+        ]
 
 
 class PolicyEvaluationRun(models.Model):

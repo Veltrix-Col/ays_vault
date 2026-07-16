@@ -18,7 +18,9 @@ Vista exclusiva del Administrador para una operacion pequena. No mide concurrenc
 
 Administrador ve eventos tecnicos, identidad y operacion sin valores de tarjeta. Lider ve eventos operativos. Analista ve solo eventos cuyo actor es el mismo usuario. Los filtros por usuario, rol, fecha, accion, riesgo, resultado, IP, dispositivo, horario, tarjeta y alerta se aplican al queryset ya limitado por rol para impedir IDOR.
 
-La pagina contiene 50 eventos en orden descendente. Las vistas compacta y detallada solo cambian presentacion. No existe exportacion sensible; la separacion de filtros/queryset deja preparado un exportador futuro sujeto a autorizacion adicional.
+La pagina usa por defecto 50 eventos y permite 25, 50 o 100, orden ascendente o descendente y vista compacta/detallada. Los accesos rapidos cubren periodos, accesos, revelados, copias, alertas, fuera de horario y fallidos. Los filtros principales se muestran en una cuadricula adaptable; los criterios tecnicos permanecen en `Mas filtros`. El resumen presenta filtros activos como chips removibles.
+
+Excel y PDF se generan exclusivamente por POST y respetan exactamente el queryset limitado por rol. El Administrador no obtiene informes de tarjetas; el Lider accede al inventario operativo sin PAN ni vencimiento; el Analista queda limitado a su actividad. Consulte `REPORTING_AND_EXPORTS.md`.
 
 ## Operacion
 

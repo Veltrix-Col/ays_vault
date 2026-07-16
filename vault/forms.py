@@ -1,8 +1,47 @@
 from django import forms
 from django.contrib.auth import authenticate
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
+import ipaddress
+import re
 
 from .crypto import fingerprint
-from .models import AccessException, Holiday, NotificationRecipient, PaymentCard, PolicyConfiguration
+from .models import (
+    AccessException,
+    AuditEvent,
+    Holiday,
+    NotificationRecipient,
+    PaymentCard,
+    PolicyConfiguration,
+    ReportExport,
+)
+
+REAUTHENTICATION_OPERATION_CHOICES = [
+    ("REVEAL_PAN", "Revelar número de tarjeta"), ("REVEAL_EXPIRY", "Revelar vencimiento"),
+    ("COPY_PAN", "Copiar número de tarjeta"), ("COPY_EXPIRY", "Copiar vencimiento"),
+    ("CREATE_CARD", "Crear tarjeta"), ("EDIT_CARD", "Editar tarjeta"),
+    ("DEACTIVATE_CARD", "Desactivar tarjeta"), ("CHANGE_PASSWORD", "Cambiar contraseña"),
+    ("RESET_MFA", "Restablecer MFA"), ("CHANGE_POLICIES", "Cambiar políticas"),
+    ("MANAGE_USERS", "Gestionar usuarios"), ("MANAGE_SESSIONS", "Gestionar sesiones"),
+    ("MANAGE_DEVICES", "Gestionar dispositivos"), ("MANAGE_ALERTS", "Gestionar alertas"),
+]
+ACCESS_OPERATION_CHOICES = [
+    ("LOGIN", "Iniciar sesión"), ("VIEW", "Consultar tarjetas"), ("REVEAL", "Revelar información"),
+    ("COPY", "Copiar información"), ("CREATE", "Crear tarjeta"), ("EDIT", "Editar tarjeta"),
+    ("DEACTIVATE", "Desactivar tarjeta"),
+]
+ALERT_TYPE_CHOICES = [
+    ("OUTSIDE_HOURS", "Acceso fuera de horario"), ("NEW_DEVICE", "Dispositivo nuevo"),
+    ("MFA_BLOCKED", "MFA bloqueado"), ("USER_BLOCKED", "Usuario bloqueado"),
+    ("PASSWORD_CHANGE", "Cambio de contraseña"), ("MFA_RESET", "Reinicio de MFA"),
+    ("POLICY_CHANGED", "Política modificada"), ("EXCEPTION_CREATED", "Excepción creada"),
+    ("EXCEPTION_REVOKED", "Excepción revocada"), ("SYSTEM_INACTIVITY", "Sistema sin uso"),
+    ("POSSIBLE_PARALLEL_TOOL_USE", "Posible uso paralelo de Excel"),
+    ("AUDIT_INTEGRITY_REVIEW", "Fallo de integridad"), ("CRITICAL_ALERT", "Alerta crítica"),
+    ("EMAIL_FAILURE", "Fallo de correo"),
+]
 
 
 def luhn_valid(number):
@@ -35,6 +74,7 @@ class CardForm(forms.ModelForm):
     class Meta:
         model = PaymentCard
         fields = ["client_name", "cardholder_name", "brand", "purpose", "active"]
+        labels = {"client_name": "Cliente", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Finalidad", "active": "Tarjeta activa"}
 
     def clean_pan(self):
         digits = "".join(character for character in self.cleaned_data["pan"] if character.isdigit())
@@ -75,6 +115,7 @@ class CardEditForm(forms.ModelForm):
     class Meta:
         model = PaymentCard
         fields = ["client_name", "cardholder_name", "brand", "purpose"]
+        labels = {"client_name": "Cliente", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Finalidad"}
 
     def save(self, commit=True, user=None):
         obj = super().save(False)
@@ -86,9 +127,9 @@ class CardEditForm(forms.ModelForm):
 
 
 class RevealForm(forms.Form):
-    field = forms.ChoiceField(choices=[("pan", "Número de tarjeta"), ("expiry", "Vencimiento")])
-    reason = forms.CharField(max_length=240, min_length=5)
-    reference = forms.CharField(max_length=120, required=False)
+    field = forms.ChoiceField(label="Información que desea revelar", choices=[("pan", "Número de tarjeta"), ("expiry", "Vencimiento")])
+    reason = forms.CharField(label="Motivo", max_length=240, min_length=5)
+    reference = forms.CharField(label="Referencia interna", max_length=120, required=False)
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -135,19 +176,50 @@ class ReasonForm(forms.Form):
 
 
 class PolicyConfigurationForm(forms.ModelForm):
+    new_session_policy = forms.ChoiceField(label="Comportamiento al iniciar sesión desde otro dispositivo", choices=[("REVOKE_PREVIOUS", "Revocar la sesión anterior"), ("BLOCK_NEW", "Bloquear la nueva sesión"), ("ALLOW_LIMIT", "Permitir según el límite configurado")])
+    outside_hours_behavior = forms.ChoiceField(label="Acceso fuera del horario laboral", choices=[("ALLOW", "Permitir"), ("ALLOW_ALERT", "Permitir y generar alerta"), ("REAUTH", "Exigir reautenticación"), ("BLOCK", "Bloquear")], help_text="Define qué debe hacer A&S Vault cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.")
+    reauthentication_operations = forms.MultipleChoiceField(
+        label="Operaciones que requieren reautenticación",
+        choices=REAUTHENTICATION_OPERATION_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="Seleccione las operaciones sensibles que deben solicitar una validación reciente.",
+    )
     reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
 
     class Meta:
         model = PolicyConfiguration
         exclude = ["singleton", "updated_by", "updated_at"]
-        widgets = {"reauthentication_operations": forms.Textarea(attrs={"rows": 3})}
+        labels = {
+            "timezone_name": "Zona horaria", "weekday_start": "Inicio de jornada, lunes a viernes",
+            "weekday_end": "Fin de jornada, lunes a viernes", "saturday_enabled": "Habilitar jornada los sábados",
+            "saturday_start": "Inicio de jornada del sábado", "saturday_end": "Fin de jornada del sábado",
+            "sunday_enabled": "Permitir acceso los domingos", "session_inactivity_minutes": "Cerrar sesión por inactividad, minutos",
+            "maximum_sessions": "Sesiones simultáneas permitidas", "new_session_policy": "Comportamiento al iniciar sesión desde otro dispositivo",
+            "reauthentication_minutes": "Vigencia de la reautenticación, minutos", "outside_hours_behavior": "Acceso fuera del horario laboral",
+            "inactivity_login_days": "Días sin iniciar sesión", "inactivity_reveal_days": "Días sin consultar tarjetas",
+            "inactivity_copy_days": "Días sin copiar información", "inactivity_general_days": "Días sin actividad del sistema",
+            "inactive_user_days": "Días para considerar un usuario inactivo", "operational_user_days": "Días sin actividad de usuarios operativos",
+            "alert_review_hours": "Tiempo máximo para revisar una alerta, horas", "escalation_hours": "Escalar alerta después de, horas",
+            "enabled": "Activar esta política",
+        }
+        help_texts = {
+            "timezone_name": "Todos los horarios del sistema se calculan con esta zona.",
+            "outside_hours_behavior": "Define qué debe hacer A&S Vault cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.",
+        }
+        widgets = {
+            "weekday_start": forms.TimeInput(attrs={"type": "time"}), "weekday_end": forms.TimeInput(attrs={"type": "time"}),
+            "saturday_start": forms.TimeInput(attrs={"type": "time"}), "saturday_end": forms.TimeInput(attrs={"type": "time"}),
+        }
 
 
 class AccessExceptionForm(forms.ModelForm):
+    operations = forms.MultipleChoiceField(label="Operaciones permitidas", choices=ACCESS_OPERATION_CHOICES, required=False, widget=forms.CheckboxSelectMultiple)
     class Meta:
         model = AccessException
         fields = ["name", "exception_type", "user", "role", "starts_at", "ends_at", "daily_start", "daily_end", "operations", "reason"]
-        widgets = {"starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "operations": forms.Textarea(attrs={"rows": 3})}
+        labels = {"name": "Nombre", "exception_type": "Tipo de excepción", "user": "Usuario", "role": "Rol", "starts_at": "Fecha y hora inicial", "ends_at": "Fecha y hora final", "daily_start": "Hora inicial diaria", "daily_end": "Hora final diaria", "reason": "Motivo"}
+        widgets = {"starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "daily_start": forms.TimeInput(attrs={"type": "time"}), "daily_end": forms.TimeInput(attrs={"type": "time"})}
 
     def clean(self):
         cleaned = super().clean()
@@ -159,11 +231,14 @@ class AccessExceptionForm(forms.ModelForm):
 
 
 class NotificationRecipientForm(forms.ModelForm):
+    alert_types = forms.MultipleChoiceField(label="Tipos de alerta", choices=ALERT_TYPE_CHOICES, required=False, widget=forms.CheckboxSelectMultiple, help_text="Seleccione qué alertas debe recibir este destinatario.")
     reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
 
     class Meta:
         model = NotificationRecipient
         exclude = ["updated_by", "updated_at"]
+        labels = {"name": "Nombre", "email": "Correo electrónico", "minimum_severity": "Severidad mínima", "send_start": "Hora inicial de envío", "send_end": "Hora final de envío", "delivery_mode": "Forma de entrega", "active": "Destinatario activo", "is_primary": "Correo principal", "is_leader": "Correo del líder", "is_alternate": "Correo alterno", "is_escalation": "Correo de escalamiento"}
+        widgets = {"send_start": forms.TimeInput(attrs={"type": "time"}), "send_end": forms.TimeInput(attrs={"type": "time"})}
 
 
 class HolidayForm(forms.ModelForm):
@@ -172,4 +247,117 @@ class HolidayForm(forms.ModelForm):
     class Meta:
         model = Holiday
         fields = ["date", "name", "national", "internal", "working_day"]
+        labels = {"date": "Fecha", "name": "Nombre", "national": "Festivo nacional", "internal": "Festivo interno", "working_day": "Tratar como día laborable"}
         widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+
+
+class TimelineFilterForm(forms.Form):
+    PERIODS = [("", "Personalizado"), ("today", "Hoy"), ("7d", "Últimos 7 días"), ("30d", "Últimos 30 días"), ("month", "Este mes"), ("previous_month", "Mes anterior")]
+    RESULTS = [("", "Todos"), ("SUCCESS", "Exitoso"), ("FAILED", "Fallido"), ("DENIED", "Denegado"), ("BLOCKED", "Bloqueado")]
+    SCHEDULES = [("", "Cualquier horario"), ("inside", "Dentro del horario"), ("outside", "Fuera del horario")]
+    SIZES = [("25", "25 filas"), ("50", "50 filas"), ("100", "100 filas")]
+    ORDERS = [("desc", "Más recientes primero"), ("asc", "Más antiguos primero")]
+
+    date_from = forms.DateField(label="Fecha inicial", required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_to = forms.DateField(label="Fecha final", required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    user = forms.ModelChoiceField(label="Usuario", required=False, queryset=get_user_model().objects.none(), empty_label="Todos los usuarios")
+    event_type = forms.ChoiceField(label="Tipo de evento", required=False, choices=[("", "Todos los eventos")] + list(AuditEvent.ACTIONS))
+    role = forms.ChoiceField(label="Rol", required=False, choices=[("", "Todos los roles"), ("ADMIN", "Administrador"), ("LEADER", "Líder de cartera"), ("ANALYST", "Analista")])
+    severity = forms.ChoiceField(label="Severidad", required=False, choices=[("", "Todas"), ("LOW", "Baja"), ("MEDIUM", "Media"), ("HIGH", "Alta"), ("CRITICAL", "Crítica")])
+    result = forms.ChoiceField(label="Resultado", required=False, choices=RESULTS)
+    schedule = forms.ChoiceField(label="Horario", required=False, choices=SCHEDULES)
+    device = forms.CharField(label="Dispositivo", required=False, max_length=80)
+    ip = forms.CharField(label="Dirección IP", required=False, max_length=45, help_text="Puede usar una IP completa o un prefijo seguro.")
+    card = forms.CharField(label="Tarjeta", required=False, max_length=12, help_text="Solo ID interno o últimos cuatro dígitos.")
+    alert = forms.IntegerField(label="Alerta relacionada", required=False, min_value=1)
+    method = forms.ChoiceField(label="Método HTTP", required=False, choices=[("", "Cualquiera"), ("GET", "GET"), ("POST", "POST")])
+    path = forms.CharField(label="Ruta", required=False, max_length=120)
+    device_type = forms.CharField(label="Tipo de dispositivo", required=False, max_length=40)
+    browser = forms.CharField(label="Navegador", required=False, max_length=50)
+    operating_system = forms.CharField(label="Sistema operativo", required=False, max_length=50)
+    session = forms.CharField(label="Sesión", required=False, max_length=64, help_text="Identificador técnico ya protegido.")
+    alert_status = forms.ChoiceField(label="Estado de alerta", required=False, choices=[("", "Cualquiera"), ("NEW", "Nueva"), ("IN_REVIEW", "En revisión"), ("JUSTIFIED", "Justificada"), ("ESCALATED", "Escalada"), ("CLOSED", "Cerrada"), ("REOPENED", "Reabierta")])
+    policy = forms.IntegerField(label="Política relacionada", required=False, min_value=1)
+    exception = forms.IntegerField(label="Excepción relacionada", required=False, min_value=1)
+    sensitive_only = forms.BooleanField(label="Solo operaciones sensibles", required=False)
+    with_alert = forms.BooleanField(label="Solo eventos con alerta", required=False)
+    failed_only = forms.BooleanField(label="Solo eventos fallidos", required=False)
+    critical_only = forms.BooleanField(label="Solo eventos críticos", required=False)
+    period = forms.ChoiceField(required=False, choices=PERIODS, widget=forms.HiddenInput)
+    quick_event = forms.CharField(required=False, max_length=24, widget=forms.HiddenInput)
+    advanced = forms.BooleanField(required=False, widget=forms.HiddenInput)
+    view = forms.ChoiceField(label="Vista", required=False, choices=[("compact", "Compacta"), ("detail", "Detallada")])
+    order = forms.ChoiceField(label="Orden", required=False, choices=ORDERS)
+    page_size = forms.ChoiceField(label="Filas", required=False, choices=SIZES)
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = user
+        if user and getattr(user, "vault_profile", None) and user.vault_profile.role != "ANALYST":
+            self.fields["user"].queryset = get_user_model().objects.filter(vault_profile__active=True).select_related("vault_profile").order_by("username")
+
+    def clean_ip(self):
+        value = self.cleaned_data.get("ip", "").strip()
+        if not value:
+            return ""
+        if not re.fullmatch(r"[0-9a-fA-F:.]{2,45}", value):
+            raise forms.ValidationError("Ingrese una dirección IP válida o un prefijo numérico seguro.")
+        if len(value) >= 7:
+            try:
+                ipaddress.ip_address(value)
+            except ValueError:
+                if not (value.endswith(".") or value.endswith(":")):
+                    raise forms.ValidationError("La dirección IP no tiene un formato válido.")
+        return value
+
+    def clean_card(self):
+        value = self.cleaned_data.get("card", "").strip()
+        if not value:
+            return ""
+        if not value.isdigit() or len(value) > 12:
+            raise forms.ValidationError("Use únicamente el ID interno o los últimos cuatro dígitos.")
+        if 13 <= len(value) <= 19:
+            raise forms.ValidationError("No está permitido buscar por número completo de tarjeta.")
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        today = timezone.localdate()
+        period = cleaned.get("period")
+        if period == "today": cleaned["date_from"] = cleaned["date_to"] = today
+        elif period == "7d": cleaned["date_from"], cleaned["date_to"] = today - timedelta(days=6), today
+        elif period == "30d": cleaned["date_from"], cleaned["date_to"] = today - timedelta(days=29), today
+        elif period == "month": cleaned["date_from"], cleaned["date_to"] = today.replace(day=1), today
+        elif period == "previous_month":
+            end = today.replace(day=1) - timedelta(days=1); cleaned["date_from"], cleaned["date_to"] = end.replace(day=1), end
+        start, end = cleaned.get("date_from"), cleaned.get("date_to")
+        if start and end and start > end:
+            self.add_error("date_to", "La fecha final debe ser igual o posterior a la fecha inicial.")
+        if start and end and (end - start).days > settings.REPORT_DEFAULT_MAX_DAYS:
+            self.add_error("date_to", f"El rango no puede superar {settings.REPORT_DEFAULT_MAX_DAYS} días sin autorización ampliada.")
+        if self.user and getattr(self.user, "vault_profile", None) and self.user.vault_profile.role == "ANALYST":
+            cleaned["user"] = self.user
+        return cleaned
+
+
+class ReportRequestForm(forms.Form):
+    report_type = forms.ChoiceField(choices=[])
+    export_format = forms.ChoiceField(choices=[("XLSX", "Excel"), ("PDF", "PDF")])
+    date_from = forms.DateField(required=False)
+    date_to = forms.DateField(required=False)
+    orientation = forms.ChoiceField(required=False, choices=[("auto", "Automática"), ("portrait", "Vertical"), ("landscape", "Horizontal")])
+    detail = forms.ChoiceField(required=False, choices=[("summary", "Resumen"), ("detail", "Detallado")])
+
+    def __init__(self, *args, allowed_types=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        labels = dict(ReportExport.TYPES)
+        self.fields["report_type"].choices = [(value, labels[value]) for value in allowed_types]
+
+    def clean(self):
+        cleaned = super().clean()
+        start, end = cleaned.get("date_from"), cleaned.get("date_to")
+        if start and end and start > end:
+            self.add_error("date_to", "La fecha final debe ser igual o posterior a la inicial.")
+        if start and end and (end - start).days > settings.REPORT_DEFAULT_MAX_DAYS:
+            self.add_error("date_to", f"El rango no puede superar {settings.REPORT_DEFAULT_MAX_DAYS} días.")
+        return cleaned
