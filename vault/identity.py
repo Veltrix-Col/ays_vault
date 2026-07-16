@@ -37,8 +37,8 @@ def create_alert(request, event, alert_type, severity, affected_user=None, devic
         "affected_user": affected_user, "ip_address": client_ip(request), "device": device,
         "description": description[:240], "safe_metadata": metadata or {},
     })
-    from .notifications import notify_alert
-    transaction.on_commit(lambda: notify_alert(alert))
+    from .notifications import notify_alert_async
+    transaction.on_commit(lambda: notify_alert_async(alert))
     return alert
 
 

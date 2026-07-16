@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import AccessException, AuditEvent, PaymentCard, PolicyConfiguration, SecurityAlert, UserDevice, UserProfile
 from .notifications import notify_alert
 from .policies import get_policy
-from .security import audit, verify_audit_chain
+from .security import audit, refresh_chain_verification, verify_audit_chain
 
 
 def _key(kind, scope, period):
@@ -94,7 +94,7 @@ def evaluate_security_policies(dry_run=False, now=None):
             alert.save(update_fields=["status"])
     results["overdue"] = overdue.count()
 
-    valid, position = verify_audit_chain()
+    valid, position = verify_audit_chain() if dry_run else refresh_chain_verification(source="POLICY_EVALUATION")
     if not valid:
         created = _create_alert("AUDIT_INTEGRITY_FAILURE", "CRITICAL", "La verificacion de integridad de auditoria fallo.", "Detener operaciones sensibles y escalar a seguridad.", now.date().isoformat(), metadata={"position": position}, dry_run=dry_run)
         results["created" if created else "existing"] += 1

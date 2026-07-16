@@ -50,6 +50,18 @@ REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 REPORT_DEFAULT_MAX_DAYS=int(os.getenv('REPORT_DEFAULT_MAX_DAYS','90'))
 REPORT_LARGE_EXPORT_ALERT_THRESHOLD=int(os.getenv('REPORT_LARGE_EXPORT_ALERT_THRESHOLD','1000'))
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {'json': {'()': 'vault.logging_utils.JSONFormatter'}},
+    'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'json'}},
+    'root': {'handlers': ['console'], 'level': 'WARNING'},
+    'loggers': {
+        'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+        'vault': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
 if not DEBUG:
     if DB_ENGINE not in {'postgres','postgresql'}: raise ImproperlyConfigured('PostgreSQL es obligatorio fuera de desarrollo')
     if not FIELD_ENCRYPTION_KEY: raise ImproperlyConfigured('FIELD_ENCRYPTION_KEY requerida en producción')

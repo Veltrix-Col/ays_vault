@@ -26,7 +26,7 @@ from .models import (
     UserDevice,
     UserProfile,
 )
-from .security import verify_audit_chain
+from .security import cached_chain_status
 
 
 OPERATIONAL_ACTIONS = ["VIEW", "REVEAL", "COPY", "COPY_ATTEMPT", "CREATE", "UPDATE", "DEACTIVATE", "DENIED"]
@@ -284,7 +284,7 @@ def _cards_data(user, filters):
 def _health_data(user, filters):
     if user.vault_profile.role != UserProfile.ADMIN:
         raise ReportValidationError("Su rol no permite generar el informe de salud operativa.")
-    chain_ok, position = verify_audit_chain()
+    chain_ok, position = cached_chain_status()
     active_users = _scoped_users(user)
     last_operation = AuditEvent.objects.filter(action__in=OPERATIONAL_ACTIONS).order_by("-created_at").first()
     days_without_use = (timezone.now() - last_operation.created_at).days if last_operation else "Sin actividad registrada"

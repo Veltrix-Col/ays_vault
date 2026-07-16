@@ -17,7 +17,7 @@ from .models import AccessException, AuditEvent, AuditVerificationRun, Holiday, 
 from .notifications import mask_email, retry_notification
 from .policies import get_policy, invalidate_policy_cache
 from .reporting import apply_timeline_filters, filter_chips, timeline_queryset
-from .security import audit, verify_audit_chain
+from .security import audit, cached_chain_status
 
 
 OPERATIONAL_ACTIONS = ["VIEW", "REVEAL", "COPY", "COPY_ATTEMPT", "CREATE", "UPDATE", "DEACTIVATE", "DENIED"]
@@ -54,7 +54,7 @@ def timeline(request):
 def _health(now):
     reasons = []
     level = "HEALTHY"
-    chain_ok, _ = verify_audit_chain()
+    chain_ok, _ = cached_chain_status()
     if not chain_ok:
         return "CRITICAL", ["Fallo de integridad en la cadena de auditoría."]
     critical = SecurityAlert.objects.filter(severity="CRITICAL").exclude(status__in=["CLOSED", "JUSTIFIED"]).count()
@@ -76,7 +76,7 @@ def _health(now):
 @role_required(UserProfile.ADMIN)
 def control_center(request):
     now = timezone.now()
-    chain_ok, chain_position = verify_audit_chain()
+    chain_ok, chain_position = cached_chain_status()
     try:
         connection.ensure_connection(); db_ok = connection.is_usable()
     except Exception:

@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
@@ -218,7 +219,9 @@ def alert_list(request):
 def alert_detail(request, pk):
     alert = get_object_or_404(_alert_queryset(request.user), pk=pk)
     if request.method == "POST":
-        if request.user.vault_profile.role not in {UserProfile.ADMIN, UserProfile.LEADER} or not has_recent_reauth(request, "alerts_manage"):
+        if request.user.vault_profile.role not in {UserProfile.ADMIN, UserProfile.LEADER}:
+            raise PermissionDenied
+        if not has_recent_reauth(request, "alerts_manage"):
             return redirect(f"{reverse('vault:reauthenticate')}?purpose=alerts_manage&next={request.path}")
         action = request.POST.get("action", "transition")
         status = request.POST.get("status")

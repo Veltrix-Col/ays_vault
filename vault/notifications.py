@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import urllib.error
 import urllib.request
 from datetime import timedelta
@@ -11,9 +12,11 @@ from django.utils import timezone
 
 from .models import NotificationRecipient, NotificationRecord
 from .forms import ALERT_TYPE_CHOICES
+from .tasks import run_async
 
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+logger = logging.getLogger("vault.notifications")
 
 
 def mask_email(value):
@@ -135,12 +138,28 @@ def send_alert_notification(alert, recipient, force_retry=False):
         record.result = NotificationRecord.FAILED if record.attempts >= settings.EMAIL_MAX_RETRIES else NotificationRecord.RETRY
         record.safe_error_code = code if code.isascii() else exc.__class__.__name__
         record.next_attempt_at = timezone.now() + timedelta(minutes=min(5 * record.attempts, 30))
+        logger.warning("Fallo al enviar notificación de alerta id=%s backend=%s intento=%s", alert.pk, backend.name, record.attempts)
     record.save(update_fields=["attempts", "backend", "external_id", "result", "sent_at", "safe_error_code", "next_attempt_at"])
     return record
 
 
 def notify_alert(alert):
     return [send_alert_notification(alert, recipient) for recipient in configured_recipients(alert)]
+
+
+def notify_alert_by_id(alert_id):
+    from .models import SecurityAlert
+
+    try:
+        alert = SecurityAlert.objects.get(pk=alert_id)
+    except SecurityAlert.DoesNotExist:
+        return []
+    return notify_alert(alert)
+
+
+def notify_alert_async(alert):
+    """Punto de reemplazo por notify_alert_by_id.delay(alert.pk) cuando exista un broker Celery."""
+    run_async(notify_alert_by_id, alert.pk)
 
 
 def retry_notification(record):

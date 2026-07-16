@@ -6,7 +6,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from .models import AuditChainState, AuditEvent, RevealGrant, SecurityAlert
+from .models import AuditChainState, AuditEvent, AuditVerificationRun, RevealGrant, SecurityAlert
 
 
 def client_ip(request):
@@ -94,8 +94,8 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
     if (is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}) or result != "SUCCESS":
         SecurityAlert.objects.get_or_create(event=event, defaults={"alert_type": action, "severity": "HIGH" if risk_level in {"HIGH", "CRITICAL"} else "MEDIUM", "actor": actor, "affected_user": actor, "ip_address": event.ip_address, "description": f"Evento de seguridad: {event.get_action_display()}"})
         alert = SecurityAlert.objects.get(event=event)
-        from .notifications import notify_alert
-        transaction.on_commit(lambda: notify_alert(alert))
+        from .notifications import notify_alert_async
+        transaction.on_commit(lambda: notify_alert_async(alert))
     return event
 
 
@@ -131,10 +131,11 @@ def consume_copy_grant(request, card, token):
         return grant
 
 
-def verify_audit_chain():
-    expected_previous = ""
-    expected_sequence = 1
-    for event in AuditEvent.objects.order_by("sequence"):
+def verify_audit_chain(since_sequence=0, since_hash=""):
+    """Verifica la cadena desde el evento since_sequence+1. Sin argumentos, verifica desde el inicio."""
+    expected_previous = since_hash
+    expected_sequence = since_sequence + 1
+    for event in AuditEvent.objects.filter(sequence__gt=since_sequence).order_by("sequence"):
         if event.sequence != expected_sequence or event.previous_hash != expected_previous or event.event_hash != _event_hash(event):
             return False, event.sequence
         expected_previous = event.event_hash
@@ -143,3 +144,21 @@ def verify_audit_chain():
     if state and (state.last_sequence != expected_sequence - 1 or state.last_hash != expected_previous):
         return False, state.last_sequence
     return True, expected_sequence - 1
+
+
+def refresh_chain_verification(source="COMMAND"):
+    """Reverifica solo los eventos posteriores al último checkpoint válido y persiste el resultado."""
+    last_run = AuditVerificationRun.objects.filter(valid=True).order_by("-checked_at").first()
+    since_sequence = last_run.position if last_run else 0
+    since_hash = AuditEvent.objects.filter(sequence=since_sequence).values_list("event_hash", flat=True).first() or "" if since_sequence else ""
+    valid, position = verify_audit_chain(since_sequence=since_sequence, since_hash=since_hash)
+    AuditVerificationRun.objects.create(valid=valid, position=position, source=source)
+    return valid, position
+
+
+def cached_chain_status(max_age_seconds=300):
+    """Devuelve el último resultado de integridad conocido, reverificando de forma incremental si está vencido."""
+    last_run = AuditVerificationRun.objects.order_by("-checked_at").first()
+    if last_run and (timezone.now() - last_run.checked_at).total_seconds() < max_age_seconds:
+        return last_run.valid, last_run.position
+    return refresh_chain_verification(source="CACHE")

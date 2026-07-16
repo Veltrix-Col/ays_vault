@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
+from django.db import connection, transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -13,7 +13,7 @@ from django.core.exceptions import PermissionDenied
 from .decorators import role_required
 from .forms import CardEditForm, CardForm, RevealForm
 from .models import AuditEvent, PaymentCard, SecurityAlert, UserProfile
-from .security import audit, consume_copy_grant, create_reveal_grant, verify_audit_chain
+from .security import audit, cached_chain_status, consume_copy_grant, create_reveal_grant
 from .identity import has_recent_reauth
 from django.urls import reverse
 from .policies import evaluate_access_policy
@@ -43,7 +43,7 @@ def dashboard(request):
     if profile.role == UserProfile.ADMIN:
         return redirect("vault:control_center")
     today = timezone.localdate()
-    chain_ok, chain_position = verify_audit_chain()
+    chain_ok, chain_position = cached_chain_status()
     context = {
         "cards": PaymentCard.objects.filter(active=True).count(),
         "events_today": AuditEvent.objects.filter(created_at__date=today).count(),
@@ -174,3 +174,13 @@ def copy_event(request, pk):
 @role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
 def audit_list(request):
     return redirect("vault:timeline")
+
+
+@never_cache
+def healthz(request):
+    try:
+        connection.ensure_connection()
+        db_ok = connection.is_usable()
+    except Exception:
+        db_ok = False
+    return JsonResponse({"status": "ok" if db_ok else "error"}, status=200 if db_ok else 503)
