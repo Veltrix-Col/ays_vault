@@ -1,25 +1,42 @@
 :root {
-  --blue: #007bff;
-  --blue-dark: #005fc7;
+  --blue: #007cff;
+  --blue-dark: #002bff;
   --navy: #152036;
-  --navy-2: #002a3a;
-  --cyan: #00d6c7;
-  --teal: #009b98;
-  --green: #2caf72;
-  --amber: #f2a51a;
-  --red: #df4b55;
+  --navy-2: #152036;
+  --cyan: #00ccff;
+  --teal: #00ffdf;
+  --green: #00ffdf;
+  --amber: #ff8c9f;
+  --red: #fd306b;
   --violet: #6e59e2;
-  --ink: #142033;
-  --muted: #66758a;
-  --line: #e3e9f1;
+  --violet-strong: #2700ff;
+  --ink: #152036;
+  --muted: rgba(21, 32, 54, .66);
+  --line: rgba(21, 32, 54, .12);
   --surface: #ffffff;
-  --bg: #f4f7fb;
-  --soft-blue: #edf6ff;
-  --shadow: 0 18px 50px rgba(21, 32, 54, .08);
-  --shadow-sm: 0 8px 24px rgba(21, 32, 54, .06);
-  --radius: 24px;
-  --radius-sm: 16px;
+  --bg: rgba(0, 124, 255, .035);
+  --soft-blue: rgba(0, 124, 255, .09);
+  --shadow: 0 20px 48px rgba(21, 32, 54, .10);
+  --shadow-sm: 0 8px 24px rgba(21, 32, 54, .07);
+  --radius: 22px;
+  --radius-sm: 14px;
   --sidebar: 272px;
+}
+
+@font-face {
+  font-family: "Poppins";
+  src: url("../fonts/Poppins-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Zain";
+  src: url("../fonts/Zain-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +45,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Segoe UI", Poppins, Arial, sans-serif;
+  font-family: "Poppins", Arial, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -125,7 +142,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .breadcrumbs b { color: var(--ink); font-weight: 700; }
 
 h1, h2, h3, p { margin-top: 0; }
-h1, h2, h3 { letter-spacing: -.025em; }
+h1, h2, h3 {
+  font-family: "Zain", "Poppins", Arial, sans-serif;
+  font-weight: 500;
+  letter-spacing: -.015em;
+}
 h1 { font-size: clamp(32px, 4vw, 46px); line-height: 1.05; margin-bottom: 10px; }
 h2 { font-size: 21px; line-height: 1.2; margin-bottom: 8px; }
 h3 { font-size: 16px; }
