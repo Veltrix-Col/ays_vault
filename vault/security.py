@@ -102,16 +102,17 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
     return event
 
 
-def create_reveal_grant(request, card, field_name, reason):
+def create_reveal_grant(request, card, field_name, operation_context):
     token = secrets.token_urlsafe(32)
     RevealGrant.objects.create(
         token_hash=hashlib.sha256(token.encode()).hexdigest(),
         user=request.user,
         card=card,
         field_name=field_name,
-        reason=reason,
         session_key=session_hash(request),
-        expires_at=timezone.now() + timedelta(seconds=25),
+        operation_window=operation_context.identity_window,
+        operation_context=operation_context,
+        expires_at=timezone.now() + timedelta(seconds=20),
     )
     return token
 
@@ -119,13 +120,19 @@ def create_reveal_grant(request, card, field_name, reason):
 def consume_copy_grant(request, card, token):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     with transaction.atomic():
+        now = timezone.now()
         grant = RevealGrant.objects.select_for_update().filter(
             token_hash=token_hash,
             user=request.user,
             card=card,
             session_key=session_hash(request),
             copied_at__isnull=True,
-            expires_at__gte=timezone.now(),
+            expires_at__gte=now,
+            operation_window__revoked_at__isnull=True,
+            operation_window__expires_at__gte=now,
+            operation_context__closed_at__isnull=True,
+            operation_context__expires_at__gte=now,
+            operation_context__card=card,
         ).first()
         if not grant:
             return None

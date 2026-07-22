@@ -1,0 +1,8 @@
+<form method="post" action="{% url 'vault:protected_reauthenticate' %}" data-protected-identity novalidate autocomplete="off">
+  {% csrf_token %}<input type="hidden" name="intent" value="{{ intent }}">
+  {{ form.non_field_errors }}
+  <p>Ingrese su contraseña y el código actual de su aplicación autenticadora.</p>
+  {% include 'includes/form_field.html' with field=form.password %}
+  {% include 'includes/form_field.html' with field=form.token %}
+  <div class="form-actions"><button class="btn primary" type="submit">Validar identidad</button><button class="btn ghost" type="button" data-protected-close>Cancelar</button></div>
+</form>

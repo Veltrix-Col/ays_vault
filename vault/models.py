@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -130,6 +132,7 @@ class PaymentCard(models.Model):
     pan_fingerprint = models.CharField(max_length=64, editable=False, unique=True)
     last4 = models.CharField(max_length=4, editable=False, db_index=True)
     encrypted_expiry = models.TextField(editable=False)
+    encrypted_company = models.TextField(blank=True, editable=False)
     purpose = models.CharField(max_length=200)
     active = models.BooleanField(default=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cards_created")
@@ -153,6 +156,16 @@ class PaymentCard(models.Model):
 
     def get_expiry(self):
         return decrypt(self.encrypted_expiry)
+
+    def set_company(self, value):
+        self.encrypted_company = encrypt((value or "").strip())
+
+    def get_company(self):
+        return decrypt(self.encrypted_company) if self.encrypted_company else ""
+
+    @property
+    def has_company(self):
+        return bool(self.encrypted_company)
 
     @property
     def masked_pan(self):
@@ -186,6 +199,9 @@ class AuditEvent(models.Model):
         ("EMAIL_SENT", "Correo enviado"), ("EMAIL_FAILED", "Fallo de correo"),
         ("POLICY_EVALUATION", "Evaluacion programada"), ("CRITICAL_BLOCKED", "Operación crítica bloqueada"),
         ("REPORT_EXPORT", "Informe exportado"),
+        ("OPERATION_AUTHORIZED", "Operación protegida autorizada"),
+        ("OP_CONTEXT_CONFIRMED", "Contexto de operación confirmado"),
+        ("OPERATION_WINDOW_EXPIRED", "Autorización de operación expirada"),
     ]
     RISK_LEVELS = [("LOW", "Bajo"), ("MEDIUM", "Medio"), ("HIGH", "Alto"), ("CRITICAL", "Crítico")]
 
@@ -224,8 +240,9 @@ class RevealGrant(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     card = models.ForeignKey(PaymentCard, on_delete=models.CASCADE)
     field_name = models.CharField(max_length=20)
-    reason = models.CharField(max_length=240)
     session_key = models.CharField(max_length=64, editable=False)
+    operation_window = models.ForeignKey("SensitiveOperationWindow", null=True, blank=True, on_delete=models.PROTECT, related_name="reveal_grants")
+    operation_context = models.ForeignKey("ProtectedOperationContext", on_delete=models.PROTECT, related_name="reveal_grants")
     expires_at = models.DateTimeField()
     copied_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -302,6 +319,56 @@ class ReauthenticationGrant(models.Model):
     invalidated_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         indexes = [models.Index(fields=["user", "session_hash", "purpose", "expires_at"], name="vault_reauth_lookup")]
+
+
+class SensitiveOperationWindow(models.Model):
+    """Reautenticación de identidad ligada a usuario y sesión por 15 minutos."""
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="vault_operation_windows")
+    session_hash = models.CharField(max_length=64, editable=False)
+    purpose = models.CharField(max_length=40, default="protected_data", editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "session_hash", "expires_at"], name="vault_op_window_lookup"),
+        ]
+
+
+class ProtectedOperationContext(models.Model):
+    """Justificación temporal de una operación, limitada a una tarjeta concreta."""
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    identity_window = models.ForeignKey(SensitiveOperationWindow, on_delete=models.PROTECT, related_name="operation_contexts")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="vault_operation_contexts")
+    session_hash = models.CharField(max_length=64, editable=False)
+    card = models.ForeignKey(PaymentCard, null=True, blank=True, on_delete=models.PROTECT, related_name="operation_contexts")
+    reason = models.CharField(max_length=240)
+    internal_reference = models.CharField(max_length=120)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    close_reason = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "session_hash", "card", "expires_at"], name="vault_op_context_lookup"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "session_hash"],
+                condition=models.Q(closed_at__isnull=True),
+                name="vault_one_open_op_context",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(card__isnull=False) | models.Q(closed_at__isnull=False),
+                name="vault_active_context_has_card",
+            ),
+        ]
 
 
 class SecurityAlert(models.Model):

@@ -14,7 +14,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from .forms import MFAEnrollmentForm, OTPVerificationForm, PasswordLoginForm
-from .identity import confirmed_totp_device, consume_recovery_code, create_alert, establish_secure_session, generate_recovery_codes, get_or_register_device, verify_totp
+from .identity import confirmed_totp_device, consume_recovery_code, create_alert, establish_secure_session, generate_recovery_codes, get_or_register_device, role_home_name, verify_totp
 from .models import SecureSession, UserDevice, UserProfile
 from .security import audit
 from .policies import evaluate_access_policy, get_policy
@@ -64,7 +64,7 @@ def _mfa_failure(request, user, device):
 @require_http_methods(["GET", "POST"])
 def password_login(request):
     if request.user.is_authenticated:
-        return redirect("vault:dashboard")
+        return redirect(role_home_name(request.user))
     form = PasswordLoginForm(request.POST or None, request=request)
     if request.method == "POST" and form.is_valid():
         user = form.user
@@ -118,7 +118,7 @@ def mfa_verify(request):
             event = audit(request, "MFA_RECOVERY_USED" if recovery_used else "MFA_SUCCESS", user=user, risk_level="HIGH" if recovery_used else "LOW")
             if recovery_used:
                 create_alert(request, event, "RECOVERY_CODE_USED", "HIGH", user, device, "Se utilizó un código de recuperación.")
-            return redirect("vault:dashboard")
+            return redirect(role_home_name(user))
         _mfa_failure(request, user, device)
         form.add_error(None, "No fue posible validar el segundo factor.")
     return render(request, "registration/mfa_verify.html", {"form": form})
@@ -162,7 +162,7 @@ def mfa_enroll(request):
 def recovery_codes_confirm(request):
     if request.method == "POST":
         request.session.pop("recovery_codes_pending", None)
-        return redirect("vault:dashboard")
+        return redirect(role_home_name(request.user))
     return render(request, "registration/recovery_codes.html", {"codes": [], "first_display": False})
 
 

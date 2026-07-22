@@ -82,6 +82,8 @@ class Command(BaseCommand):
             card.updated_by = users[UserProfile.LEADER]
             card.set_pan(pan)
             card.set_expiry(f"{(index % 12) + 1:02d}/{27 + (index % 4):02d}")
+            if not card.encrypted_company:
+                card.set_company(f"Empresa Ficticia {index:02d} S.A.S.")
             card.save()
 
         policy, _ = PolicyConfiguration.objects.get_or_create(singleton=1)

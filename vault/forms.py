@@ -70,6 +70,7 @@ def detected_brand(number):
 class CardForm(forms.ModelForm):
     pan = forms.CharField(label="Número de tarjeta", min_length=13, max_length=23, widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}))
     expiry = forms.CharField(label="Vencimiento (MM/AA)", max_length=5, widget=forms.TextInput(attrs={"placeholder": "MM/AA", "autocomplete": "off"}))
+    company = forms.CharField(label="Empresa", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Nombre de la empresa"}), help_text="Dato protegido: se almacena cifrado y no se mostrará sin autorización reforzada.")
 
     class Meta:
         model = PaymentCard
@@ -102,6 +103,7 @@ class CardForm(forms.ModelForm):
         obj = super().save(False)
         obj.set_pan(self.cleaned_data["pan"])
         obj.set_expiry(self.cleaned_data["expiry"])
+        obj.set_company(self.cleaned_data["company"])
         if user:
             if not obj.pk:
                 obj.created_by = user
@@ -112,6 +114,7 @@ class CardForm(forms.ModelForm):
 
 
 class CardEditForm(forms.ModelForm):
+    company = forms.CharField(label="Nueva empresa", required=False, min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Deje vacío para conservar la empresa actual"}), help_text="El valor actual nunca se precarga. Si deja este campo vacío, se conservará sin cambios.")
     class Meta:
         model = PaymentCard
         fields = ["client_name", "cardholder_name", "brand", "purpose"]
@@ -119,6 +122,9 @@ class CardEditForm(forms.ModelForm):
 
     def save(self, commit=True, user=None):
         obj = super().save(False)
+        company = self.cleaned_data.get("company", "").strip()
+        if company:
+            obj.set_company(company)
         if user:
             obj.updated_by = user
         if commit:
@@ -126,12 +132,28 @@ class CardEditForm(forms.ModelForm):
         return obj
 
 
-class RevealForm(forms.Form):
-    field = forms.ChoiceField(label="Información que desea revelar", choices=[("pan", "Número de tarjeta"), ("expiry", "Vencimiento")])
-    reason = forms.CharField(label="Motivo", max_length=240, min_length=5)
-    reference = forms.CharField(label="Referencia interna", max_length=120, required=False)
-    def __init__(self, *args, user=None, **kwargs):
-        super().__init__(*args, **kwargs)
+class CardSearchForm(forms.Form):
+    q = forms.CharField(required=False, max_length=80, strip=True)
+
+    def clean_q(self):
+        value = self.cleaned_data.get("q", "")
+        if re.search(r"(?<!\d)\d{13,19}(?!\d)", value):
+            raise forms.ValidationError("Busque únicamente por referencia o últimos cuatro dígitos.")
+        if value and not re.fullmatch(r"[\w\sáéíóúüñÁÉÍÓÚÜÑ.#&()'/-]+", value):
+            raise forms.ValidationError("La búsqueda contiene caracteres no permitidos.")
+        return value
+
+
+PROTECTED_FIELD_CHOICES = [("company", "Empresa"), ("pan", "Número de tarjeta"), ("expiry", "Vencimiento")]
+
+
+class ProtectedActionForm(forms.Form):
+    field = forms.ChoiceField(choices=PROTECTED_FIELD_CHOICES)
+    action = forms.ChoiceField(choices=[("reveal", "Revelar"), ("copy", "Copiar")])
+
+
+class RevealForm(ProtectedActionForm):
+    """Alias compatible para el endpoint protegido existente."""
 
 
 class PasswordLoginForm(forms.Form):
@@ -167,8 +189,23 @@ class MFAEnrollmentForm(forms.Form):
 
 
 class ReauthenticationForm(forms.Form):
-    password = forms.CharField(widget=forms.PasswordInput, label="Contraseña")
-    token = forms.CharField(max_length=12, label="Código TOTP", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
+    password = forms.CharField(widget=forms.PasswordInput(attrs={"autocomplete": "current-password", "placeholder": "Ingrese su contraseña"}), label="Contraseña")
+    token = forms.CharField(min_length=6, max_length=6, label="Código de verificación", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code", "placeholder": "Código de 6 dígitos", "maxlength": "6"}))
+
+
+class OperationContextForm(forms.Form):
+    reason = forms.CharField(label="Motivo", min_length=5, max_length=240, strip=True, widget=forms.TextInput(attrs={"placeholder": "Pago renovación empresa A&S", "autocomplete": "off"}))
+    reference = forms.CharField(label="Referencia interna", min_length=3, max_length=120, strip=True, widget=forms.TextInput(attrs={"placeholder": "Póliza # 123456486789", "autocomplete": "off"}))
+
+    def clean(self):
+        cleaned = super().clean()
+        for field in ("reason", "reference"):
+            value = cleaned.get(field, "")
+            if re.search(r"(?<!\d)\d{13,19}(?!\d)", value):
+                self.add_error(field, "No incluya números completos de tarjeta en este campo.")
+            if re.search(r"(?<!\d)(0[1-9]|1[0-2])[/\-]\d{2,4}(?!\d)", value):
+                self.add_error(field, "No incluya fechas de vencimiento en este campo.")
+        return cleaned
 
 
 class ReasonForm(forms.Form):
@@ -232,8 +269,6 @@ class AccessExceptionForm(forms.ModelForm):
 
 class NotificationRecipientForm(forms.ModelForm):
     alert_types = forms.MultipleChoiceField(label="Tipos de alerta", choices=ALERT_TYPE_CHOICES, required=False, widget=forms.CheckboxSelectMultiple, help_text="Seleccione qué alertas debe recibir este destinatario.")
-    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
-
     class Meta:
         model = NotificationRecipient
         exclude = ["updated_by", "updated_at"]

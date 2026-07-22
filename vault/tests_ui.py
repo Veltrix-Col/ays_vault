@@ -47,6 +47,7 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         self.assertEqual(recipient["alert_types"].field.widget.__class__.__name__, "CheckboxSelectMultiple")
         self.assertContainsHTML(str(recipient["alert_types"]), "Posible uso paralelo de Excel")
         self.assertEqual(exception["operations"].field.widget.__class__.__name__, "CheckboxSelectMultiple")
+        self.assertNotIn("reason", recipient.fields)
 
     def assertContainsHTML(self, html, text):
         self.assertIn(text, html)
@@ -61,12 +62,17 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
 
     def test_operational_sidebar_respects_role(self):
         html = self.render_shell(UserProfile.LEADER)
-        self.assertIn("Resumen operativo", html)
         self.assertIn(">Bóveda<", html)
-        self.assertIn("Nueva tarjeta", html)
+        self.assertNotIn("Resumen operativo", html)
+        self.assertNotIn("Nueva tarjeta", html)
+        self.assertNotIn("Línea de tiempo", html)
+        self.assertNotIn("Informes", html)
+        self.assertNotIn("Sesiones", html)
+        self.assertNotIn("Dispositivos", html)
         self.assertNotIn("Correo y destinatarios", html)
         analyst_html = self.render_shell(UserProfile.ANALYST)
-        self.assertIn("Resumen personal", analyst_html)
+        self.assertIn(">Bóveda<", analyst_html)
+        self.assertNotIn("Resumen personal", analyst_html)
 
     def test_shell_has_accessible_drawer_and_bounded_logo(self):
         html = self.render_shell(UserProfile.ADMIN)

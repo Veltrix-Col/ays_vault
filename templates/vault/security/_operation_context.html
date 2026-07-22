@@ -1,0 +1,8 @@
+<form method="post" action="{% url 'vault:protected_confirm' %}" data-protected-context novalidate autocomplete="off">
+  {% csrf_token %}<input type="hidden" name="intent" value="{{ intent }}">
+  {{ form.non_field_errors }}
+  <div class="form-section-header"><h3>Indique el contexto de esta operación</h3><p>Esta justificación autoriza los campos protegidos de la tarjeta actual. Al cambiar de tarjeta deberá registrar un contexto nuevo.</p></div>
+  {% include 'includes/form_field.html' with field=form.reason %}
+  {% include 'includes/form_field.html' with field=form.reference %}
+  <div class="form-actions"><button class="btn primary" type="submit">Confirmar y continuar</button><button class="btn ghost" type="button" data-protected-close>Cancelar</button></div>
+</form>

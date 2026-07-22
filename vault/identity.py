@@ -12,7 +12,7 @@ from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from .crypto import decrypt, encrypt
-from .models import MFARecoveryCode, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
+from .models import MFARecoveryCode, ProtectedOperationContext, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, SensitiveOperationWindow, UserDevice, UserProfile
 from .security import audit, client_ip, outside_hours, session_hash
 from .policies import get_policy
 
@@ -93,14 +93,27 @@ def consume_recovery_code(user, value):
 
 
 def invalidate_authorizations(user, session_identifier=None):
+    now = timezone.now()
     grants = ReauthenticationGrant.objects.filter(user=user, invalidated_at__isnull=True)
     if session_identifier:
         grants = grants.filter(session_hash=session_identifier)
-    grants.update(invalidated_at=timezone.now())
+    grants.update(invalidated_at=now)
     reveals = RevealGrant.objects.filter(user=user, copied_at__isnull=True)
     if session_identifier:
         reveals = reveals.filter(session_key=session_identifier)
     reveals.delete()
+    contexts = ProtectedOperationContext.objects.filter(user=user, closed_at__isnull=True)
+    windows = SensitiveOperationWindow.objects.filter(user=user, revoked_at__isnull=True)
+    if session_identifier:
+        contexts = contexts.filter(session_hash=session_identifier)
+        windows = windows.filter(session_hash=session_identifier)
+    contexts.update(closed_at=now, close_reason="Autorizaciones de sesión invalidadas")
+    windows.update(revoked_at=now, revocation_reason="Autorizaciones de sesión invalidadas")
+
+
+def role_home_name(user):
+    profile = getattr(user, "vault_profile", None)
+    return "vault:control_center" if profile and profile.role == UserProfile.ADMIN else "vault:card_list"
 
 
 def _delete_django_session(record):

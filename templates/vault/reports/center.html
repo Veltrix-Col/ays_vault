@@ -11,26 +11,29 @@
     <div class="report-card-icon" aria-hidden="true">{{ card.name|first }}</div>
     <div><h2>{{ card.name }}</h2><p>{{ card.description }}</p></div>
     <dl class="report-meta"><div><dt>Formatos</dt><dd>Excel y PDF</dd></div><div><dt>Última generación</dt><dd>{% if card.last %}{{ card.last.created_at|date:'d/m/Y H:i' }}{% else %}Sin generaciones{% endif %}</dd></div></dl>
-    <details class="report-config">
-      <summary class="btn secondary">Configurar informe</summary>
-      <form method="post" class="report-config-form" data-report-form>
-        {% csrf_token %}
-        <div class="form-grid two-cols">
-          <label>Fecha inicial<input type="date" name="date_from"></label>
-          <label>Fecha final<input type="date" name="date_to"></label>
-          <label>Orientación del PDF<select name="orientation"><option value="auto">Automática</option><option value="portrait">Vertical</option><option value="landscape">Horizontal</option></select></label>
-          <label>Nivel de detalle<select name="detail"><option value="detail">Detallado</option><option value="summary">Resumen</option></select></label>
-        </div>
-        <p class="field-help">El periodo máximo normal es de 90 días. Los límites son 5.000 filas para Excel y 1.000 para PDF.</p>
-        <div class="form-actions">
-          <button class="btn primary" type="submit" formaction="{% url 'vault:export_report' card.type 'XLSX' %}">Generar Excel</button>
-          <button class="btn secondary" type="submit" formaction="{% url 'vault:export_report' card.type 'PDF' %}">Generar PDF</button>
-        </div>
-      </form>
-    </details>
+    <button class="btn secondary report-open" type="button" data-report-open data-report-name="{{ card.name }}" data-xlsx-url="{% url 'vault:export_report' card.type 'XLSX' %}" data-pdf-url="{% url 'vault:export_report' card.type 'PDF' %}">Configurar informe</button>
   </article>
   {% endfor %}
 </div>
+
+<dialog class="report-dialog modal" id="report-dialog" aria-labelledby="report-dialog-title">
+  <div class="modal-header"><div><span class="section-kicker">Exportación controlada</span><h2 id="report-dialog-title">Configurar informe</h2></div><button class="modal-close" type="button" data-report-close aria-label="Cerrar configuración">×</button></div>
+  <form method="post" class="report-config-form" data-report-form novalidate>
+    {% csrf_token %}
+    <div class="report-dialog-body">
+      <p id="report-dialog-description">Seleccione el periodo y el formato. Los filtros se validan nuevamente en el servidor.</p>
+      <div class="form-grid two-cols">
+        <label for="report-date-from">Fecha inicial<input id="report-date-from" type="date" name="date_from"></label>
+        <label for="report-date-to">Fecha final<input id="report-date-to" type="date" name="date_to"></label>
+        <label for="report-orientation">Orientación del PDF<select id="report-orientation" name="orientation"><option value="auto">Automática</option><option value="portrait">Vertical</option><option value="landscape">Horizontal</option></select></label>
+        <label for="report-detail">Nivel de detalle<select id="report-detail" name="detail"><option value="detail">Detallado</option><option value="summary">Resumen</option></select></label>
+      </div>
+      <p class="field-help">Periodo máximo: 90 días. Límites: 5.000 filas para Excel y 1.000 para PDF.</p>
+      <div class="form-error-summary" data-report-error role="alert" hidden></div>
+    </div>
+    <div class="report-dialog-footer"><button class="btn ghost" type="button" data-report-close>Cancelar</button><button class="btn primary" type="submit" data-report-format="XLSX">Generar Excel</button><button class="btn secondary" type="submit" data-report-format="PDF">Generar PDF</button></div>
+  </form>
+</dialog>
 
 <section class="panel table-panel">
   <div class="panel-head"><div><h2>Historial de informes</h2><p>Se conserva la trazabilidad, no los archivos ni su contenido.</p></div></div>

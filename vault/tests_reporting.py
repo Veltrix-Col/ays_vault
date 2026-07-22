@@ -95,19 +95,15 @@ class ReportingTests(TestCase):
             self.assertContains(response, "No disponible")
             self.assertContains(response, "No aplica")
 
-    def test_analyst_timeline_and_report_are_scoped_to_self(self):
-        own = audit(None, "VIEW", user=self.analyst, card=self.card)
-        other = audit(None, "VIEW", user=self.leader, card=self.card)
+    def test_analyst_cannot_access_timeline_or_reports(self):
+        audit(None, "VIEW", user=self.analyst, card=self.card)
+        audit(None, "VIEW", user=self.leader, card=self.card)
         client = self.login(self.analyst)
         response = client.get(reverse("vault:timeline"), {"user": self.leader.pk})
-        ids = {event.pk for event in response.context["page"]}
-        self.assertNotIn(other.pk, ids)
-        self.assertFalse(ids, "Un filtro de usuario ajeno debe rechazarse sin revelar resultados.")
+        self.assertEqual(response.status_code, 403)
         export = client.post(reverse("vault:export_report", args=["TIMELINE", "XLSX"]))
-        workbook = load_workbook(BytesIO(export.content))
-        values = list(workbook["Datos"].values)
-        self.assertTrue(any("Andrés" in str(row) for row in values))
-        self.assertFalse(any("leader.reports" in str(row) for row in values))
+        self.assertEqual(export.status_code, 403)
+        self.assertFalse(ReportExport.objects.filter(user=self.analyst).exists())
 
     def test_excel_is_valid_styled_filtered_and_audited(self):
         audit(None, "COPY", user=self.admin, reason="Motivo seguro")
@@ -126,7 +122,7 @@ class ReportingTests(TestCase):
         self.assertTrue(verify_audit_chain()[0])
 
     def test_formula_injection_is_neutralized_in_card_report(self):
-        response = self.login(self.leader).post(reverse("vault:export_report", args=["CARDS", "XLSX"]))
+        response = self.login(self.admin).post(reverse("vault:export_report", args=["CARDS", "XLSX"]))
         self.assertEqual(response.status_code, 200)
         workbook = load_workbook(BytesIO(response.content), data_only=False)
         values = [cell.value for row in workbook["Datos"] for cell in row]
@@ -176,13 +172,22 @@ class ReportingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(SecurityAlert.objects.filter(severity="CRITICAL").count(), critical_before)
 
-    def test_role_matrix_blocks_admin_cards_and_allows_leader(self):
+    def test_role_matrix_allows_admin_safe_cards_and_blocks_operators(self):
         admin = self.login(self.admin)
         leader = self.login(self.leader)
-        self.assertEqual(admin.post(reverse("vault:export_report", args=["CARDS", "XLSX"])).status_code, 403)
-        self.assertEqual(leader.post(reverse("vault:export_report", args=["CARDS", "XLSX"])).status_code, 200)
-        self.assertNotContains(admin.get(reverse("vault:report_center")), "Informe Seguro de Tarjetas")
-        self.assertContains(leader.get(reverse("vault:report_center")), "Inventario operativo")
+        analyst = self.login(self.analyst)
+        self.assertEqual(admin.post(reverse("vault:export_report", args=["CARDS", "XLSX"])).status_code, 200)
+        self.assertEqual(leader.post(reverse("vault:export_report", args=["CARDS", "XLSX"])).status_code, 403)
+        self.assertEqual(analyst.post(reverse("vault:export_report", args=["TIMELINE", "XLSX"])).status_code, 403)
+        self.assertContains(admin.get(reverse("vault:report_center")), "Inventario operativo")
+        self.assertEqual(leader.get(reverse("vault:report_center")).status_code, 403)
+        self.assertEqual(analyst.get(reverse("vault:report_center")).status_code, 403)
+
+    def test_report_configuration_uses_reusable_modal(self):
+        response = self.login(self.admin).get(reverse("vault:report_center"))
+        self.assertContains(response, 'id="report-dialog"')
+        self.assertContains(response, "Configurar informe")
+        self.assertNotContains(response, "<details")
 
     def test_reports_cannot_be_generated_by_get(self):
         client = self.login(self.admin)

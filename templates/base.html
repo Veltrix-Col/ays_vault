@@ -40,35 +40,24 @@
       <div class="portal-identity"><span class="portal-dot"></span><div><b>Operación interna</b><small>Información sensible</small></div></div>
       {% with current=request.resolver_match.url_name %}
       <nav class="side-nav">
-        <span class="nav-label">Principal</span>
         {% if vault_profile.role == 'ADMIN' %}
+          <span class="nav-label">Principal</span>
           <a href="{% url 'vault:control_center' %}" {% if current == 'control_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">C</span>Centro de Control</a>
-        {% elif vault_profile.role == 'LEADER' %}
-          <a href="{% url 'vault:dashboard' %}" {% if current == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">R</span>Resumen operativo</a>
-        {% elif vault_profile.role == 'ANALYST' %}
-          <a href="{% url 'vault:dashboard' %}" {% if current == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">R</span>Resumen personal</a>
-        {% endif %}
-
-        <span class="nav-label">Seguridad</span>
-        <a href="{% url 'vault:alerts' %}" {% if current == 'alerts' or current == 'alert_detail' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">A</span>Alertas</a>
-        <a href="{% url 'vault:timeline' %}" {% if current == 'timeline' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">L</span>Línea de tiempo</a>
-        <a href="{% url 'vault:report_center' %}" {% if current == 'report_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">I</span>Informes</a>
-        {% if vault_profile.role == 'ADMIN' %}<a href="{% url 'vault:identity_users' %}" {% if current == 'identity_users' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">U</span>Usuarios</a>{% endif %}
-        <a href="{% url 'vault:sessions' %}" {% if current == 'sessions' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">S</span>Sesiones</a>
-        <a href="{% url 'vault:devices' %}" {% if current == 'devices' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">D</span>Dispositivos</a>
-
-        {% if vault_profile.role == 'ADMIN' %}
+          <span class="nav-label">Seguridad</span>
+          <a href="{% url 'vault:alerts' %}" {% if current == 'alerts' or current == 'alert_detail' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">A</span>Alertas</a>
+          <a href="{% url 'vault:timeline' %}" {% if current == 'timeline' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">L</span>Línea de tiempo</a>
+          <a href="{% url 'vault:report_center' %}" {% if current == 'report_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">I</span>Informes</a>
+          <a href="{% url 'vault:identity_users' %}" {% if current == 'identity_users' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">U</span>Usuarios</a>
+          <a href="{% url 'vault:sessions' %}" {% if current == 'sessions' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">S</span>Sesiones</a>
+          <a href="{% url 'vault:devices' %}" {% if current == 'devices' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">D</span>Dispositivos</a>
           <span class="nav-label">Configuración</span>
           <a href="{% url 'vault:policy_settings' %}" {% if current == 'policy_settings' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">P</span>Configuración de Seguridad</a>
           <a href="{% url 'vault:exceptions' %}" {% if current == 'exceptions' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">E</span>Excepciones</a>
           <a href="{% url 'vault:holidays' %}" {% if current == 'holidays' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">F</span>Festivos</a>
           <a href="{% url 'vault:recipients' %}" {% if current == 'recipients' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">@</span>Correo y destinatarios</a>
-        {% endif %}
-
-        {% if vault_profile.can_view_cards %}
+        {% else %}
           <span class="nav-label">Operación</span>
           <a href="{% url 'vault:card_list' %}" {% if current == 'card_list' or current == 'card_detail' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">B</span>Bóveda</a>
-          {% if vault_profile.can_manage_cards %}<a href="{% url 'vault:card_create' %}" {% if current == 'card_create' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">+</span>Nueva tarjeta</a>{% endif %}
         {% endif %}
       </nav>
       {% endwith %}

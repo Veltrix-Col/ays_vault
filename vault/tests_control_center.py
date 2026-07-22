@@ -198,23 +198,23 @@ class ControlCenterPermissionTests(TestCase):
         self.assertNotContains(admin_control, ">Resumen<")
 
         leader_start = self.login(self.leader).get(reverse("vault:dashboard"))
-        self.assertEqual(leader_start.status_code, 200)
-        self.assertContains(leader_start, "Resumen operativo")
+        self.assertRedirects(leader_start, reverse("vault:card_list"), fetch_redirect_response=False)
+        leader_vault = self.login(self.leader).get(reverse("vault:card_list"))
+        self.assertContains(leader_vault, "Bóveda")
+        self.assertNotContains(leader_vault, "Resumen operativo")
 
         analyst_start = self.login(self.analyst).get(reverse("vault:dashboard"))
-        self.assertEqual(analyst_start.status_code, 200)
-        self.assertContains(analyst_start, "Resumen personal")
+        self.assertRedirects(analyst_start, reverse("vault:card_list"), fetch_redirect_response=False)
+        analyst_vault = self.login(self.analyst).get(reverse("vault:card_list"))
+        self.assertContains(analyst_vault, "Bóveda")
+        self.assertNotContains(analyst_vault, "Resumen personal")
 
     def test_leader_cannot_access_administrative_control_center(self):
         self.assertEqual(self.login(self.leader).get(reverse("vault:control_center")).status_code, 403)
 
-    def test_leader_and_analyst_timeline_is_backend_scoped(self):
-        admin_event = audit(None, "MFA_RESET", user=self.admin)
-        analyst_event = audit(None, "VIEW", user=self.analyst)
-        analyst_response = self.login(self.analyst).get(reverse("vault:timeline"))
-        analyst_ids = {item.pk for item in analyst_response.context["page"].object_list}
-        self.assertIn(analyst_event.pk, analyst_ids); self.assertNotIn(admin_event.pk, analyst_ids)
-        leader_response = self.login(self.leader).get(reverse("vault:timeline")); self.assertNotIn(admin_event.pk, {item.pk for item in leader_response.context["page"].object_list})
+    def test_leader_and_analyst_cannot_access_timeline(self):
+        self.assertEqual(self.login(self.analyst).get(reverse("vault:timeline")).status_code, 403)
+        self.assertEqual(self.login(self.leader).get(reverse("vault:timeline")).status_code, 403)
 
     def test_timeline_paginates(self):
         for index in range(55): audit(None, "ACCESS", user=self.admin, metadata={"index": index})
@@ -232,7 +232,7 @@ class ControlCenterPermissionTests(TestCase):
     def test_alert_close_requires_comment_and_transition_is_audited(self):
         event = audit(None, "ACCESS", user=self.leader)
         alert = SecurityAlert.objects.create(event=event, affected_user=self.leader, alert_type="TEST")
-        client = self.login(self.leader); grant_reauthentication(type("R", (), {"user": self.leader, "session": client.session})(), "alerts_manage")
+        client = self.login(self.admin); grant_reauthentication(type("R", (), {"user": self.admin, "session": client.session})(), "alerts_manage")
         self.assertEqual(client.post(reverse("vault:alert_detail", args=[alert.pk]), {"status": "CLOSED", "review_note": ""}).status_code, 400)
         response = client.post(reverse("vault:alert_detail", args=[alert.pk]), {"status": "CLOSED", "review_note": "Caso validado y cerrado"})
         self.assertEqual(response.status_code, 302); self.assertTrue(AlertTransition.objects.filter(alert=alert, to_status="CLOSED").exists()); self.assertTrue(AuditEvent.objects.filter(action="ALERT_CLOSED").exists())

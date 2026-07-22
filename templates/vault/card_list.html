@@ -1,1 +1,20 @@
-{% extends 'base.html' %}{% block title %}Bóveda · A&amp;S Vault{% endblock %}{% block content %}<div class="page-heading"><div><span class="section-kicker">A&amp;S Vault</span><h1>Tarjetas custodiadas</h1><p>Nunca se muestra información completa en este listado.</p></div>{% if vault_profile.can_manage_cards %}<a class="btn primary" href="{% url 'vault:card_create' %}">Nueva tarjeta</a>{% endif %}</div><section class="panel table-panel"><div class="panel-head"><div><h2>Bóveda</h2><p>Seleccione una tarjeta para consultar su detalle protegido.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Franquicia</th><th>Tarjeta</th><th>Titular</th><th>Estado</th><th>Acción</th></tr></thead><tbody>{% for c in cards %}<tr><td><b>{{ c.client_name }}</b></td><td>{{ c.get_brand_display }}</td><td>{{ c.masked_pan }}</td><td>{{ c.cardholder_name }}</td><td>{% if c.active %}<span class="badge success">Activa</span>{% else %}<span class="badge">Inactiva</span>{% endif %}</td><td><a class="row-link" href="{% url 'vault:card_detail' c.pk %}" aria-label="Abrir detalle de {{ c.client_name }}">→</a></td></tr>{% empty %}<tr><td colspan="6">No hay tarjetas disponibles.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Bóveda · A&amp;S Vault{% endblock %}
+{% block content %}
+<div class="page-heading"><div><span class="section-kicker">A&amp;S Vault</span><h1>Tarjetas custodiadas</h1><p>Consulte únicamente la información necesaria para la operación autorizada.</p></div>{% if vault_profile.can_manage_cards %}<a class="btn primary" href="{% url 'vault:card_create' %}">Nueva tarjeta</a>{% endif %}</div>
+<section class="panel vault-search-panel" aria-labelledby="vault-search-title">
+  <div class="panel-head"><div><h2 id="vault-search-title">Buscar en la Bóveda</h2><p>La búsqueda se realiza en el servidor únicamente sobre campos no protegidos.</p></div></div>
+  <form method="get" action="{% url 'vault:card_list' %}" class="vault-search" data-vault-search novalidate>
+    <label class="sr-only" for="vault-search-input">Buscar tarjetas</label>
+    <div class="vault-search-control">
+      <input id="vault-search-input" type="search" name="q" value="{{ query }}" maxlength="80" autocomplete="off" placeholder="Buscar por referencia, alias, banco o últimos 4 dígitos" aria-describedby="vault-search-help vault-search-status">
+      <button class="search-clear" type="button" data-search-clear aria-label="Limpiar búsqueda" {% if not query %}hidden{% endif %}>×</button>
+      <span class="search-spinner" data-search-spinner hidden aria-hidden="true"></span>
+    </div>
+    <span id="vault-search-help" class="field-help">No es posible buscar por Empresa, número completo o vencimiento.</span>
+    {% for error in search_form.q.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+  </form>
+</section>
+<div id="vault-results" data-vault-results aria-live="polite" aria-busy="false">{% include 'vault/_card_results.html' %}</div>
+<p id="vault-search-status" class="sr-only" role="status" aria-live="polite"></p>
+{% endblock %}

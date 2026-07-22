@@ -15,7 +15,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .decorators import role_required
 from .forms import ReasonForm, ReauthenticationForm
-from .identity import create_alert, current_secure_session, generate_recovery_codes, grant_reauthentication, has_recent_reauth, invalidate_authorizations, reset_user_mfa, revoke_session, verify_totp
+from .identity import create_alert, current_secure_session, generate_recovery_codes, grant_reauthentication, has_recent_reauth, invalidate_authorizations, reset_user_mfa, revoke_session, role_home_name, verify_totp
 from .models import AlertTransition, ReauthenticationGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
 from .security import audit
 from .security import session_hash
@@ -29,7 +29,7 @@ def _safe_next(request, fallback="vault:dashboard"):
     target = request.POST.get("next") or request.GET.get("next")
     if target and url_has_allowed_host_and_scheme(target, {request.get_host()}, require_https=request.is_secure()):
         return target
-    return reverse(fallback)
+    return reverse(role_home_name(request.user))
 
 
 @login_required
@@ -50,12 +50,12 @@ def reauthenticate(request):
     return render(request, "vault/security/reauthenticate.html", {"form": form, "purpose": purpose, "next": _safe_next(request)})
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 def session_list(request):
     return render(request, "vault/security/sessions.html", {"sessions": request.user.vault_sessions.select_related("device", "revoked_by").order_by("-created_at"), "current": current_secure_session(request)})
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 @require_POST
 def session_revoke(request, pk):
     if not has_recent_reauth(request, "session_manage"):
@@ -70,7 +70,7 @@ def session_revoke(request, pk):
     return redirect("vault:sessions")
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 @require_POST
 def session_revoke_all(request):
     if not has_recent_reauth(request, "session_manage"):
@@ -125,12 +125,12 @@ def admin_session_revoke_all(request, user_id):
     return redirect("vault:admin_sessions", user_id=target.pk)
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 def device_list(request):
     return render(request, "vault/security/devices.html", {"devices": request.user.vault_devices.order_by("-last_seen_at")})
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 @require_POST
 def device_action(request, pk, action):
     if not has_recent_reauth(request, "device_manage"):
@@ -209,18 +209,16 @@ def _alert_queryset(user):
     return queryset.filter(affected_user=user)
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 def alert_list(request):
     return render(request, "vault/security/alerts.html", {"alerts": _alert_queryset(request.user).order_by("-created_at")[:250]})
 
 
-@login_required
+@role_required(UserProfile.ADMIN)
 @require_http_methods(["GET", "POST"])
 def alert_detail(request, pk):
     alert = get_object_or_404(_alert_queryset(request.user), pk=pk)
     if request.method == "POST":
-        if request.user.vault_profile.role not in {UserProfile.ADMIN, UserProfile.LEADER}:
-            raise PermissionDenied
         if not has_recent_reauth(request, "alerts_manage"):
             return redirect(f"{reverse('vault:reauthenticate')}?purpose=alerts_manage&next={request.path}")
         action = request.POST.get("action", "transition")
@@ -248,7 +246,7 @@ def alert_detail(request, pk):
         audit_action = "ALERT_CLOSED" if status == "CLOSED" else "ALERT_ESCALATED" if status == "ESCALATED" else "ALERT_REOPENED" if status == "REOPENED" else "ALERT_REVIEWED"
         audit(request, audit_action, reason=note, metadata={"alert_id": alert.pk, "status": status, "previous_status": previous, "escalated_to": bool(escalation)})
         return redirect("vault:alert_detail", pk=alert.pk)
-    assignees = get_user_model().objects.filter(vault_profile__role__in=[UserProfile.ADMIN, UserProfile.LEADER], vault_profile__active=True)
+    assignees = get_user_model().objects.filter(vault_profile__role=UserProfile.ADMIN, vault_profile__active=True)
     return render(request, "vault/security/alert_detail.html", {"alert": alert, "assignees": assignees})
 
 
@@ -273,5 +271,5 @@ def password_change(request):
         event = audit(request, "PASSWORD_CHANGED")
         create_alert(request, event, "PASSWORD_CHANGED", "MEDIUM", user, getattr(current, "device", None), "Contraseña modificada.")
         messages.success(request, "Contraseña actualizada; otras sesiones fueron revocadas.")
-        return redirect("vault:dashboard")
+        return redirect(role_home_name(request.user))
     return render(request, "vault/security/password_change.html", {"form": form})

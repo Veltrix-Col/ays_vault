@@ -10,12 +10,26 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
+from django.http import HttpResponse, HttpResponseBadRequest
+from django.template.loader import render_to_string
 
 from .decorators import role_required
-from .forms import CardEditForm, CardForm, RevealForm
+from .forms import CardEditForm, CardForm, CardSearchForm, OperationContextForm, ProtectedActionForm, ReauthenticationForm
 from .models import AuditEvent, PaymentCard, SecurityAlert, UserProfile
 from .security import audit, cached_chain_status, consume_copy_grant, create_reveal_grant
-from .identity import has_recent_reauth
+from .identity import create_alert, current_secure_session, has_recent_reauth, verify_totp
+from .protected_operations import (
+    clear_intent,
+    close_operation_contexts,
+    create_intent,
+    create_operation_context,
+    create_operation_window,
+    current_operation_context,
+    current_operation_window,
+    get_intent,
+    mark_identity_verified,
+)
 from django.urls import reverse
 from .policies import evaluate_access_policy
 
@@ -43,38 +57,42 @@ def dashboard(request):
         return render(request, "vault/access_denied.html", status=403)
     if profile.role == UserProfile.ADMIN:
         return redirect("vault:control_center")
-    chain_ok, chain_position = cached_chain_status()
-    operational_actions = ["VIEW", "REVEAL", "COPY", "COPY_ATTEMPT", "CREATE", "UPDATE", "DEACTIVATE", "DENIED"]
-    if profile.role == UserProfile.LEADER:
-        recent = AuditEvent.objects.select_related("user", "card").filter(action__in=operational_actions)
-        visible_alerts = SecurityAlert.objects.filter(Q(affected_user=request.user) | Q(alert_type__in=["COPY", "REVEAL", "OUTSIDE_HOURS", "CRITICAL_BLOCKED"]))
-    else:
-        recent = AuditEvent.objects.select_related("user", "card").filter(user=request.user)
-        visible_alerts = SecurityAlert.objects.filter(affected_user=request.user)
-    context = {
-        "cards": PaymentCard.objects.filter(active=True).count(),
-        "alerts": visible_alerts.filter(status="NEW").count(),
-        "recent": recent[:10],
-        "chain_ok": chain_ok,
-        "chain_position": chain_position,
-        "usage_7": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=7)).count(),
-        "usage_30": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=30)).count(),
-        "usage_90": AuditEvent.objects.filter(user=request.user, action__in=["VIEW", "REVEAL", "COPY", "CREATE", "UPDATE"], created_at__gte=timezone.now()-timedelta(days=90)).count(),
-        "last_reveal": AuditEvent.objects.filter(user=request.user, action="REVEAL").order_by("-created_at").first(),
-        "last_copy": AuditEvent.objects.filter(user=request.user, action="COPY", result="SUCCESS").order_by("-created_at").first(),
-        "outside_access": AuditEvent.objects.filter(user=request.user, action="LOGIN", outside_office_hours=True, created_at__gte=timezone.now()-timedelta(days=30)).count(),
-    }
-    return render(request, "vault/dashboard.html", context)
+    return redirect("vault:card_list")
+
+
+def _cards_for_operator(request):
+    cards = PaymentCard.objects.order_by("client_name", "pk")
+    if request.user.vault_profile.role == UserProfile.ANALYST:
+        cards = cards.filter(active=True)
+    return cards
 
 
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def card_list(request):
     gate = _enforce_schedule(request, "VIEW")
     if hasattr(gate, "status_code"): return gate
-    cards = PaymentCard.objects.order_by("client_name")
-    if request.user.vault_profile.role == UserProfile.ANALYST:
-        cards = cards.filter(active=True)
-    return render(request, "vault/card_list.html", {"cards": cards})
+    close_operation_contexts(request, "Usuario regresó al listado de la Bóveda")
+    search_form = CardSearchForm(request.GET)
+    cards = _cards_for_operator(request)
+    query = ""
+    if search_form.is_valid():
+        query = search_form.cleaned_data["q"]
+        if query:
+            filters = Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
+            if query.isdigit():
+                filters |= Q(pk=int(query))
+            if query.casefold() in {"activa", "activo"}:
+                filters |= Q(active=True)
+            elif query.casefold() in {"inactiva", "inactivo"}:
+                filters |= Q(active=False)
+            cards = cards.filter(filters)
+    else:
+        cards = cards.none()
+    page = Paginator(cards, 25).get_page(request.GET.get("page"))
+    context = {"cards": page.object_list, "page": page, "search_form": search_form, "query": query}
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return render(request, "vault/_card_results.html", context)
+    return render(request, "vault/card_list.html", context)
 
 
 @role_required(UserProfile.LEADER)
@@ -86,7 +104,7 @@ def card_create(request):
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
             card = form.save(user=request.user)
-            audit(request, "CREATE", card, reason="Registro de tarjeta", metadata={"fields": ["client_name", "cardholder_name", "brand", "purpose", "pan", "expiry"]})
+            audit(request, "CREATE", card, reason="Registro de tarjeta", metadata={"fields": ["client_name", "cardholder_name", "brand", "purpose", "pan", "expiry", "company"]})
         messages.success(request, f"Tarjeta •••• {card.last4} registrada y cifrada.")
         return redirect("vault:card_detail", card.pk)
     return render(request, "vault/card_form.html", {"form": form, "title": "Nueva tarjeta"})
@@ -134,8 +152,11 @@ def card_detail(request, pk):
         cards = cards.filter(active=True)
     card = get_object_or_404(cards, pk=pk)
     audit(request, "VIEW", card)
-    events = card.auditevent_set.select_related("user")[:15] if request.user.vault_profile.role == UserProfile.LEADER else []
-    return render(request, "vault/card_detail.html", {"card": card, "form": RevealForm(user=request.user), "events": events})
+    return render(request, "vault/card_detail.html", {
+        "card": card,
+        "identity_window_active": bool(current_operation_window(request)),
+        "operation_context_active": bool(current_operation_context(request, card)),
+    })
 
 
 @never_cache
@@ -144,22 +165,97 @@ def card_detail(request, pk):
 def reveal(request, pk):
     _enforce_schedule(request, "REVEAL")
     card = get_object_or_404(PaymentCard, pk=pk, active=True)
-    if not has_recent_reauth(request, "reveal"):
-        audit(request, "CRITICAL_BLOCKED", card, result="DENIED", risk_level="HIGH", reason="Reautenticación requerida")
-        return JsonResponse({"ok": False, "reauth_required": True, "reauth_url": f"{reverse('vault:reauthenticate')}?purpose=reveal&next={reverse('vault:card_detail', args=[pk])}"}, status=428)
-    form = RevealForm(request.POST, user=request.user)
+    form = ProtectedActionForm(request.POST)
     if not form.is_valid():
-        audit(request, "REVEAL", card, reason="Validación de revelado fallida", result="DENIED", risk_level="HIGH")
-        return JsonResponse({"ok": False, "errors": form.errors.get_json_data()}, status=400)
+        return HttpResponseBadRequest("Acción protegida inválida.")
     field = form.cleaned_data["field"]
-    reason = form.cleaned_data["reason"]
-    value = card.get_pan() if field == "pan" else card.get_expiry()
-    token = create_reveal_grant(request, card, field, reason)
-    audit(request, "REVEAL", card, field, reason, metadata={"reference": form.cleaned_data["reference"]})
-    response = JsonResponse({"ok": True, "field": field, "value": value, "copy_token": token, "expires_in": 25})
+    action = form.cleaned_data["action"]
+    context = current_operation_context(request, card)
+    if not context:
+        window = current_operation_window(request)
+        intent = create_intent(request, card, field, action, identity_verified=bool(window))
+        if window:
+            form_html = render_to_string("vault/security/_operation_context.html", {"form": OperationContextForm(), "intent": intent}, request=request)
+            stage = "context"
+        else:
+            form_html = render_to_string("vault/security/_protected_identity.html", {"form": ReauthenticationForm(), "intent": intent}, request=request)
+            stage = "identity"
+        return JsonResponse({"ok": False, "authorization_required": True, "stage": stage, "intent": intent, "form_html": form_html}, status=428)
+    try:
+        value = {"company": card.get_company, "pan": card.get_pan, "expiry": card.get_expiry}[field]()
+    except ValueError:
+        audit(request, "REVEAL" if action == "reveal" else "COPY_ATTEMPT", card, field, result="FAILED", risk_level="HIGH", reason="No fue posible recuperar el dato protegido")
+        return HttpResponse("No fue posible recuperar el dato protegido.", status=503, content_type="text/plain")
+    if field == "company" and not value:
+        return HttpResponse("La empresa no está configurada para esta tarjeta.", status=404, content_type="text/plain")
+    token = create_reveal_grant(request, card, field, context)
+    metadata = {
+        "reference": context.internal_reference,
+        "context_id": str(context.public_id),
+        "window_id": str(context.identity_window.public_id),
+    }
+    if action == "reveal":
+        audit(request, "REVEAL", card, field, context.reason, metadata=metadata)
+    response = HttpResponse(value, content_type="text/plain; charset=utf-8")
+    response["X-Vault-Field"] = field
+    response["X-Vault-Action"] = action
+    response["X-Vault-Copy-Token"] = token
+    response["X-Vault-Expires-In"] = "20"
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
     response["Pragma"] = "no-cache"
+    response["X-Content-Type-Options"] = "nosniff"
     return response
+
+
+@never_cache
+@require_POST
+@role_required(UserProfile.LEADER, UserProfile.ANALYST)
+def protected_reauthenticate(request):
+    intent_token = request.POST.get("intent", "")
+    intent = get_intent(request, intent_token)
+    if not intent or not _cards_for_operator(request).filter(pk=intent["card_id"], active=True).exists():
+        return HttpResponseBadRequest("La solicitud expiró. Inicie nuevamente la operación.")
+    form = ReauthenticationForm(request.POST)
+    if form.is_valid() and request.user.check_password(form.cleaned_data["password"]) and verify_totp(request.user, form.cleaned_data["token"]):
+        window = create_operation_window(request)
+        if not window:
+            raise PermissionDenied
+        mark_identity_verified(request, intent_token)
+        audit(request, "REAUTH_SUCCESS", reason="protected_data", metadata={"field": intent["field"], "action": intent["action"], "window_id": str(window.public_id)})
+        return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": OperationContextForm(), "intent": intent_token}, request=request), content_type="text/html; charset=utf-8")
+    event = audit(request, "REAUTH_FAILED", reason="protected_data", result="FAILED", risk_level="HIGH")
+    secure_session = current_secure_session(request)
+    create_alert(request, event, "REAUTH_FAILED", "HIGH", request.user, getattr(secure_session, "device", None), "Reautenticación fallida.")
+    form.add_error(None, "No fue posible validar la identidad.")
+    return HttpResponse(render_to_string("vault/security/_protected_identity.html", {"form": form, "intent": intent_token}, request=request), status=400, content_type="text/html; charset=utf-8")
+
+
+@never_cache
+@require_POST
+@role_required(UserProfile.LEADER, UserProfile.ANALYST)
+def protected_confirm(request):
+    intent_token = request.POST.get("intent", "")
+    intent = get_intent(request, intent_token, require_identity=True)
+    card = _cards_for_operator(request).filter(pk=intent["card_id"], active=True).first() if intent else None
+    if not intent or not card:
+        return HttpResponseBadRequest("La solicitud expiró. Inicie nuevamente la operación.")
+    form = OperationContextForm(request.POST)
+    if form.is_valid() and card.has_company:
+        company = card.get_company().strip().casefold()
+        for field_name in ("reason", "reference"):
+            supplied = form.cleaned_data[field_name].casefold()
+            if company and company in supplied:
+                form.add_error(field_name, "No incluya datos protegidos en este campo.")
+    if not form.is_valid():
+        return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": form, "intent": intent_token}, request=request), status=400, content_type="text/html; charset=utf-8")
+    window = current_operation_window(request)
+    if not window:
+        return HttpResponseBadRequest("La reautenticación expiró. Inicie nuevamente la operación.")
+    context = create_operation_context(request, window, card, form.cleaned_data["reason"], form.cleaned_data["reference"])
+    if not context:
+        raise PermissionDenied
+    clear_intent(request)
+    return JsonResponse({"ok": True, "identity_expires_at": window.expires_at.isoformat(), "context_id": str(context.public_id)})
 
 
 @never_cache
@@ -173,11 +269,16 @@ def copy_event(request, pk):
         audit(request, "COPY_ATTEMPT", card, result="DENIED", risk_level="HIGH", reason="Autorización de copia inválida o expirada")
         return JsonResponse({"ok": False, "error": "Autorización inválida o expirada."}, status=403)
     result = "SUCCESS" if request.POST.get("result") == "success" else "FAILED"
-    audit(request, "COPY", card, grant.field_name, grant.reason, result=result, risk_level="LOW" if result == "SUCCESS" else "HIGH")
+    context = grant.operation_context
+    audit(request, "COPY", card, grant.field_name, context.reason, metadata={
+        "reference": context.internal_reference,
+        "context_id": str(context.public_id),
+        "window_id": str(context.identity_window.public_id),
+    }, result=result, risk_level="LOW" if result == "SUCCESS" else "HIGH")
     return JsonResponse({"ok": result == "SUCCESS"}, status=200 if result == "SUCCESS" else 400)
 
 
-@role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
+@role_required(UserProfile.ADMIN)
 def audit_list(request):
     return redirect("vault:timeline")
 

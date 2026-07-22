@@ -40,20 +40,21 @@ REPORT_CARDS = {
 
 @require_GET
 @never_cache
-@role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
+@role_required(UserProfile.ADMIN)
 def report_center(request):
     allowed = allowed_report_types(request.user)
     labels = dict(ReportExport.TYPES)
     history = ReportExport.objects.select_related("user")
-    if request.user.vault_profile.role != UserProfile.ADMIN:
-        history = history.filter(user=request.user)
+    latest_by_type = {}
+    for item in history.filter(result="SUCCESS").order_by("-created_at"):
+        latest_by_type.setdefault(item.report_type, item)
     cards = []
     for report_type in allowed:
         cards.append({
             "type": report_type,
             "name": labels[report_type],
             "description": REPORT_CARDS[report_type],
-            "last": history.filter(report_type=report_type, result="SUCCESS").first(),
+            "last": latest_by_type.get(report_type),
         })
     form = ReportRequestForm(allowed_types=allowed, initial={"orientation": "auto", "detail": "detail"})
     return render(request, "vault/reports/center.html", {"report_cards": cards, "history": history[:50], "report_form": form})
@@ -102,7 +103,7 @@ def _technical_error_code(stage, error):
 
 @require_POST
 @never_cache
-@role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
+@role_required(UserProfile.ADMIN)
 def export_report(request, report_type, export_format):
     report_type = report_type.upper()
     export_format = export_format.upper()
@@ -148,7 +149,7 @@ def export_report(request, report_type, export_format):
             orientation = request.POST.get("orientation", "auto")
             if orientation not in {"auto", "portrait", "landscape"}:
                 orientation = "auto"
-            content = build_pdf(data, request.user, request.user.vault_profile.role, orientation=orientation, base_url=request.build_absolute_uri("/"))
+            content = build_pdf(data, request.user, request.user.vault_profile.role, orientation=orientation, base_url=str(settings.BASE_DIR))
             content_type = "application/pdf"
 
         record.record_count = len(data.rows)
@@ -186,5 +187,11 @@ def export_report(request, report_type, export_format):
             record.pk, report_type, export_format, error_code,
         )
         audit(request, "REPORT_EXPORT", reason="La generación del informe falló de forma segura.", metadata={"report_type": report_type, "format": export_format, "error_code": error_code}, result="FAILED", risk_level="LOW")
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return HttpResponse(
+                "No fue posible generar el informe. El intento quedó registrado sin exponer detalles técnicos.",
+                status=500,
+                content_type="text/plain; charset=utf-8",
+            )
         messages.error(request, "No fue posible generar el informe. El intento quedó registrado sin exponer detalles técnicos.")
         return redirect("vault:report_center")

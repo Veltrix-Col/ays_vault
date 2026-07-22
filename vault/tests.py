@@ -13,7 +13,8 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from .forms import CardForm, luhn_valid
 from .identity import generate_recovery_codes, grant_reauthentication
 from .crypto import encrypt
-from .models import AuditEvent, MFARecoveryCode, PaymentCard, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
+from .models import AuditEvent, MFARecoveryCode, PaymentCard, ProtectedOperationContext, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, SensitiveOperationWindow, UserDevice, UserProfile
+from .identity import role_home_name
 from .security import session_hash, verify_audit_chain
 
 
@@ -34,7 +35,7 @@ class VaultIdentitySecurityTests(TestCase):
             profile = user.vault_profile; profile.role = role; profile.active = True; profile.mfa_enabled = True; profile.mfa_status = UserProfile.MFA_ACTIVE; profile.save()
             TOTPDevice.objects.create(user=user, name="Test", confirmed=True)
         cls.card = PaymentCard(client_name="Cliente Demo", cardholder_name="Titular Demo", brand="VISA", purpose="Prueba autorizada", created_by=cls.leader, updated_by=cls.leader)
-        cls.card.set_pan(PAN); cls.card.set_expiry("12/29"); cls.card.save()
+        cls.card.set_pan(PAN); cls.card.set_expiry("12/29"); cls.card.set_company("Empresa Protegida Demo"); cls.card.save()
 
     def token(self, user, reset_last_t=False):
         device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
@@ -49,7 +50,7 @@ class VaultIdentitySecurityTests(TestCase):
         response = client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
         self.assertRedirects(response, reverse("mfa_verify"), fetch_redirect_response=False)
         response = client.post(reverse("mfa_verify"), {"token": self.token(user, reset_last_t=True), "recovery_code": ""})
-        self.assertRedirects(response, reverse("vault:dashboard"), fetch_redirect_response=False)
+        self.assertRedirects(response, reverse(role_home_name(user)), fetch_redirect_response=False)
         return client
 
     def grant(self, user, purpose, client=None):
@@ -58,6 +59,19 @@ class VaultIdentitySecurityTests(TestCase):
         session = client.session
         ReauthenticationGrant.objects.create(user=user, session_hash=session_hash(session.session_key), purpose=purpose, expires_at=timezone.now() + timedelta(minutes=5))
         return client
+
+    def operation_window(self, user, client=None, reason="Pago autorizado", reference="POL-123456"):
+        client = client or self.client
+        self.login_mfa(user, client)
+        identifier = session_hash(client.session.session_key)
+        window = SensitiveOperationWindow.objects.create(
+            user=user, session_hash=identifier, expires_at=timezone.now() + timedelta(minutes=15),
+        )
+        ProtectedOperationContext.objects.create(
+            identity_window=window, user=user, session_hash=identifier, card=self.card,
+            reason=reason, internal_reference=reference, expires_at=window.expires_at,
+        )
+        return client, window
 
     def test_password_alone_does_not_authenticate(self):
         response = self.client.post(reverse("login"), {"username": self.analyst.username, "password": PASSWORD})
@@ -85,7 +99,7 @@ class VaultIdentitySecurityTests(TestCase):
         record = SecureSession.objects.get(user=self.analyst, status=SecureSession.ACTIVE)
         self.assertTrue(record.mfa_completed)
         self.assertNotEqual(record.encrypted_session_key, self.client.session.session_key)
-        self.assertEqual(self.client.get(reverse("vault:dashboard")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("vault:card_list")).status_code, 200)
 
     def test_incomplete_enrollment_does_not_activate_mfa(self):
         self.analyst.vault_profile.mfa_status = UserProfile.MFA_PENDING; self.analyst.vault_profile.mfa_enabled = False; self.analyst.vault_profile.save()
@@ -137,31 +151,36 @@ class VaultIdentitySecurityTests(TestCase):
     def test_inactivity_expires_session_and_authorizations(self):
         self.login_mfa(self.analyst)
         record = SecureSession.objects.get(user=self.analyst, status=SecureSession.ACTIVE)
-        ReauthenticationGrant.objects.create(user=self.analyst, session_hash=record.session_hash, purpose="reveal", expires_at=timezone.now() + timedelta(minutes=5))
+        window = SensitiveOperationWindow.objects.create(user=self.analyst, session_hash=record.session_hash, expires_at=timezone.now() + timedelta(minutes=15))
+        ProtectedOperationContext.objects.create(identity_window=window, user=self.analyst, session_hash=record.session_hash, card=self.card, reason="Pago", internal_reference="REF-1", expires_at=window.expires_at)
         record.last_activity_at = timezone.now() - timedelta(minutes=11); record.save(update_fields=["last_activity_at"])
         response = self.client.get(reverse("vault:dashboard"))
         self.assertRedirects(response, reverse("login"), fetch_redirect_response=False)
         record.refresh_from_db(); self.assertEqual(record.status, SecureSession.EXPIRED)
-        self.assertFalse(ReauthenticationGrant.objects.filter(user=self.analyst, invalidated_at__isnull=True).exists())
+        self.assertFalse(SensitiveOperationWindow.objects.filter(user=self.analyst, revoked_at__isnull=True).exists())
+        self.assertFalse(ProtectedOperationContext.objects.filter(user=self.analyst, closed_at__isnull=True).exists())
 
     def test_logout_invalidates_reveal_and_reauthentication(self):
         self.login_mfa(self.analyst); record = SecureSession.objects.get(user=self.analyst, status=SecureSession.ACTIVE)
-        ReauthenticationGrant.objects.create(user=self.analyst, session_hash=record.session_hash, purpose="reveal", expires_at=timezone.now() + timedelta(minutes=5))
-        RevealGrant.objects.create(token_hash="a" * 64, user=self.analyst, card=self.card, field_name="pan", reason="Prueba", session_key=record.session_hash, expires_at=timezone.now() + timedelta(seconds=20))
+        window = SensitiveOperationWindow.objects.create(user=self.analyst, session_hash=record.session_hash, expires_at=timezone.now() + timedelta(minutes=15))
+        context = ProtectedOperationContext.objects.create(identity_window=window, user=self.analyst, session_hash=record.session_hash, card=self.card, reason="Prueba", internal_reference="REF-1", expires_at=window.expires_at)
+        RevealGrant.objects.create(token_hash="a" * 64, user=self.analyst, card=self.card, field_name="pan", session_key=record.session_hash, operation_window=window, operation_context=context, expires_at=timezone.now() + timedelta(seconds=20))
         self.client.post(reverse("logout"))
         self.assertFalse(ReauthenticationGrant.objects.filter(user=self.analyst, invalidated_at__isnull=True).exists())
         self.assertFalse(RevealGrant.objects.filter(user=self.analyst).exists())
+        window.refresh_from_db(); self.assertIsNotNone(window.revoked_at)
 
     def test_reveal_requires_recent_purpose_bound_reauthentication(self):
         self.login_mfa(self.analyst)
         url = reverse("vault:reveal", args=[self.card.pk])
-        data = {"field": "pan", "reason": "Pago prueba", "reference": "FAC-1"}
+        data = {"field": "pan", "action": "reveal"}
         self.assertEqual(self.client.post(url, data).status_code, 428)
         record = SecureSession.objects.get(user=self.analyst, status=SecureSession.ACTIVE)
         ReauthenticationGrant.objects.create(user=self.analyst, session_hash=record.session_hash, purpose="cards_manage", expires_at=timezone.now() + timedelta(minutes=5))
         self.assertEqual(self.client.post(url, data).status_code, 428)
-        ReauthenticationGrant.objects.create(user=self.analyst, session_hash=record.session_hash, purpose="reveal", expires_at=timezone.now() + timedelta(minutes=5))
-        response = self.client.post(url, data); self.assertEqual(response.status_code, 200); self.assertEqual(response.json()["value"], PAN)
+        window = SensitiveOperationWindow.objects.create(user=self.analyst, session_hash=record.session_hash, expires_at=timezone.now() + timedelta(minutes=15))
+        ProtectedOperationContext.objects.create(identity_window=window, user=self.analyst, session_hash=record.session_hash, card=self.card, reason="Pago prueba", internal_reference="FAC-1", expires_at=window.expires_at)
+        response = self.client.post(url, data); self.assertEqual(response.status_code, 200); self.assertEqual(response.content.decode(), PAN)
 
     def test_actual_reauthentication_requires_password_and_totp(self):
         self.login_mfa(self.analyst)
@@ -171,17 +190,18 @@ class VaultIdentitySecurityTests(TestCase):
 
     def test_expired_and_other_session_reauthentication_do_not_apply(self):
         self.login_mfa(self.analyst); record = SecureSession.objects.get(user=self.analyst, status=SecureSession.ACTIVE)
-        ReauthenticationGrant.objects.create(user=self.analyst, session_hash=record.session_hash, purpose="reveal", expires_at=timezone.now() - timedelta(seconds=1))
-        ReauthenticationGrant.objects.create(user=self.analyst, session_hash="f" * 64, purpose="reveal", expires_at=timezone.now() + timedelta(minutes=5))
-        response = self.client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "reason": "Pago prueba"})
+        SensitiveOperationWindow.objects.create(user=self.analyst, session_hash=record.session_hash, expires_at=timezone.now() - timedelta(seconds=1))
+        SensitiveOperationWindow.objects.create(user=self.analyst, session_hash="f" * 64, expires_at=timezone.now() + timedelta(minutes=15))
+        response = self.client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "action": "reveal"})
         self.assertEqual(response.status_code, 428)
 
     def test_copy_requires_one_time_reveal_grant_and_never_audits_pan(self):
-        self.grant(self.analyst, "reveal")
-        reveal = self.client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "reason": "Pago factura"}).json()
+        self.operation_window(self.analyst)
+        reveal = self.client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "action": "copy"})
         url = reverse("vault:copy_event", args=[self.card.pk])
-        self.assertEqual(self.client.post(url, {"copy_token": reveal["copy_token"], "result": "success"}).status_code, 200)
-        self.assertEqual(self.client.post(url, {"copy_token": reveal["copy_token"], "result": "success"}).status_code, 403)
+        token = reveal.headers["X-Vault-Copy-Token"]
+        self.assertEqual(self.client.post(url, {"copy_token": token, "result": "success"}).status_code, 200)
+        self.assertEqual(self.client.post(url, {"copy_token": token, "result": "success"}).status_code, 403)
         event = AuditEvent.objects.filter(action="COPY").latest("sequence")
         self.assertNotIn(PAN, event.reason + str(event.metadata))
 
@@ -218,7 +238,7 @@ class VaultIdentitySecurityTests(TestCase):
     def test_critical_post_requires_csrf(self):
         self.login_mfa(self.analyst)
         client = Client(enforce_csrf_checks=True); client.cookies = self.client.cookies
-        self.assertEqual(client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "reason": "Pago"}).status_code, 403)
+        self.assertEqual(client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "pan", "action": "reveal"}).status_code, 403)
 
     def test_new_device_creates_alert(self):
         self.login_mfa(self.analyst)
@@ -257,7 +277,7 @@ class VaultIdentitySecurityTests(TestCase):
     def test_pan_expiry_encrypted_and_duplicate_rejected(self):
         stored = PaymentCard.objects.get(pk=self.card.pk)
         self.assertNotIn(PAN, stored.encrypted_pan); self.assertNotIn("12/29", stored.encrypted_expiry); self.assertTrue(luhn_valid(PAN))
-        form = CardForm(data={"client_name": "Otro", "cardholder_name": "Demo", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30"})
+        form = CardForm(data={"client_name": "Otro", "cardholder_name": "Demo", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30", "company": "Empresa Demo"})
         self.assertFalse(form.is_valid())
 
     def test_session_records_contain_no_plain_session_key(self):

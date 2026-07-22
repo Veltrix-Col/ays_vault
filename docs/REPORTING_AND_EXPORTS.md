@@ -2,20 +2,19 @@
 
 ## Alcance implementado
 
-El Centro de Informes ofrece seis informes iniciales:
+El Centro de Informes es exclusivo del Administrador y ofrece seis informes iniciales. Líder y Analista no pueden abrir el catálogo, llamar endpoints de exportación ni descargar archivos:
 
-- Linea de Tiempo: Administrador, Lider y Analista, con el mismo alcance de la pantalla.
-- Alertas: todas para Administrador, operativas para Lider y personales para Analista.
+- Línea de Tiempo y Alertas: trazabilidad administrativa sin valores protegidos.
 - Accesos: eventos de ingreso, MFA, dispositivo, horario y reemplazo de sesion autorizados.
-- Adopcion: Administrador y Lider; resume uso sin rankings competitivos.
-- Tarjetas: solo Lider, con ID interno, cliente/alias autorizado, franquicia, ultimos cuatro y estado. Se excluyen PAN y vencimiento, incluso enmascarado por periodo.
-- Salud Operativa: solo Administrador.
+- Adopción: resume uso sin rankings competitivos.
+- Tarjetas Seguras: ID interno, cliente/alias autorizado, franquicia, últimos cuatro y estado. Se excluyen Empresa, PAN y vencimiento.
+- Salud Operativa.
 
 No se implementaron aun informes dedicados de auditoria pura, sesiones, dispositivos, usuarios, politicas, excepciones, festivos o notificaciones. Su incorporacion futura debe reutilizar la misma matriz de roles y el registro de exportaciones.
 
 ## Filtros
 
-La Linea de Tiempo valida fechas, rango maximo, usuario, rol, evento, severidad, resultado, horario, dispositivo, IP, ID/ultimos cuatro, alerta y criterios avanzados. Un Analista no puede resolver un usuario ajeno: el formulario rechaza el identificador y el queryset base ya esta limitado a su propia cuenta. No existe busqueda libre sobre metadatos o campos cifrados.
+La Línea de Tiempo valida fechas, rango máximo, usuario, rol, evento, severidad, resultado, horario, dispositivo, IP, ID/últimos cuatro, alerta y criterios avanzados. No existe búsqueda libre sobre metadatos o campos cifrados.
 
 Los accesos rapidos permanecen en parametros GET. Los chips permiten quitar filtros individualmente. Las exportaciones copian los criterios a un formulario POST protegido con CSRF y vuelven a validarlos en backend.
 
@@ -25,7 +24,7 @@ Los accesos rapidos permanecen en parametros GET. Los chips permiten quitar filt
 
 ## PDF
 
-`WeasyPrint==69.0` genera PDF A4 en memoria con orientacion automatica o seleccionada, logo, metadatos, filtros, tabla, advertencia y numeracion de paginas. No usa ReportLab ni deja temporales. En Windows, WeasyPrint requiere que sus librerias nativas documentadas esten disponibles; esta condicion debe verificarse en la imagen o servidor definitivo.
+`WeasyPrint==69.0` genera PDF A4 en memoria con orientación automática o seleccionada, logo, metadatos, filtros, tabla, advertencia y numeración de páginas. La configuración se abre en un modal reutilizable; los botones muestran estado de carga y bloquean envíos dobles. La tabla usa disposición fija y evita reglas de salto por fila costosas. No usa ReportLab ni deja temporales. En Windows pueden aparecer avisos GLib del sistema que no invalidan el PDF.
 
 ## Seguridad, auditoria y limites
 

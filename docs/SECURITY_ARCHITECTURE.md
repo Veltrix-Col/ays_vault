@@ -8,11 +8,11 @@ CVV/CVC, PIN, banda magnética y fotografías completas están prohibidos. Exist
 
 ## Límites y roles
 
-Navegador, aplicación, base de datos, correo y futuro KMS son límites separados. El backend es la autoridad. El Administrador gestiona identidad, sesiones, dispositivos, alertas y auditoría sin rutas de tarjetas. Líder y Analista mantienen sus permisos operativos definidos; un perfil nuevo queda inactivo y sin rol.
+Navegador, aplicación, base de datos, correo y futuro KMS son límites separados. El backend es la autoridad. El Administrador gestiona identidad, sesiones, dispositivos, alertas, auditoría e informes sin rutas de Bóveda ni valores protegidos. Líder y Analista solo acceden a Bóveda; el Líder administra tarjetas y el Analista consulta activas. Un perfil nuevo queda inactivo y sin rol.
 
 ## Cifrado y llaves
 
-PAN y vencimiento usan Fernet. Un HMAC con secreto independiente identifica duplicados. La session key Django solo se conserva cifrada para revocación; auditorías, grants y relaciones usan SHA-256. Producción requiere KMS/HSM, identidad administrada, versionado y recifrado auditado.
+Empresa, PAN y vencimiento usan Fernet. Empresa no tiene índice en texto claro y no participa en búsquedas. Un HMAC con secreto independiente identifica PAN duplicados. La session key Django solo se conserva cifrada para revocación; auditorías, grants y relaciones usan SHA-256. Producción requiere KMS/HSM, identidad administrada, versionado y recifrado auditado.
 
 ## MFA, sesiones y dispositivos
 
@@ -24,7 +24,7 @@ El dispositivo se identifica prudentemente mediante HMAC del User-Agent normaliz
 
 ## Reautenticación
 
-Cada autorización contiene usuario, hash de sesión, propósito, validación y vencimiento. No existe un booleano global. Cerrar/revocar/expirar la sesión, cambiar contraseña o reiniciar MFA invalida grants y revelados.
+La operación protegida conserva primero una intención aleatoria de cinco minutos en sesión, sin valores protegidos. Contraseña y TOTP validan la identidad y crean `SensitiveOperationWindow`, ligada al usuario/hash de sesión y con expiración fija de 15 minutos; este modelo no contiene motivo ni referencia. Después se exige una justificación nueva y se crea `ProtectedOperationContext`, ligado a una sola tarjeta, a la ventana y a la sesión. Empresa, PAN y vencimiento comparten ese contexto para revelar o copiar, pero otra tarjeta o una nueva operación requieren un contexto nuevo. Cada evento conserva su contexto, campo y acción, y la copia usa un token de un solo uso con 20 segundos de vigencia. Cerrar/revocar/expirar sesión, cambiar contraseña, bloquear dispositivo o reiniciar MFA invalida ambas autorizaciones.
 
 ## Alertas y auditoría
 
@@ -38,9 +38,9 @@ Microsoft Graph se autentica mediante MSAL y credenciales de aplicacion tomadas 
 
 ## Informes y limites de datos
 
-La autorizacion de informes se resuelve en backend antes de consultar datos. La Linea de Tiempo, su pantalla y sus exportadores comparten un servicio de filtrado; primero se aplica el alcance del rol y despues los filtros validados. `ReportExport` conserva tipo, formato, actor, filtros seguros, cantidad, resultado, duracion, IP, dispositivo y nombre saneado, pero nunca el archivo ni los registros exportados.
+La autorización de informes exige Administrador activo antes de consultar datos. `ReportExport` conserva tipo, formato, actor, filtros seguros, cantidad, resultado, duración, IP, dispositivo y nombre saneado, pero nunca el archivo ni los registros exportados.
 
-Los generadores no llaman `get_pan()` ni `get_expiry()` y no seleccionan los campos cifrados. Los motivos se truncan y redactan ante patrones de PAN o vencimiento. Excel neutraliza valores que comienzan con `=`, `+`, `-` o `@`. PDF se crea en memoria, y ambas respuestas llevan `no-store` y `nosniff`. Los limites centrales evitan exportaciones accidentales de alto volumen y las generaciones inusuales crean alerta.
+Los generadores no llaman `get_company()`, `get_pan()` ni `get_expiry()`. Los motivos se truncan y redactan ante patrones de PAN o vencimiento. Excel neutraliza valores que comienzan con `=`, `+`, `-` o `@`. PDF se crea en memoria, y ambas respuestas llevan `no-store` y `nosniff`. Los límites centrales evitan exportaciones accidentales de alto volumen y las generaciones inusuales crean alerta.
 
 ## Riesgos residuales
 

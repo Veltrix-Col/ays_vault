@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>{{ report.title }}</title>
 <style>
-  @page { size: A4 {{ orientation }}; margin: 18mm 12mm 18mm; @bottom-left { content: "A&S Vault · Uso interno y confidencial"; color: #5e7185; font-size: 8pt; } @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #5e7185; font-size: 8pt; } }
-  * { box-sizing: border-box; } body { margin: 0; color: #17324d; font: 9pt Arial, sans-serif; }
-  header { border-bottom: 2px solid #168db1; display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
-  header img { width: 130px; max-height: 44px; object-fit: contain; } h1 { color: #123d6a; font-size: 18pt; margin: 14px 0 4px; } h2 { color: #123d6a; font-size: 11pt; margin: 14px 0 6px; }
-  .meta { background: #eef5f8; border: 1px solid #d3e0e7; border-radius: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px 18px; padding: 10px; }
-  .filters { display: flex; flex-wrap: wrap; gap: 5px; } .chip { background: #e4f2f7; border: 1px solid #b7dbe6; border-radius: 12px; padding: 3px 8px; }
-  table { border-collapse: collapse; width: 100%; table-layout: auto; } thead { display: table-header-group; } tr { break-inside: avoid; } th { background: #123d6a; color: white; font-size: 7.5pt; padding: 5px; text-align: left; } td { border-bottom: 1px solid #dce4e9; font-size: 7.2pt; overflow-wrap: anywhere; padding: 5px; vertical-align: top; } tbody tr:nth-child(even) { background: #f6f9fb; }
-  .warning { border-left: 4px solid #168db1; color: #36546f; margin-top: 12px; padding: 7px 10px; background: #eef7fa; } .empty { padding: 18px; text-align: center; }
+  @page { size: A4 {{ orientation }}; margin: 18mm 12mm 18mm; @bottom-left { content: "A&S Vault · Uso interno y confidencial"; color: #152036; font-size: 8pt; } @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #152036; font-size: 8pt; } }
+  * { box-sizing: border-box; } body { margin: 0; color: #152036; font: 9pt Arial, sans-serif; }
+  header { border-bottom: 2px solid #00ccff; display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
+  header img { width: 130px; max-height: 44px; object-fit: contain; } h1 { color: #152036; font-size: 18pt; margin: 14px 0 4px; } h2 { color: #152036; font-size: 11pt; margin: 14px 0 6px; }
+  .meta { background: #f2f8ff; border: 1px solid #cfe4ff; border-radius: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px 18px; padding: 10px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 5px; } .chip { background: #e8f6ff; border: 1px solid #b8ddff; border-radius: 12px; padding: 3px 8px; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; } thead { display: table-header-group; } th { background: #152036; color: white; font-size: 7.5pt; padding: 5px; text-align: left; } td { border-bottom: 1px solid #dce4e9; font-size: 7.2pt; overflow-wrap: anywhere; padding: 5px; vertical-align: top; } tbody tr:nth-child(even) { background: #f6f9fb; }
+  .warning { border-left: 4px solid #007cff; color: #152036; margin-top: 12px; padding: 7px 10px; background: #eef7ff; } .empty { padding: 18px; text-align: center; }
 </style></head><body>
 <header>{% if logo_uri %}<img src="{{ logo_uri }}" alt="A&amp;S Vault">{% else %}<strong>A&amp;S Vault</strong>{% endif %}<span>Informe seguro</span></header>
 <h1>{{ report.title }}</h1>

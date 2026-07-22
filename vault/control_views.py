@@ -23,7 +23,7 @@ from .security import audit, cached_chain_status
 OPERATIONAL_ACTIONS = ["VIEW", "REVEAL", "COPY", "COPY_ATTEMPT", "CREATE", "UPDATE", "DEACTIVATE", "DENIED"]
 
 
-@role_required(UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST)
+@role_required(UserProfile.ADMIN)
 def timeline(request):
     form = TimelineFilterForm(request.GET, user=request.user)
     if form.is_valid():
@@ -184,18 +184,19 @@ def holiday_settings(request):
 
 @role_required(UserProfile.ADMIN)
 @require_http_methods(["GET", "POST"])
-def recipient_settings(request):
-    form = NotificationRecipientForm(request.POST or None)
+def recipient_settings(request, pk=None):
+    recipient = get_object_or_404(NotificationRecipient, pk=pk) if pk else None
+    form = NotificationRecipientForm(request.POST or None, instance=recipient)
     if request.method == "POST":
         if not has_recent_reauth(request, "policy_admin"):
             return redirect(f"{reverse('vault:reauthenticate')}?purpose=policy_admin&next={request.path}")
         if form.is_valid():
             recipient = form.save(commit=False); recipient.updated_by = request.user; recipient.save()
-            event = audit(request, "POLICY_CHANGED", reason=form.cleaned_data["reason"], risk_level="HIGH", metadata={"recipient_id": recipient.pk, "recipient": mask_email(recipient.email), "changed_fields": list(form.changed_data)})
+            event = audit(request, "POLICY_CHANGED", reason="Actualización administrativa de destinatario", risk_level="HIGH", metadata={"recipient_id": recipient.pk, "recipient": mask_email(recipient.email), "changed_fields": list(form.changed_data)})
             create_alert(request, event, "RECIPIENT_CHANGED", "HIGH", request.user, description="Configuración de destinatarios modificada.")
             messages.success(request, "Destinatario guardado y auditado.")
             return redirect("vault:recipients")
-    return render(request, "vault/control/recipients.html", {"form": form, "recipients": NotificationRecipient.objects.order_by("name"), "notifications": NotificationRecord.objects.select_related("alert")[:100]})
+    return render(request, "vault/control/recipients.html", {"form": form, "editing_recipient": recipient, "recipients": NotificationRecipient.objects.order_by("name"), "notifications": NotificationRecord.objects.select_related("alert")[:100]})
 
 
 @role_required(UserProfile.ADMIN)

@@ -120,7 +120,7 @@ python manage.py verify_audit_chain
 - Informe de Alertas.
 - Informe de Accesos.
 - Informe de Adopción.
-- Informe de Tarjetas para el Líder.
+- Informe administrativo de Tarjetas Seguras, sin Empresa, PAN ni vencimiento.
 - Informe de Salud Operativa para el Administrador.
 - Exportación Excel mediante `openpyxl`.
 - Exportación PDF mediante `WeasyPrint`.

@@ -22,7 +22,7 @@ El Administrador debe completar reautenticación `identity_admin` y registrar mo
 
 ## Sesión única y revocación
 
-Cada sesión guarda SHA-256 del identificador y una copia cifrada únicamente para eliminar la fila real de `django_session`. Un login nuevo revoca todas las sesiones anteriores. Usuario y Administrador pueden revocar una o todas mediante interfaces propias; las acciones administrativas exigen motivo y reautenticación.
+Cada sesión guarda SHA-256 del identificador y una copia cifrada únicamente para eliminar la fila real de `django_session`. Un login nuevo revoca todas las sesiones anteriores. La gestión visual de sesiones y dispositivos es exclusiva del Administrador; Líder y Analista trabajan solo en Bóveda. Las acciones administrativas conservan reautenticación y motivo cuando corresponde.
 
 ## Inactividad
 
@@ -30,7 +30,9 @@ El límite predeterminado es 600 segundos. `last_activity_at` se actualiza como 
 
 ## Reautenticación por propósito
 
-Los propósitos actuales son `reveal`, `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change`, `mfa_manage`, `policy_admin` y `outside_hours`. Cada grant dura el periodo central configurado y queda ligado a usuario y hash de sesión.
+Los propósitos administrativos actuales incluyen `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change`, `mfa_manage`, `policy_admin` y `outside_hours`. Cada grant dura el periodo central configurado y queda ligado a usuario y hash de sesión.
+
+Empresa, PAN y vencimiento usan dos autorizaciones separadas. La verificación reforzada de identidad valida contraseña y TOTP y crea una ventana fija de 15 minutos ligada al usuario y al hash de la sesión; esta ventana no conserva motivo ni referencia. Cada operación sobre una tarjeta exige después un motivo y una referencia nuevos y crea un contexto temporal exclusivo para esa tarjeta. Empresa, PAN y vencimiento, tanto al revelar como al copiar, comparten ese contexto mientras se permanezca en la misma operación. Volver a la Bóveda, confirmar otra tarjeta, expirar la ventana o invalidar la sesión cierra el contexto. Cada campo revelado se retira del DOM a los 20 segundos o al ocultarse/cambiar de pestaña; la copia mantiene token de un solo uso.
 
 Cambiar politicas, festivos, excepciones, destinatarios o reintentar correo exige `policy_admin`. La politica de sesion permite revocar la anterior, bloquear una nueva o conservar sesiones hasta el limite configurado. El valor predeterminado mantiene una sola sesion y revoca la anterior.
 

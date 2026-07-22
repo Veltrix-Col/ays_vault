@@ -11,7 +11,8 @@ import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
-from django.db.models import Q
+from django.db.models import Count, Exists, IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.template.loader import render_to_string
 from django.utils import timezone
 
@@ -38,9 +39,7 @@ QUICK_ACTIONS = {
     "alerts": ["ALERT_CREATED", "ALERT_REVIEWED", "ALERT_CLOSED", "ALERT_ESCALATED", "ALERT_REOPENED"],
 }
 REPORT_TYPES_BY_ROLE = {
-    UserProfile.ADMIN: ["TIMELINE", "ALERTS", "ACCESS", "ADOPTION", "HEALTH"],
-    UserProfile.LEADER: ["TIMELINE", "ALERTS", "ACCESS", "ADOPTION", "CARDS"],
-    UserProfile.ANALYST: ["TIMELINE", "ALERTS", "ACCESS"],
+    UserProfile.ADMIN: ["TIMELINE", "ALERTS", "ACCESS", "ADOPTION", "CARDS", "HEALTH"],
 }
 ROLE_LABELS = dict(UserProfile.ROLES)
 EVENT_LABELS = dict(AuditEvent.ACTIONS)
@@ -59,7 +58,7 @@ ALERT_LABELS = {
 RESULT_LABELS = {"SUCCESS": "Exitoso", "FAILED": "Fallido", "DENIED": "Denegado", "BLOCKED": "Bloqueado"}
 SCHEDULE_LABELS = {"inside": "Dentro del horario", "outside": "Fuera del horario"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
-CONFIDENTIALITY = "Uso interno y confidencial. Este informe no contiene números completos de tarjeta ni vencimientos."
+CONFIDENTIALITY = "Uso interno y confidencial. Este informe no contiene Empresa, números completos de tarjeta ni vencimientos."
 
 
 class ReportValidationError(Exception):
@@ -272,25 +271,37 @@ def _scoped_users(user):
 def _adoption_data(user, filters):
     rows = []
     today = timezone.localdate()
-    for item in _scoped_users(user):
-        events = _date_filter(timeline_queryset(user).filter(user=item), filters)
-        last_login = AuditEvent.objects.filter(user=item, action="LOGIN", result="SUCCESS").order_by("-created_at").first()
-        last_reveal = AuditEvent.objects.filter(user=item, action="REVEAL").order_by("-created_at").first()
-        last_copy = AuditEvent.objects.filter(user=item, action="COPY", result="SUCCESS").order_by("-created_at").first()
-        days = (today - timezone.localdate(last_login.created_at)).days if last_login else "Nunca"
-        rows.append([item.get_full_name() or item.username, item.vault_profile.get_role_display(), timezone.localtime(last_login.created_at).strftime("%d/%m/%Y %H:%M") if last_login else "Nunca", days, timezone.localtime(last_reveal.created_at).strftime("%d/%m/%Y %H:%M") if last_reveal else "Nunca", timezone.localtime(last_copy.created_at).strftime("%d/%m/%Y %H:%M") if last_copy else "Nunca", events.filter(action="LOGIN", result="SUCCESS").count(), events.filter(action="REVEAL").count(), events.filter(action="COPY", result="SUCCESS").count(), "Activo" if item.vault_profile.mfa_enabled else "Pendiente", "Sí" if item.vault_devices.filter(status=UserDevice.TRUSTED).exists() else "No", "Validar adopción" if days == "Nunca" or isinstance(days, int) and days >= 30 else "Sin señal"])
+    scoped_events = _date_filter(AuditEvent.objects.filter(user_id=OuterRef("pk")), filters)
+    def event_count(actions, result=None):
+        query = scoped_events.filter(action__in=actions)
+        if result:
+            query = query.filter(result=result)
+        return Coalesce(Subquery(query.values("user_id").annotate(total=Count("pk")).values("total")[:1], output_field=IntegerField()), Value(0))
+    users = _scoped_users(user).annotate(
+        last_login_at=Subquery(AuditEvent.objects.filter(user_id=OuterRef("pk"), action="LOGIN", result="SUCCESS").order_by("-created_at").values("created_at")[:1]),
+        last_reveal_at=Subquery(AuditEvent.objects.filter(user_id=OuterRef("pk"), action="REVEAL").order_by("-created_at").values("created_at")[:1]),
+        last_copy_at=Subquery(AuditEvent.objects.filter(user_id=OuterRef("pk"), action="COPY", result="SUCCESS").order_by("-created_at").values("created_at")[:1]),
+        access_count=event_count(["LOGIN"], "SUCCESS"),
+        reveal_count=event_count(["REVEAL"]),
+        copy_count=event_count(["COPY"], "SUCCESS"),
+        recognized_device=Exists(UserDevice.objects.filter(user_id=OuterRef("pk"), status=UserDevice.TRUSTED)),
+    )
+    for item in users:
+        days = (today - timezone.localdate(item.last_login_at)).days if item.last_login_at else "Nunca"
+        rows.append([item.get_full_name() or item.username, item.vault_profile.get_role_display(), timezone.localtime(item.last_login_at).strftime("%d/%m/%Y %H:%M") if item.last_login_at else "Nunca", days, timezone.localtime(item.last_reveal_at).strftime("%d/%m/%Y %H:%M") if item.last_reveal_at else "Nunca", timezone.localtime(item.last_copy_at).strftime("%d/%m/%Y %H:%M") if item.last_copy_at else "Nunca", item.access_count, item.reveal_count, item.copy_count, "Activo" if item.vault_profile.mfa_enabled else "Pendiente", "Sí" if item.recognized_device else "No", "Validar adopción" if days == "Nunca" or isinstance(days, int) and days >= 30 else "Sin señal"])
     return ReportData("Informe de Adopción", ["Usuario", "Rol", "Último ingreso", "Días sin ingresar", "Último revelado", "Última copia", "Accesos", "Revelados", "Copias", "Estado MFA", "Dispositivo reconocido", "Posible baja adopción"], rows, safe_filter_summary(filters))
 
 
 def _cards_data(user, filters):
-    if user.vault_profile.role != UserProfile.LEADER:
+    if user.vault_profile.role != UserProfile.ADMIN:
         raise ReportValidationError("Su rol no permite generar informes de tarjetas.")
-    queryset = _date_filter(PaymentCard.objects.select_related("created_by"), filters)
+    queryset = _date_filter(PaymentCard.objects.select_related("created_by"), filters).annotate(
+        last_view_at=Subquery(AuditEvent.objects.filter(card_id=OuterRef("pk"), action="VIEW").order_by("-created_at").values("created_at")[:1]),
+        last_copy_at=Subquery(AuditEvent.objects.filter(card_id=OuterRef("pk"), action="COPY", result="SUCCESS").order_by("-created_at").values("created_at")[:1]),
+    )
     rows = []
     for card in queryset.order_by("-created_at")[: filters.get("_row_limit", settings.REPORT_XLSX_MAX_ROWS) + 1]:
-        last_view = AuditEvent.objects.filter(card=card, action="VIEW").order_by("-created_at").first()
-        last_copy = AuditEvent.objects.filter(card=card, action="COPY", result="SUCCESS").order_by("-created_at").first()
-        rows.append([card.pk, safe_reason(card.client_name), safe_reason(card.cardholder_name), card.get_brand_display(), card.last4, "Activa" if card.active else "Inactiva", timezone.localtime(card.created_at).strftime("%d/%m/%Y %H:%M"), str(card.created_by), timezone.localtime(last_view.created_at).strftime("%d/%m/%Y %H:%M") if last_view else "Nunca", timezone.localtime(last_copy.created_at).strftime("%d/%m/%Y %H:%M") if last_copy else "Nunca", "No incluido por seguridad", safe_reason(card.purpose)])
+        rows.append([card.pk, safe_reason(card.client_name), safe_reason(card.cardholder_name), card.get_brand_display(), card.last4, "Activa" if card.active else "Inactiva", timezone.localtime(card.created_at).strftime("%d/%m/%Y %H:%M"), str(card.created_by), timezone.localtime(card.last_view_at).strftime("%d/%m/%Y %H:%M") if card.last_view_at else "Nunca", timezone.localtime(card.last_copy_at).strftime("%d/%m/%Y %H:%M") if card.last_copy_at else "Nunca", "No incluido por seguridad", safe_reason(card.purpose)])
     return ReportData("Informe Seguro de Tarjetas", ["ID interno", "Cliente", "Alias autorizado", "Franquicia", "Últimos cuatro", "Estado", "Fecha de creación", "Creada por", "Última consulta", "Última copia", "Próximo vencimiento", "Observación no sensible"], rows, safe_filter_summary(filters), observations="El PAN y el vencimiento se excluyen expresamente. El periodo de vencimiento no se exporta en esta fase.")
 
 
