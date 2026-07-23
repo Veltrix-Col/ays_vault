@@ -34,7 +34,7 @@ El Centro de Control agrega politicas, festivos, excepciones, transiciones de al
 
 `evaluate_access_policy()` es la unica autoridad horaria. Devuelve permiso, pertenencia al horario, motivo, politica, severidad, necesidad de reautenticacion/alerta/bloqueo y excepcion aplicada. Vistas sensibles consumen esa decision sin duplicar calendarios.
 
-Microsoft Graph se autentica mediante MSAL y credenciales de aplicacion tomadas solo del entorno. No se persisten client secrets, access tokens ni contenido del mensaje. La bitacora de correo conserva destinatario enmascarado, hash, resultado, intentos, backend e identificador externo.
+El servicio de correo admite consola, SMTP de Microsoft 365 y Microsoft Graph mediante una interfaz común. SMTP usa TLS y una contraseña de aplicación tomada solo del entorno; Graph usa MSAL y credenciales de aplicación. No se persisten contraseñas, client secrets, access tokens ni contenido del mensaje. La bitácora conserva destinatario enmascarado, hash, resultado, intentos, backend e identificador externo.
 
 ## Informes y limites de datos
 

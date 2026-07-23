@@ -5,7 +5,27 @@ from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 BASE_DIR=Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR/'.env')
+EMAIL_CONFIGURATION_ERRORS=[]
 def env_bool(n,d=False): return os.getenv(n,str(d)).lower() in {'1','true','yes','on'}
+def email_env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None: return default
+    normalized = raw.strip().lower()
+    if normalized in {'1','true','yes','on'}: return True
+    if normalized in {'0','false','no','off'}: return False
+    EMAIL_CONFIGURATION_ERRORS.append(f'{name} debe ser un booleano valido')
+    return default
+def email_env_int(name, default, minimum=1, maximum=None):
+    raw = os.getenv(name)
+    if raw is None: return default
+    try: value = int(raw)
+    except (TypeError, ValueError):
+        EMAIL_CONFIGURATION_ERRORS.append(f'{name} debe ser un entero valido')
+        return default
+    if value < minimum or (maximum is not None and value > maximum):
+        EMAIL_CONFIGURATION_ERRORS.append(f'{name} esta fuera del rango permitido')
+        return default
+    return value
 APP_ENV=os.getenv('APP_ENV','development')
 DEBUG=env_bool('DEBUG',APP_ENV=='development')
 SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if DEBUG else '')
@@ -34,17 +54,24 @@ AXES_FAILURE_LIMIT=5; AXES_COOLOFF_TIME=timedelta(minutes=30); AXES_RESET_ON_SUC
 FIELD_ENCRYPTION_KEY=os.getenv('FIELD_ENCRYPTION_KEY','')
 FIELD_FINGERPRINT_KEY=os.getenv('FIELD_FINGERPRINT_KEY','')
 OFFICE_START=os.getenv('OFFICE_START','07:00'); OFFICE_END=os.getenv('OFFICE_END','18:00')
-ALERT_EMAIL=os.getenv('ALERT_EMAIL',''); DEFAULT_FROM_EMAIL=os.getenv('DEFAULT_FROM_EMAIL','alertas@ays.local'); EMAIL_BACKEND=os.getenv('EMAIL_BACKEND','django.core.mail.backends.console.EmailBackend')
-ALERT_EMAIL_BACKEND=os.getenv('ALERT_EMAIL_BACKEND','console' if DEBUG else 'microsoft_graph').lower()
+ALERT_EMAIL=os.getenv('ALERT_EMAIL',''); DEFAULT_FROM_EMAIL=os.getenv('DEFAULT_FROM_EMAIL','alertas@ays.local').strip(); EMAIL_BACKEND=os.getenv('EMAIL_BACKEND','django.core.mail.backends.console.EmailBackend').strip()
+ALERT_EMAIL_BACKEND=os.getenv('ALERT_EMAIL_BACKEND','console').strip().lower()
 ALERT_EMAIL_FROM=os.getenv('ALERT_EMAIL_FROM',DEFAULT_FROM_EMAIL)
 ALERT_EMAIL_ADMIN=os.getenv('ALERT_EMAIL_ADMIN',ALERT_EMAIL)
 ALERT_EMAIL_LEADER=os.getenv('ALERT_EMAIL_LEADER','')
+EMAIL_HOST=os.getenv('EMAIL_HOST','').strip()
+EMAIL_PORT=email_env_int('EMAIL_PORT',587,1,65535)
+EMAIL_USE_TLS=email_env_bool('EMAIL_USE_TLS',True)
+EMAIL_USE_SSL=email_env_bool('EMAIL_USE_SSL',False)
+EMAIL_HOST_USER=os.getenv('EMAIL_HOST_USER','').strip()
+EMAIL_HOST_PASSWORD=os.getenv('EMAIL_HOST_PASSWORD','')
 MS_GRAPH_TENANT_ID=os.getenv('MS_GRAPH_TENANT_ID','')
 MS_GRAPH_CLIENT_ID=os.getenv('MS_GRAPH_CLIENT_ID','')
 MS_GRAPH_CLIENT_SECRET=os.getenv('MS_GRAPH_CLIENT_SECRET','')
 MS_GRAPH_SENDER=os.getenv('MS_GRAPH_SENDER',ALERT_EMAIL_FROM)
-EMAIL_TIMEOUT_SECONDS=int(os.getenv('EMAIL_TIMEOUT_SECONDS','10'))
-EMAIL_MAX_RETRIES=int(os.getenv('EMAIL_MAX_RETRIES','3'))
+EMAIL_TIMEOUT_SECONDS=email_env_int('EMAIL_TIMEOUT_SECONDS',10,1,120)
+EMAIL_TIMEOUT=EMAIL_TIMEOUT_SECONDS
+EMAIL_MAX_RETRIES=email_env_int('EMAIL_MAX_RETRIES',3,1,10)
 VAULT_BASE_URL=os.getenv('VAULT_BASE_URL','http://127.0.0.1:8000').rstrip('/')
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
@@ -62,9 +89,14 @@ LOGGING = {
         'vault': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
+EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'}
+if EMAIL_PRODUCTION_ENV:
+    if EMAIL_CONFIGURATION_ERRORS: raise ImproperlyConfigured('Configuracion de correo invalida')
+    if ALERT_EMAIL_BACKEND not in {'smtp','graph','microsoft_graph'}: raise ImproperlyConfigured('Backend de correo no permitido en produccion')
+    if ALERT_EMAIL_BACKEND == 'smtp' and (EMAIL_BACKEND != 'django.core.mail.backends.smtp.EmailBackend' or not all((EMAIL_HOST,EMAIL_HOST_USER,EMAIL_HOST_PASSWORD,DEFAULT_FROM_EMAIL)) or EMAIL_USE_TLS == EMAIL_USE_SSL): raise ImproperlyConfigured('Configuracion SMTP incompleta o invalida')
+    if ALERT_EMAIL_BACKEND in {'graph','microsoft_graph'} and not all((MS_GRAPH_TENANT_ID,MS_GRAPH_CLIENT_ID,MS_GRAPH_CLIENT_SECRET,MS_GRAPH_SENDER)): raise ImproperlyConfigured('Configuracion Microsoft Graph incompleta')
 if not DEBUG:
     if DB_ENGINE not in {'postgres','postgresql'}: raise ImproperlyConfigured('PostgreSQL es obligatorio fuera de desarrollo')
     if not FIELD_ENCRYPTION_KEY: raise ImproperlyConfigured('FIELD_ENCRYPTION_KEY requerida en producción')
     if not FIELD_FINGERPRINT_KEY: raise ImproperlyConfigured('FIELD_FINGERPRINT_KEY requerida en produccion')
-    if ALERT_EMAIL_BACKEND == 'microsoft_graph' and not all((MS_GRAPH_TENANT_ID,MS_GRAPH_CLIENT_ID,MS_GRAPH_CLIENT_SECRET,MS_GRAPH_SENDER)): raise ImproperlyConfigured('Configuracion Microsoft Graph incompleta')
     SESSION_COOKIE_SECURE=True; CSRF_COOKIE_SECURE=True; SECURE_SSL_REDIRECT=True; SECURE_HSTS_SECONDS=31536000; SECURE_HSTS_INCLUDE_SUBDOMAINS=True; SECURE_HSTS_PRELOAD=True

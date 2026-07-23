@@ -74,7 +74,7 @@ python manage.py evaluate_security_policies
 
 El comando de evaluacion es idempotente y revisa inactividad, usuarios sin uso/MFA, vencimientos, alertas vencidas e integridad. Puede ejecutarse desde cron o Task Scheduler y deja un registro seguro; la arquitectura permite moverlo a Celery sin cambiar las reglas.
 
-El correo usa una capa intercambiable. Desarrollo usa el backend de Django/console. Produccion puede usar Microsoft Graph con OAuth 2.0 client credentials mediante MSAL y permiso de aplicacion `Mail.Send`; limite el acceso de la aplicacion al buzon remitente en Microsoft 365. El fallo de correo se registra, admite reintento y nunca revierte la operacion sensible que genero la alerta.
+El correo usa una capa intercambiable. Desarrollo usa consola; la puesta en funcionamiento inicial puede usar SMTP de Microsoft 365 con TLS y contraseña de aplicación recibida solo por variable de entorno; Microsoft Graph con OAuth 2.0 permanece disponible como alternativa. El fallo de correo se registra con un código seguro, admite reintentos limitados y nunca revierte la operación sensible que originó la alerta.
 
 Documentacion operativa: [Centro de Control](docs/CONTROL_CENTER.md), [alertas y correo](docs/ALERTING_AND_EMAIL.md), [politicas de acceso](docs/ACCESS_POLICIES.md) e [informes y exportaciones](docs/REPORTING_AND_EXPORTS.md).
 
@@ -91,10 +91,13 @@ Excel se genera con `openpyxl==3.1.5`, sin macros ni formulas procedentes de dat
 - `REAUTH_TTL_SECONDS=300`
 - `MFA_FAILURE_LIMIT=5`
 - `MFA_ISSUER=A&S Vault`
-- `ALERT_EMAIL_BACKEND=console|microsoft_graph`
+- `ALERT_EMAIL_BACKEND=console|smtp|graph`
+- `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL`
 - `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`
 - `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`
 - `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES`, `VAULT_BASE_URL`
+
+Consulte [Configuración de correo](docs/EMAIL_CONFIGURATION.md). Nunca use la contraseña normal del buzón ni incluya una contraseña de aplicación en código, documentación, base de datos, logs o Git.
 - `REPORT_XLSX_MAX_ROWS=5000`
 - `REPORT_PDF_MAX_ROWS=1000`
 - `REPORT_DEFAULT_MAX_DAYS=90`

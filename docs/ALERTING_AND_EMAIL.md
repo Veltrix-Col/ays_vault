@@ -20,16 +20,17 @@ La funcion `build_periodic_summary(days=1|7)` prepara agregados diarios/semanale
 
 ## Backends
 
-- `console`: usa el backend Django configurado; recomendado en desarrollo y pruebas.
-- `microsoft_graph`: usa MSAL `ConfidentialClientApplication`, OAuth 2.0 client credentials y `POST /v1.0/users/{sender}/sendMail`.
+- `console`: usa exclusivamente consola o `locmem`; recomendado en desarrollo y pruebas.
+- `smtp`: usa el backend SMTP de Django con TLS, timeout y credenciales tomadas del entorno. Para Microsoft 365 se espera `smtp.office365.com:587`, usuario completo y contraseña de aplicación.
+- `graph`: conserva MSAL `ConfidentialClientApplication`, OAuth 2.0 client credentials y `POST /v1.0/users/{sender}/sendMail`. `microsoft_graph` se acepta temporalmente como alias compatible.
 
-Variables: `ALERT_EMAIL_BACKEND`, `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`, `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`, `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES` y `VAULT_BASE_URL`.
+Variables: `ALERT_EMAIL_BACKEND`, `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL`, `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`, `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`, `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES` y `VAULT_BASE_URL`.
 
-El secreto vive solo en variables de entorno. Nunca se escribe en logs/base de datos. Microsoft 365 requiere registro de aplicacion, consentimiento administrativo para `Mail.Send` y una politica que limite el buzon accesible. No use autenticacion basica.
+Los secretos viven solo en variables de entorno y nunca se escriben en logs/base de datos. SMTP usa una contraseña de aplicación, nunca la contraseña normal del buzón; solo funcionará si el tenant y el buzón permiten ese método. Graph requiere registro de aplicación, consentimiento administrativo para `Mail.Send` y una política que limite el buzón accesible.
 
 ## Entrega, reintentos e idempotencia
 
-Cada alerta/destinatario produce un hash unico. Un envio exitoso no se repite. Los fallos usan reintento limitado y demora creciente; no abortan la operacion sensible. El Administrador puede reintentar un fallo con `policy_admin` y motivo. Si el destinatario ya no esta configurado, el reintento falla de manera segura.
+Cada alerta/destinatario produce un hash único. Un envío exitoso no se repite. SMTP y Graph clasifican errores seguros: una conexión transitoria puede reintentarse hasta el límite, mientras una autenticación inválida no entra en un bucle. Los fallos no abortan la operación sensible. El Administrador puede reintentar un fallo con `policy_admin` y motivo. Si el destinatario ya no está configurado, el reintento falla de manera segura.
 
 La bitacora conserva destinatario enmascarado/hash, fechas, resultado, codigo seguro, intentos, proximo intento, backend e identificador externo. No conserva cuerpo, PAN, vencimiento, secretos, tokens, credenciales ni codigos MFA.
 
@@ -39,4 +40,4 @@ Las plantillas HTML/texto incluyen A&S Vault, tipo, severidad, usuario, fecha/ho
 
 ## Prueba de produccion simulada
 
-Use primero console/locmem, simule fallo y reintento, confirme idempotencia y contenido, luego habilite Graph con un buzon no productivo. Un HTTP 202 confirma aceptacion, no entrega final; monitoree Exchange y establezca alertas externas. **No usar datos reales todavia.**
+Use primero console/locmem, simule fallo y reintento y confirme idempotencia. Después configure un buzón institucional de prueba y use el botón administrativo **Enviar correo de prueba**. No configure credenciales reales durante pruebas automatizadas. En Graph, un HTTP 202 confirma aceptación, no entrega final. **No usar datos reales todavía.**

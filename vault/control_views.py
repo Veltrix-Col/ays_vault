@@ -11,10 +11,11 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .decorators import role_required
-from .forms import AccessExceptionForm, HolidayForm, NotificationRecipientForm, PolicyConfigurationForm, ReasonForm, TimelineFilterForm
+from .forms import AccessExceptionForm, EmailTestForm, HolidayForm, NotificationRecipientForm, PolicyConfigurationForm, ReasonForm, TimelineFilterForm
 from .identity import create_alert, has_recent_reauth
 from .models import AccessException, AuditEvent, AuditVerificationRun, Holiday, NotificationRecipient, NotificationRecord, PaymentCard, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, UserDevice, UserProfile
-from .notifications import mask_email, retry_notification
+from .email_config import email_configuration_status
+from .notifications import mask_email, retry_notification, send_notification
 from .policies import get_policy, invalidate_policy_cache
 from .reporting import apply_timeline_filters, filter_chips, timeline_queryset
 from .security import audit, cached_chain_status
@@ -196,7 +197,52 @@ def recipient_settings(request, pk=None):
             create_alert(request, event, "RECIPIENT_CHANGED", "HIGH", request.user, description="Configuración de destinatarios modificada.")
             messages.success(request, "Destinatario guardado y auditado.")
             return redirect("vault:recipients")
-    return render(request, "vault/control/recipients.html", {"form": form, "editing_recipient": recipient, "recipients": NotificationRecipient.objects.order_by("name"), "notifications": NotificationRecord.objects.select_related("alert")[:100]})
+    return render(request, "vault/control/recipients.html", {
+        "form": form,
+        "editing_recipient": recipient,
+        "recipients": NotificationRecipient.objects.order_by("name"),
+        "notifications": NotificationRecord.objects.select_related("alert")[:100],
+        "email_status": email_configuration_status(),
+        "email_test_form": EmailTestForm(),
+        "last_email_test": NotificationRecord.objects.filter(notification_type="EMAIL_TEST").first(),
+    })
+
+
+@role_required(UserProfile.ADMIN)
+@require_POST
+def email_test(request):
+    form = EmailTestForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Ingrese un destinatario corporativo válido para la prueba.")
+        return redirect("vault:recipients")
+    recipient = form.cleaned_data["recipient"]
+    record = send_notification(
+        notification_type="EMAIL_TEST",
+        recipient=recipient,
+        subject="[A&S Vault] Prueba de configuración de correo",
+        text_body="A&S Vault confirmó una prueba controlada del servicio de correo. Este mensaje no contiene datos operativos.",
+        html_body="<p><strong>A&amp;S Vault</strong></p><p>Prueba controlada del servicio de correo. Este mensaje no contiene datos operativos.</p>",
+        idempotency_key=f"email-test:{request.user.pk}:{recipient.lower()}:{timezone.localdate().isoformat()}",
+    )
+    delivered = record.result == NotificationRecord.SENT
+    audit(
+        request,
+        "EMAIL_SENT" if delivered else "EMAIL_FAILED",
+        reason="Prueba administrativa de correo",
+        metadata={
+            "notification_id": record.pk,
+            "backend": record.backend,
+            "recipient": record.masked_recipient,
+            "delivery_result": record.result,
+            "attempts": record.attempts,
+            "safe_error_code": record.safe_error_code,
+        },
+    )
+    if delivered:
+        messages.success(request, "La prueba de correo finalizó correctamente.")
+    else:
+        messages.error(request, f"La prueba no pudo completarse. Código seguro: {record.safe_error_code or 'EMAIL_DELIVERY_ERROR'}.")
+    return redirect("vault:recipients")
 
 
 @role_required(UserProfile.ADMIN)

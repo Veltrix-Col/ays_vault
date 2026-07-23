@@ -1,17 +1,21 @@
 import hashlib
 import json
 import logging
+import re
+import smtplib
+import socket
 import urllib.error
 import urllib.request
 from datetime import timedelta
 
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from .models import NotificationRecipient, NotificationRecord
+from .email_config import normalized_backend
 from .forms import ALERT_TYPE_CHOICES
+from .models import NotificationRecipient, NotificationRecord
 from .tasks import run_async
 
 
@@ -19,12 +23,18 @@ SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 logger = logging.getLogger("vault.notifications")
 
 
+class EmailDeliveryError(Exception):
+    def __init__(self, safe_code, retryable=False):
+        super().__init__(safe_code)
+        self.safe_code = safe_code
+        self.retryable = retryable
+
+
 def mask_email(value):
     local, separator, domain = (value or "").partition("@")
     if not separator:
         return "***"
-    visible = local[:1]
-    return f"{visible}***@{domain}"
+    return f"{local[:1]}***@{domain}"
 
 
 def _recipient_hash(value):
@@ -41,13 +51,12 @@ def configured_recipients(alert):
             continue
         recipients.append(recipient.email)
     if not recipients:
-        fallback = [settings.ALERT_EMAIL_ADMIN, settings.ALERT_EMAIL_LEADER]
-        recipients = [value for value in fallback if value]
+        recipients = [value for value in (settings.ALERT_EMAIL_ADMIN, settings.ALERT_EMAIL_LEADER) if value]
     return sorted(set(recipients))
 
 
 class MicrosoftGraphEmailBackend:
-    name = "microsoft_graph"
+    name = "graph"
 
     def send(self, subject, text_body, html_body, recipient):
         import msal
@@ -61,7 +70,7 @@ class MicrosoftGraphEmailBackend:
         token = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
         access_token = token.get("access_token")
         if not access_token:
-            raise RuntimeError("GRAPH_TOKEN_FAILED")
+            raise EmailDeliveryError("GRAPH_AUTHENTICATION_FAILED")
         payload = {
             "message": {
                 "subject": subject,
@@ -79,68 +88,197 @@ class MicrosoftGraphEmailBackend:
         try:
             with urllib.request.urlopen(request, timeout=settings.EMAIL_TIMEOUT_SECONDS) as response:
                 if response.status not in {200, 202}:
-                    raise RuntimeError(f"GRAPH_HTTP_{response.status}")
+                    raise EmailDeliveryError(f"GRAPH_HTTP_{response.status}", retryable=response.status == 429 or response.status >= 500)
                 return response.headers.get("request-id", "")
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"GRAPH_HTTP_{exc.code}") from exc
+            raise EmailDeliveryError(f"GRAPH_HTTP_{exc.code}", retryable=exc.code == 429 or exc.code >= 500) from exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+            raise EmailDeliveryError("GRAPH_CONNECTION_ERROR", retryable=True) from exc
 
 
-class DjangoEmailBackend:
-    name = "django_email"
+class ConsoleEmailBackend:
+    name = "console"
 
     def send(self, subject, text_body, html_body, recipient):
-        message = EmailMultiAlternatives(subject, text_body, settings.ALERT_EMAIL_FROM, [recipient])
+        connection = get_connection(backend=settings.EMAIL_BACKEND, fail_silently=False)
+        message = EmailMultiAlternatives(subject, text_body, settings.ALERT_EMAIL_FROM, [recipient], connection=connection)
         message.attach_alternative(html_body, "text/html")
-        sent = message.send(fail_silently=False)
-        if sent != 1:
-            raise RuntimeError("EMAIL_NOT_SENT")
+        if message.send(fail_silently=False) != 1:
+            raise EmailDeliveryError("CONSOLE_EMAIL_NOT_SENT")
         return ""
 
 
+class SMTPEmailBackend:
+    name = "smtp"
+
+    def send(self, subject, text_body, html_body, recipient):
+        try:
+            connection = get_connection(
+                backend="django.core.mail.backends.smtp.EmailBackend",
+                fail_silently=False,
+                host=settings.EMAIL_HOST,
+                port=settings.EMAIL_PORT,
+                username=settings.EMAIL_HOST_USER,
+                password=settings.EMAIL_HOST_PASSWORD,
+                use_tls=settings.EMAIL_USE_TLS,
+                use_ssl=settings.EMAIL_USE_SSL,
+                timeout=settings.EMAIL_TIMEOUT_SECONDS,
+            )
+            message = EmailMultiAlternatives(
+                subject,
+                text_body,
+                settings.ALERT_EMAIL_FROM or settings.DEFAULT_FROM_EMAIL,
+                [recipient],
+                connection=connection,
+            )
+            message.attach_alternative(html_body, "text/html")
+            if message.send(fail_silently=False) != 1:
+                raise EmailDeliveryError("SMTP_EMAIL_NOT_SENT", retryable=True)
+            return ""
+        except smtplib.SMTPAuthenticationError as exc:
+            raise EmailDeliveryError("SMTP_AUTHENTICATION_FAILED") from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise EmailDeliveryError("SMTP_RECIPIENT_REJECTED") from exc
+        except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, socket.timeout, TimeoutError, ConnectionError) as exc:
+            raise EmailDeliveryError("SMTP_CONNECTION_ERROR", retryable=True) from exc
+        except EmailDeliveryError:
+            raise
+        except (smtplib.SMTPException, OSError) as exc:
+            raise EmailDeliveryError("SMTP_DELIVERY_ERROR", retryable=True) from exc
+
+
 def get_backend():
-    if settings.ALERT_EMAIL_BACKEND == "microsoft_graph":
+    backend = normalized_backend()
+    if backend == "console":
+        return ConsoleEmailBackend()
+    if backend == "smtp":
+        return SMTPEmailBackend()
+    if backend == "graph":
         return MicrosoftGraphEmailBackend()
-    return DjangoEmailBackend()
+    raise EmailDeliveryError("EMAIL_BACKEND_NOT_SUPPORTED")
 
 
-def send_alert_notification(alert, recipient, force_retry=False):
-    idempotency = hashlib.sha256(f"alert:{alert.pk}:{alert.alert_type}:{recipient.lower()}".encode()).hexdigest()
+def _redact_email_content(value, alert=None):
+    safe = value or ""
+    safe = re.sub(r"(?<!\d)\d{13,19}(?!\d)", "[DATO PROTEGIDO OMITIDO]", safe)
+    safe = re.sub(r"\b(?:0[1-9]|1[0-2])/\d{2,4}\b", "[DATO PROTEGIDO OMITIDO]", safe)
+    safe = re.sub(r"(?<!\d)\d{6}(?!\d)", "[CÓDIGO OMITIDO]", safe)
+    for secret in (getattr(settings, "EMAIL_HOST_PASSWORD", ""), getattr(settings, "MS_GRAPH_CLIENT_SECRET", "")):
+        if secret:
+            safe = safe.replace(secret, "[SECRETO OMITIDO]")
+    card = getattr(getattr(alert, "event", None), "card", None) if alert else None
+    if card and card.has_company:
+        company = card.get_company()
+        if company:
+            safe = re.sub(re.escape(company), "[DATO PROTEGIDO OMITIDO]", safe, flags=re.IGNORECASE)
+    return safe
+
+
+def _audit_alert_delivery(record, alert):
+    if not alert:
+        return
+    from .security import audit
+
+    actor = alert.actor or getattr(alert.event, "user", None)
+    audit(
+        None,
+        "EMAIL_SENT" if record.result == NotificationRecord.SENT else "EMAIL_FAILED",
+        user=actor,
+        reason="Resultado de entrega de notificación",
+        metadata={
+            "notification_id": record.pk,
+            "notification_type": record.notification_type,
+            "backend": record.backend,
+            "recipient": record.masked_recipient,
+            "delivery_result": record.result,
+            "attempts": record.attempts,
+            "safe_error_code": record.safe_error_code,
+        },
+    )
+
+
+def send_notification(*, notification_type, recipient, subject, text_body, html_body, idempotency_key, alert=None, force_retry=False):
+    idempotency = hashlib.sha256(idempotency_key.encode()).hexdigest()
     record, created = NotificationRecord.objects.get_or_create(
         idempotency_hash=idempotency,
         defaults={
             "alert": alert,
-            "notification_type": alert.alert_type,
+            "notification_type": notification_type,
             "masked_recipient": mask_email(recipient),
             "recipient_hash": _recipient_hash(recipient),
-            "backend": settings.ALERT_EMAIL_BACKEND,
+            "backend": normalized_backend(),
         },
     )
     if not created and record.result == NotificationRecord.SENT:
         return record
     if not created and not force_retry and record.attempts >= settings.EMAIL_MAX_RETRIES:
         return record
+
+    subject = _redact_email_content(subject, alert)
+    text_body = _redact_email_content(text_body, alert)
+    html_body = _redact_email_content(html_body, alert)
+    try:
+        backend = get_backend()
+    except EmailDeliveryError as exc:
+        record.attempts += 1
+        record.backend = normalized_backend()
+        record.result = NotificationRecord.FAILED
+        record.safe_error_code = exc.safe_code
+        record.next_attempt_at = None
+        record.save(update_fields=["attempts", "backend", "result", "safe_error_code", "next_attempt_at"])
+        logger.warning("Fallo de correo id=%s backend=no-reconocido intento=%s codigo=%s", record.pk, record.attempts, exc.safe_code)
+        _audit_alert_delivery(record, alert)
+        return record
+    remaining_attempts = 1 if force_retry else max(1, settings.EMAIL_MAX_RETRIES - record.attempts)
+    while remaining_attempts:
+        remaining_attempts -= 1
+        record.attempts += 1
+        record.backend = backend.name
+        try:
+            record.external_id = backend.send(subject, text_body, html_body, recipient)[:160]
+            record.result = NotificationRecord.SENT
+            record.sent_at = timezone.now()
+            record.safe_error_code = ""
+            record.next_attempt_at = None
+            break
+        except EmailDeliveryError as exc:
+            record.safe_error_code = exc.safe_code
+            will_retry = exc.retryable and remaining_attempts > 0
+            record.result = NotificationRecord.RETRY if will_retry else NotificationRecord.FAILED
+            record.next_attempt_at = timezone.now() + timedelta(minutes=min(5 * record.attempts, 30)) if will_retry else None
+            logger.warning(
+                "Fallo de correo id=%s backend=%s intento=%s codigo=%s",
+                record.pk,
+                backend.name,
+                record.attempts,
+                exc.safe_code,
+            )
+            if not exc.retryable:
+                break
+        except Exception:
+            record.safe_error_code = "EMAIL_DELIVERY_ERROR"
+            record.result = NotificationRecord.FAILED
+            record.next_attempt_at = None
+            logger.warning("Fallo de correo id=%s backend=%s intento=%s codigo=EMAIL_DELIVERY_ERROR", record.pk, backend.name, record.attempts)
+            break
+    record.save(update_fields=["attempts", "backend", "external_id", "result", "sent_at", "safe_error_code", "next_attempt_at"])
+    _audit_alert_delivery(record, alert)
+    return record
+
+
+def send_alert_notification(alert, recipient, force_retry=False):
     context = {"alert": alert, "detail_url": f"{settings.VAULT_BASE_URL}/security/alerts/{alert.pk}/"}
     alert_label = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
-    subject = f"[A&S Vault] {alert.get_severity_display()}: {alert_label}"
-    text_body = render_to_string("vault/email/alert.txt", context)
-    html_body = render_to_string("vault/email/alert.html", context)
-    backend = get_backend()
-    record.attempts += 1
-    record.backend = backend.name
-    try:
-        record.external_id = backend.send(subject, text_body, html_body, recipient)[:160]
-        record.result = NotificationRecord.SENT
-        record.sent_at = timezone.now()
-        record.safe_error_code = ""
-        record.next_attempt_at = None
-    except Exception as exc:
-        code = str(exc).splitlines()[0][:80]
-        record.result = NotificationRecord.FAILED if record.attempts >= settings.EMAIL_MAX_RETRIES else NotificationRecord.RETRY
-        record.safe_error_code = code if code.isascii() else exc.__class__.__name__
-        record.next_attempt_at = timezone.now() + timedelta(minutes=min(5 * record.attempts, 30))
-        logger.warning("Fallo al enviar notificación de alerta id=%s backend=%s intento=%s", alert.pk, backend.name, record.attempts)
-    record.save(update_fields=["attempts", "backend", "external_id", "result", "sent_at", "safe_error_code", "next_attempt_at"])
-    return record
+    return send_notification(
+        notification_type=alert.alert_type,
+        recipient=recipient,
+        subject=f"[A&S Vault] {alert.get_severity_display()}: {alert_label}",
+        text_body=render_to_string("vault/email/alert.txt", context),
+        html_body=render_to_string("vault/email/alert.html", context),
+        idempotency_key=f"alert:{alert.pk}:{alert.alert_type}:{recipient.lower()}",
+        alert=alert,
+        force_retry=force_retry,
+    )
 
 
 def notify_alert(alert):
@@ -174,8 +312,9 @@ def retry_notification(record):
 
 
 def build_periodic_summary(days=1):
-    """Builds safe aggregate data only; scheduling and automatic delivery stay opt-in."""
+    """Construye agregados seguros; el envío automático permanece deshabilitado."""
     from .models import AccessException, AuditEvent, SecurityAlert
+
     since = timezone.now() - timedelta(days=days)
     return {
         "period_days": days,

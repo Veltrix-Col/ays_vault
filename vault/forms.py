@@ -144,6 +144,15 @@ class CardSearchForm(forms.Form):
         return value
 
 
+class EmailTestForm(forms.Form):
+    recipient = forms.EmailField(
+        label="Destinatario de la prueba",
+        max_length=254,
+        help_text="Use una dirección corporativa autorizada. La prueba no incluye datos operativos.",
+        widget=forms.EmailInput(attrs={"autocomplete": "email", "placeholder": "administrador@ays.com.co"}),
+    )
+
+
 PROTECTED_FIELD_CHOICES = [("company", "Empresa"), ("pan", "Número de tarjeta"), ("expiry", "Vencimiento")]
 
 
