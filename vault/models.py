@@ -321,6 +321,42 @@ class ReauthenticationGrant(models.Model):
         indexes = [models.Index(fields=["user", "session_hash", "purpose", "expires_at"], name="vault_reauth_lookup")]
 
 
+class PendingSensitiveOperation(models.Model):
+    """Operación crítica pendiente, ligada a usuario, sesión, propósito y objeto."""
+
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    STATUSES = [
+        (PENDING, "Pendiente"),
+        (PROCESSING, "En proceso"),
+        (COMPLETED, "Completada"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="vault_pending_operations")
+    session_hash = models.CharField(max_length=64, editable=False)
+    purpose = models.CharField(max_length=40)
+    action = models.CharField(max_length=40)
+    target_type = models.CharField(max_length=40)
+    target_id = models.PositiveBigIntegerField()
+    reason = models.CharField(max_length=240)
+    safe_payload = models.JSONField(default=dict, blank=True)
+    success_url = models.CharField(max_length=240)
+    status = models.CharField(max_length=12, choices=STATUSES, default=PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["user", "session_hash", "purpose", "expires_at"],
+                name="vault_pending_op_lookup",
+            ),
+        ]
+
+
 class SensitiveOperationWindow(models.Model):
     """Reautenticación de identidad ligada a usuario y sesión por 15 minutos."""
 

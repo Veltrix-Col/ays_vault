@@ -1,1 +1,30 @@
-{% extends 'base.html' %}{% block title %}Reautenticación · A&amp;S Vault{% endblock %}{% block content %}<div class="page-heading"><div><span class="section-kicker">Operación crítica</span><h1>Confirme nuevamente su identidad</h1><p>La autorización será temporal, ligada a esta sesión y a la finalidad solicitada.</p></div></div><form method="post" class="form-panel" autocomplete="off" novalidate>{% csrf_token %}{{ form.non_field_errors }}<section class="form-section"><div class="form-section-header"><h2>Validación de identidad</h2><p>Ingrese su contraseña y el código actual de su aplicación autenticadora.</p></div>{% for field in form %}{% include 'includes/form_field.html' with field=field %}{% endfor %}<input type="hidden" name="purpose" value="{{ purpose }}"><input type="hidden" name="next" value="{{ next }}"><div class="form-actions"><button class="btn primary" type="submit">Reautenticar</button></div></section></form>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Reautenticación · A&amp;S Vault{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Operación crítica</span>
+    <h1>Confirme nuevamente su identidad</h1>
+    <p>La autorización será temporal, ligada a esta sesión y a la finalidad solicitada.</p>
+  </div>
+</div>
+<form method="post" class="form-panel" data-single-submit autocomplete="off" novalidate>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <section class="form-section">
+    <div class="form-section-header">
+      <h2>Validación de identidad</h2>
+      <p>Ingrese su contraseña y el código actual de su aplicación autenticadora.</p>
+    </div>
+    {% for field in form %}
+      {% include 'includes/form_field.html' with field=field %}
+    {% endfor %}
+    <input type="hidden" name="purpose" value="{{ purpose }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if operation %}<input type="hidden" name="operation" value="{{ operation }}">{% endif %}
+    <div class="form-actions">
+      <button class="btn primary" type="submit">Reautenticar y continuar</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

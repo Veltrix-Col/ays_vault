@@ -16,7 +16,7 @@ from django.template.loader import render_to_string
 
 from .decorators import role_required
 from .forms import CardEditForm, CardForm, CardSearchForm, OperationContextForm, ProtectedActionForm, ReauthenticationForm
-from .models import AuditEvent, PaymentCard, SecurityAlert, UserProfile
+from .models import AuditEvent, PaymentCard, PendingSensitiveOperation, SecurityAlert, UserProfile
 from .security import audit, cached_chain_status, consume_copy_grant, create_reveal_grant
 from .identity import create_alert, current_secure_session, has_recent_reauth, verify_totp
 from .protected_operations import (
@@ -32,6 +32,13 @@ from .protected_operations import (
 )
 from django.urls import reverse
 from .policies import evaluate_access_policy
+from .sensitive_operations import (
+    PendingOperationError,
+    execute_operation,
+    new_operation_id,
+    prepare_operation,
+    reauthentication_url,
+)
 
 
 def _active_profile(request):
@@ -130,16 +137,49 @@ def card_edit(request, pk):
 @role_required(UserProfile.LEADER)
 def card_deactivate(request, pk):
     _enforce_schedule(request, "DEACTIVATE")
+    card = get_object_or_404(PaymentCard, pk=pk)
+    try:
+        operation = prepare_operation(
+            request,
+            operation_id=request.POST.get("operation_id") or new_operation_id(),
+            action="CARD_DEACTIVATE",
+            purpose="cards_manage",
+            target_type="card",
+            target_id=card.pk,
+            reason="Desactivación lógica",
+            success_url=reverse("vault:card_list"),
+        )
+    except PendingOperationError as exc:
+        messages.error(request, str(exc))
+        return redirect("vault:card_detail", pk=card.pk)
+    if operation.status == PendingSensitiveOperation.COMPLETED:
+        messages.info(request, "La tarjeta ya había sido desactivada; no se ejecutó nuevamente.")
+        return redirect(operation.success_url)
     if not has_recent_reauth(request, "cards_manage"):
-        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={reverse('vault:card_detail', args=[pk])}")
+        return redirect(reauthentication_url(operation))
+    return execute_operation(request, operation.public_id)
+
+
+def execute_pending_card_deactivate(request, operation):
+    if request.user.vault_profile.role != UserProfile.LEADER or operation.target_type != "card":
+        raise PermissionDenied
     with transaction.atomic():
-        card = get_object_or_404(PaymentCard.objects.select_for_update(), pk=pk, active=True)
+        card = get_object_or_404(PaymentCard.objects.select_for_update(), pk=operation.target_id)
+        if not card.active:
+            messages.info(request, "La tarjeta ya se encontraba inactiva.")
+            return redirect(operation.success_url)
         card.active = False
         card.updated_by = request.user
         card.save(update_fields=["active", "updated_by", "updated_at"])
-        audit(request, "DEACTIVATE", card, reason="Desactivación lógica")
+        audit(
+            request,
+            "DEACTIVATE",
+            card,
+            reason=operation.reason,
+            metadata={"operation_id": str(operation.public_id)},
+        )
     messages.success(request, f"Tarjeta •••• {card.last4} desactivada.")
-    return redirect("vault:card_list")
+    return redirect(operation.success_url)
 
 
 @never_cache

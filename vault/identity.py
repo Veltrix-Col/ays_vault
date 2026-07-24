@@ -185,7 +185,7 @@ def grant_reauthentication(request, purpose):
     return grant
 
 
-def reset_user_mfa(request, target_user, reason):
+def reset_user_mfa(request, target_user, reason, operation_id=None):
     with transaction.atomic():
         TOTPDevice.objects.filter(user=target_user).delete()
         MFARecoveryCode.objects.filter(user=target_user).delete()
@@ -199,5 +199,8 @@ def reset_user_mfa(request, target_user, reason):
         profile.mfa_failed_attempts = 0
         profile.mfa_changed_at = timezone.now()
         profile.save(update_fields=["mfa_status", "mfa_enabled", "mfa_failed_attempts", "mfa_changed_at"])
-    event = audit(request, "MFA_RESET", reason=reason, metadata={"target_user_id": target_user.pk})
+    metadata = {"target_user_id": target_user.pk}
+    if operation_id:
+        metadata["operation_id"] = str(operation_id)
+    event = audit(request, "MFA_RESET", reason=reason, metadata=metadata)
     create_alert(request, event, "MFA_RESET", "HIGH", target_user, description="MFA reiniciado administrativamente.")

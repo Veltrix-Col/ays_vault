@@ -1,4 +1,20 @@
 document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("form[data-single-submit]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (form.dataset.submitted === "true") {
+        event.preventDefault();
+        return;
+      }
+      form.dataset.submitted = "true";
+      window.setTimeout(() => {
+        form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach((control) => {
+          control.disabled = true;
+          control.setAttribute("aria-busy", "true");
+        });
+      }, 0);
+    });
+  });
+
   const sidebar = document.querySelector("#app-sidebar");
   const openButton = document.querySelector("[data-sidebar-open]");
   const closeButtons = document.querySelectorAll("[data-sidebar-close]");

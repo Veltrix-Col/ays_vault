@@ -16,7 +16,15 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .decorators import role_required
 from .forms import ReasonForm, ReauthenticationForm
 from .identity import create_alert, current_secure_session, generate_recovery_codes, grant_reauthentication, has_recent_reauth, invalidate_authorizations, reset_user_mfa, revoke_session, role_home_name, verify_totp
-from .models import AlertTransition, ReauthenticationGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
+from .models import AlertTransition, PendingSensitiveOperation, ReauthenticationGrant, SecureSession, SecurityAlert, UserDevice, UserProfile
+from .sensitive_operations import (
+    PendingOperationError,
+    execute_operation,
+    new_operation_id,
+    operation_for_reauthentication,
+    prepare_operation,
+    reauthentication_url,
+)
 from .security import audit
 from .security import session_hash
 from .crypto import encrypt
@@ -38,16 +46,40 @@ def reauthenticate(request):
     purpose = request.POST.get("purpose") or request.GET.get("purpose")
     if purpose not in PURPOSES:
         return HttpResponseBadRequest("Finalidad inválida")
+    operation_token = request.POST.get("operation") or request.GET.get("operation")
+    pending_operation = None
+    if operation_token:
+        pending_operation = operation_for_reauthentication(request, operation_token, purpose)
+        if not pending_operation:
+            messages.error(request, "La operación pendiente no existe, expiró o pertenece a otra sesión.")
+            return redirect(role_home_name(request.user))
+        if pending_operation.status == PendingSensitiveOperation.COMPLETED:
+            messages.info(request, "La operación ya había sido completada; no se ejecutó nuevamente.")
+            return redirect(pending_operation.success_url)
+        if pending_operation.expires_at < timezone.now():
+            messages.error(request, "La operación pendiente expiró. Iníciela nuevamente.")
+            return redirect(pending_operation.success_url)
     form = ReauthenticationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         if request.user.check_password(form.cleaned_data["password"]) and verify_totp(request.user, form.cleaned_data["token"]):
             grant_reauthentication(request, purpose)
             audit(request, "REAUTH_SUCCESS", reason=purpose)
+            if pending_operation:
+                try:
+                    return execute_operation(request, operation_token)
+                except PendingOperationError as exc:
+                    messages.error(request, str(exc))
+                    return redirect(pending_operation.success_url)
             return redirect(_safe_next(request))
         event = audit(request, "REAUTH_FAILED", reason=purpose, result="FAILED", risk_level="HIGH")
         create_alert(request, event, "REAUTH_FAILED", "HIGH", request.user, current_secure_session(request).device, "Reautenticación fallida.")
         form.add_error(None, "No fue posible reautenticar la operación.")
-    return render(request, "vault/security/reauthenticate.html", {"form": form, "purpose": purpose, "next": _safe_next(request)})
+    return render(request, "vault/security/reauthenticate.html", {
+        "form": form,
+        "purpose": purpose,
+        "next": _safe_next(request),
+        "operation": operation_token or "",
+    })
 
 
 @role_required(UserProfile.ADMIN)
@@ -176,14 +208,43 @@ def admin_device_unblock(request, pk):
 def admin_mfa_reset(request, user_id):
     target = get_object_or_404(get_user_model(), pk=user_id)
     form = ReasonForm(request.POST or None)
+    operation_id = request.POST.get("operation_id") or new_operation_id()
     if request.method == "POST":
-        if not has_recent_reauth(request, "identity_admin"):
-            return redirect(f"{reverse('vault:reauthenticate')}?purpose=identity_admin&next={request.path}")
         if form.is_valid():
-            reset_user_mfa(request, target, form.cleaned_data["reason"])
-            messages.success(request, "MFA reiniciado y sesiones revocadas.")
-            return redirect("vault:dashboard")
-    return render(request, "vault/security/admin_mfa_reset.html", {"target": target, "form": form})
+            try:
+                operation = prepare_operation(
+                    request,
+                    operation_id=operation_id,
+                    action="MFA_RESET",
+                    purpose="identity_admin",
+                    target_type="user",
+                    target_id=target.pk,
+                    reason=form.cleaned_data["reason"],
+                    success_url=reverse("vault:identity_users"),
+                )
+            except PendingOperationError as exc:
+                form.add_error(None, str(exc))
+            else:
+                if operation.status == PendingSensitiveOperation.COMPLETED:
+                    messages.info(request, "El reinicio de MFA ya había sido completado; no se ejecutó nuevamente.")
+                    return redirect(operation.success_url)
+                if has_recent_reauth(request, "identity_admin"):
+                    return execute_operation(request, operation.public_id)
+                return redirect(reauthentication_url(operation))
+    return render(request, "vault/security/admin_mfa_reset.html", {
+        "target": target,
+        "form": form,
+        "operation_id": operation_id,
+    })
+
+
+def execute_pending_mfa_reset(request, operation):
+    if request.user.vault_profile.role != UserProfile.ADMIN or operation.target_type != "user":
+        raise PermissionDenied
+    target = get_object_or_404(get_user_model().objects.select_for_update(), pk=operation.target_id)
+    reset_user_mfa(request, target, operation.reason, operation_id=operation.public_id)
+    messages.success(request, "MFA reiniciado y sesiones revocadas.")
+    return redirect(operation.success_url)
 
 
 @login_required
