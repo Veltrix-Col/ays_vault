@@ -40,7 +40,15 @@ WSGI_APPLICATION='config.wsgi.application'
 DB_ENGINE=os.getenv('DB_ENGINE','sqlite').lower()
 if DB_ENGINE in {'postgres','postgresql'}:
     DATABASES={'default':{'ENGINE':'django.db.backends.postgresql','NAME':os.getenv('DB_NAME','ays_vault'),'USER':os.getenv('DB_USER','ays_vault'),'PASSWORD':os.getenv('DB_PASSWORD',''),'HOST':os.getenv('DB_HOST','localhost'),'PORT':os.getenv('DB_PORT','5432')}}
-else: DATABASES={'default':{'ENGINE':'django.db.backends.sqlite3','NAME':BASE_DIR/'db.sqlite3'}}
+else:
+    # SQLite se usa solo en desarrollo. IMMEDIATE evita que dos escrituras
+    # críticas intenten ascender simultáneamente desde una transacción diferida;
+    # el timeout permite que el segundo escritor espere el commit del primero.
+    DATABASES={'default':{
+        'ENGINE':'django.db.backends.sqlite3',
+        'NAME':BASE_DIR/'db.sqlite3',
+        'OPTIONS':{'timeout':20,'transaction_mode':'IMMEDIATE'},
+    }}
 AUTH_PASSWORD_VALIDATORS=[{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator','OPTIONS':{'min_length':10}},{'NAME':'django.contrib.auth.password_validation.CommonPasswordValidator'},{'NAME':'django.contrib.auth.password_validation.NumericPasswordValidator'}]
 LANGUAGE_CODE='es-co'; TIME_ZONE='America/Bogota'; USE_I18N=True; USE_TZ=True
 STATIC_URL='/static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; STATICFILES_DIRS=[BASE_DIR/'static']

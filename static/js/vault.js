@@ -15,6 +15,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  document.querySelectorAll("[data-protected-edit-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = document.getElementById(button.dataset.protectedEditToggle);
+      if (!target) return;
+      const opening = target.hidden;
+      target.hidden = !opening;
+      button.setAttribute("aria-expanded", String(opening));
+      button.textContent = opening ? "Cancelar cambio" : "Modificar";
+      const input = target.querySelector("input");
+      if (opening) input?.focus();
+      else if (input) input.value = "";
+    });
+  });
+
   const sidebar = document.querySelector("#app-sidebar");
   const openButton = document.querySelector("[data-sidebar-open]");
   const closeButtons = document.querySelectorAll("[data-sidebar-close]");
@@ -119,6 +133,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const timers = new Map();
     let pendingAction = null;
     let opener = null;
+    const protectedHeaders = {
+      "X-CSRFToken": csrf,
+      "X-Requested-With": "XMLHttpRequest",
+      "Accept": "application/json, text/html;q=0.9, text/plain;q=0.8",
+    };
+    const statusMessages = {
+      401: "La sesión segura terminó. Ingrese nuevamente para continuar.",
+      403: "No tiene autorización para realizar esta operación.",
+      404: "El dato o la tarjeta ya no están disponibles.",
+      409: "La autorización expiró o ya fue utilizada. Inicie nuevamente la operación.",
+      422: "Revise la información suministrada e intente nuevamente.",
+    };
 
     const showStatus = (message, kind = "success") => {
       actionStatus.textContent = message; actionStatus.className = `toast inline-action-status ${kind}`; actionStatus.hidden = false;
@@ -140,19 +166,77 @@ document.addEventListener("DOMContentLoaded", () => {
       modalTitle.textContent = stage === "context" ? "Contexto de la operación" : "Confirme su identidad";
       modalContent.querySelector("input:not([type=hidden]), button")?.focus();
     };
+    const renderModalError = (message) => {
+      const error = document.createElement("p");
+      error.className = "form-error";
+      error.setAttribute("role", "alert");
+      error.textContent = message;
+      modalContent.replaceChildren(error);
+      error.focus?.();
+    };
+    const safeErrorMessage = async (response) => {
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        try {
+          const payload = await response.json();
+          if (typeof payload.message === "string" && payload.message.trim()) return payload.message;
+        } catch (_) { /* El cuerpo inválido nunca se presenta al usuario. */ }
+      }
+      return statusMessages[response.status] || "No fue posible completar la operación protegida.";
+    };
+    const authenticationRequired = (response) => (
+      response.status === 401
+      || response.headers.get("X-Vault-Auth-Required") === "1"
+      || (response.redirected && new URL(response.url).pathname.startsWith("/login/"))
+    );
+    const handleAuthenticationRequired = async (response) => {
+      if (!authenticationRequired(response)) return false;
+      const message = response.status === 401
+        ? await safeErrorMessage(response)
+        : statusMessages[401];
+      closeModal();
+      showStatus(message, "error");
+      window.setTimeout(() => { window.location.assign("/login/"); }, 1200);
+      return true;
+    };
     const confirmCopy = async (token, result) => {
       const data = new FormData(); data.append("copy_token", token); data.append("result", result);
-      return fetch(protectedMeta.dataset.copyUrl, { method: "POST", body: data, headers: { "X-CSRFToken": csrf }, cache: "no-store" });
+      return fetch(protectedMeta.dataset.copyUrl, { method: "POST", body: data, headers: protectedHeaders, cache: "no-store" });
     };
     const executeProtected = async (field, action, button) => {
       button?.setAttribute("aria-busy", "true"); if (button) button.disabled = true;
       const data = new FormData(); data.append("field", field); data.append("action", action);
       try {
-        const response = await fetch(protectedMeta.dataset.actionUrl, { method: "POST", body: data, headers: { "X-CSRFToken": csrf }, cache: "no-store" });
+        const response = await fetch(protectedMeta.dataset.actionUrl, { method: "POST", body: data, headers: protectedHeaders, cache: "no-store" });
+        if (await handleAuthenticationRequired(response)) return;
         if (response.status === 428) {
-          const payload = await response.json(); pendingAction = { field, action, button }; openModal(payload.form_html, button, payload.stage); return;
+          const contentType = response.headers.get("content-type") || "";
+          if (!contentType.includes("application/json")) {
+            showStatus("No fue posible iniciar la autorización protegida.", "error");
+            return;
+          }
+          const payload = await response.json();
+          if (!payload.authorization_required || typeof payload.form_html !== "string" || !["identity", "context"].includes(payload.stage)) {
+            showStatus("La respuesta de autorización no es válida.", "error");
+            return;
+          }
+          pendingAction = { field, action, button };
+          openModal(payload.form_html, button, payload.stage);
+          return;
         }
-        if (!response.ok) { showStatus("No fue posible completar la operación protegida.", "error"); return; }
+        if (!response.ok) {
+          showStatus(await safeErrorMessage(response), "error");
+          return;
+        }
+        const contentType = response.headers.get("content-type") || "";
+        if (
+          !contentType.includes("text/plain")
+          || response.headers.get("X-Vault-Field") !== field
+          || response.headers.get("X-Vault-Action") !== action
+        ) {
+          showStatus("La respuesta protegida no tiene el formato esperado.", "error");
+          return;
+        }
         let protectedValue = await response.text();
         const token = response.headers.get("X-Vault-Copy-Token");
         if (action === "copy") {
@@ -161,7 +245,11 @@ document.addEventListener("DOMContentLoaded", () => {
           finally {
             protectedValue = "";
             const audited = await confirmCopy(token, result);
-            showStatus(audited.ok && result === "success" ? "Dato copiado correctamente." : "No fue posible confirmar la copia.", audited.ok ? "success" : "error");
+            if (await handleAuthenticationRequired(audited)) return;
+            showStatus(
+              audited.ok && result === "success" ? "Dato copiado correctamente." : await safeErrorMessage(audited),
+              audited.ok ? "success" : "error",
+            );
           }
           return;
         }
@@ -182,18 +270,34 @@ document.addEventListener("DOMContentLoaded", () => {
       event.preventDefault();
       const form = event.target; const submit = form.querySelector("[type=submit]"); submit.disabled = true; submit.setAttribute("aria-busy", "true");
       try {
-        const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { "X-CSRFToken": csrf }, cache: "no-store" });
+        const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: protectedHeaders, cache: "no-store" });
+        if (await handleAuthenticationRequired(response)) return;
         const contentType = response.headers.get("content-type") || "";
         if (form.matches("[data-protected-identity]")) {
-          modalContent.innerHTML = await response.text();
-          if (response.ok) { modalTitle.textContent = "Contexto de la operación"; modalContent.querySelector("input:not([type=hidden])")?.focus(); }
+          if (contentType.includes("text/html") && [200, 422].includes(response.status)) {
+            modalContent.innerHTML = await response.text();
+            if (response.ok) {
+              modalTitle.textContent = "Contexto de la operación";
+              modalContent.querySelector("input:not([type=hidden])")?.focus();
+            }
+          } else {
+            renderModalError(await safeErrorMessage(response));
+          }
           return;
         }
-        if (!response.ok || !contentType.includes("application/json")) { modalContent.innerHTML = await response.text(); modalContent.querySelector("input:not([type=hidden])")?.focus(); return; }
+        if (response.status === 422 && contentType.includes("text/html")) {
+          modalContent.innerHTML = await response.text();
+          modalContent.querySelector("input:not([type=hidden])")?.focus();
+          return;
+        }
+        if (!response.ok || !contentType.includes("application/json")) {
+          renderModalError(await safeErrorMessage(response));
+          return;
+        }
         const payload = await response.json();
         if (payload.ok && pendingAction) { const action = pendingAction; closeModal(); pendingAction = null; await executeProtected(action.field, action.action, action.button); }
       } catch (error) {
-        modalContent.innerHTML = '<p class="form-error" role="alert">No fue posible validar la operación. Verifique la conexión e intente nuevamente.</p>';
+        renderModalError("No fue posible validar la operación. Verifique la conexión e intente nuevamente.");
       } finally { submit.disabled = false; submit.removeAttribute("aria-busy"); }
     });
     document.addEventListener("keydown", (event) => {

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import Client, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django_otp.oath import TOTP
@@ -232,7 +232,11 @@ class ControlCenterPermissionTests(TestCase):
     def test_alert_close_requires_comment_and_transition_is_audited(self):
         event = audit(None, "ACCESS", user=self.leader)
         alert = SecurityAlert.objects.create(event=event, affected_user=self.leader, alert_type="TEST")
-        client = self.login(self.admin); grant_reauthentication(type("R", (), {"user": self.admin, "session": client.session})(), "alerts_manage")
+        client = self.login(self.admin)
+        request = RequestFactory().post(reverse("vault:alert_detail", args=[alert.pk]))
+        request.user = self.admin
+        request.session = client.session
+        grant_reauthentication(request, "alerts_manage")
         self.assertEqual(client.post(reverse("vault:alert_detail", args=[alert.pk]), {"status": "CLOSED", "review_note": ""}).status_code, 400)
         response = client.post(reverse("vault:alert_detail", args=[alert.pk]), {"status": "CLOSED", "review_note": "Caso validado y cerrado"})
         self.assertEqual(response.status_code, 302); self.assertTrue(AlertTransition.objects.filter(alert=alert, to_status="CLOSED").exists()); self.assertTrue(AuditEvent.objects.filter(action="ALERT_CLOSED").exists())

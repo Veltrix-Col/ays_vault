@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 from django_otp.oath import TOTP
@@ -252,3 +253,28 @@ class PendingSensitiveOperationTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_card_and_protected_templates_compile_without_legacy_operation_tag(self):
+        from .templatetags.vault_ui import register
+
+        self.assertNotIn("sensitive_operation_id", register.tags)
+        for template_name in (
+            "vault/card_list.html",
+            "vault/_card_results.html",
+            "vault/card_detail.html",
+            "vault/card_form.html",
+            "vault/security/_protected_identity.html",
+            "vault/security/_operation_context.html",
+            "vault/security/reauthenticate.html",
+            "vault/security/admin_mfa_reset.html",
+        ):
+            self.assertIsNotNone(get_template(template_name), template_name)
+
+        self.login_user(self.leader)
+        response = self.client.get(reverse("vault:card_detail", args=[self.card.pk]))
+        self.assertEqual(response.status_code, 200)
+        operation_id = re.search(
+            r'name="operation_id" value="([^"]+)"',
+            response.content.decode(),
+        ).group(1)
+        self.assertEqual(str(uuid.UUID(operation_id)), operation_id)

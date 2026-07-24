@@ -174,13 +174,28 @@ def current_secure_session(request):
 
 
 def has_recent_reauth(request, purpose):
-    return ReauthenticationGrant.objects.filter(user=request.user, session_hash=session_hash(request), purpose=purpose, invalidated_at__isnull=True, expires_at__gte=timezone.now()).exists()
+    from .protected_operations import create_operation_window, current_operation_window
+
+    if current_operation_window(request):
+        return True
+    legacy_grant = ReauthenticationGrant.objects.filter(
+        user=request.user,
+        session_hash=session_hash(request),
+        purpose=purpose,
+        invalidated_at__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).exists()
+    return bool(legacy_grant and create_operation_window(request))
 
 
 def grant_reauthentication(request, purpose):
+    from .protected_operations import create_operation_window
+
     now = timezone.now()
+    window = create_operation_window(request)
+    expires_at = window.expires_at if window else now + timedelta(minutes=15)
     ReauthenticationGrant.objects.filter(user=request.user, session_hash=session_hash(request), purpose=purpose, invalidated_at__isnull=True).update(invalidated_at=now)
-    grant = ReauthenticationGrant.objects.create(user=request.user, session_hash=session_hash(request), purpose=purpose, expires_at=now + timedelta(minutes=get_policy().reauthentication_minutes))
+    grant = ReauthenticationGrant.objects.create(user=request.user, session_hash=session_hash(request), purpose=purpose, expires_at=expires_at)
     SecureSession.objects.filter(user=request.user, session_hash=session_hash(request)).update(last_reauthenticated_at=now)
     return grant
 

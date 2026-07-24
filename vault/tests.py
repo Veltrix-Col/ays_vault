@@ -201,7 +201,7 @@ class VaultIdentitySecurityTests(TestCase):
         url = reverse("vault:copy_event", args=[self.card.pk])
         token = reveal.headers["X-Vault-Copy-Token"]
         self.assertEqual(self.client.post(url, {"copy_token": token, "result": "success"}).status_code, 200)
-        self.assertEqual(self.client.post(url, {"copy_token": token, "result": "success"}).status_code, 403)
+        self.assertEqual(self.client.post(url, {"copy_token": token, "result": "success"}).status_code, 409)
         event = AuditEvent.objects.filter(action="COPY").latest("sequence")
         self.assertNotIn(PAN, event.reason + str(event.metadata))
 

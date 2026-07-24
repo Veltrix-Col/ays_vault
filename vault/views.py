@@ -4,14 +4,14 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import connection, transaction
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse
 from django.template.loader import render_to_string
 
 from .decorators import role_required
@@ -37,6 +37,7 @@ from .sensitive_operations import (
     execute_operation,
     new_operation_id,
     prepare_operation,
+    protected_payload,
     reauthentication_url,
 )
 
@@ -74,6 +75,40 @@ def _cards_for_operator(request):
     return cards
 
 
+def _pending_form_payload(post):
+    """Serialize POST fields for encrypted, short-lived pending storage."""
+    excluded = {"csrfmiddlewaretoken", "operation_id"}
+    return {key: post.getlist(key) for key in post.keys() if key not in excluded}
+
+
+def _pending_form_data(operation):
+    data = QueryDict("", mutable=True)
+    for key, values in protected_payload(operation).items():
+        if isinstance(values, list):
+            data.setlist(key, [str(value) for value in values])
+        else:
+            data[key] = str(values)
+    return data
+
+
+def _scrub_protected_form_values(form):
+    """Never echo protected card values back into HTML after validation."""
+    if form.is_bound:
+        safe_data = form.data.copy()
+        for field_name in ("pan", "expiry", "company"):
+            if field_name in safe_data:
+                safe_data[field_name] = ""
+        form.data = safe_data
+    return form
+
+
+def _protected_error(status, error_code, message):
+    return JsonResponse(
+        {"ok": False, "error_code": error_code, "message": message},
+        status=status,
+    )
+
+
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def card_list(request):
     gate = _enforce_schedule(request, "VIEW")
@@ -85,7 +120,7 @@ def card_list(request):
     if search_form.is_valid():
         query = search_form.cleaned_data["q"]
         if query:
-            filters = Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
+            filters = Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(purpose__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
             if query.isdigit():
                 filters |= Q(pk=int(query))
             if query.casefold() in {"activa", "activo"}:
@@ -104,33 +139,114 @@ def card_list(request):
 
 @role_required(UserProfile.LEADER)
 def card_create(request):
-    _enforce_schedule(request, "CREATE")
-    if not has_recent_reauth(request, "cards_manage"):
-        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
+    gate = _enforce_schedule(request, "CREATE")
+    if hasattr(gate, "status_code"):
+        return gate
     form = CardForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        with transaction.atomic():
-            card = form.save(user=request.user)
-            audit(request, "CREATE", card, reason="Registro de tarjeta", metadata={"fields": ["client_name", "cardholder_name", "brand", "purpose", "pan", "expiry", "company"]})
-        messages.success(request, f"Tarjeta •••• {card.last4} registrada y cifrada.")
-        return redirect("vault:card_detail", card.pk)
-    return render(request, "vault/card_form.html", {"form": form, "title": "Nueva tarjeta"})
+        try:
+            operation = prepare_operation(
+                request,
+                operation_id=request.POST.get("operation_id") or new_operation_id(),
+                action="CARD_CREATE",
+                purpose="cards_manage",
+                target_type="card_new",
+                target_id=0,
+                reason="Creación de tarjeta",
+                success_url=reverse("vault:card_list"),
+                protected_payload=_pending_form_payload(request.POST),
+            )
+            if not has_recent_reauth(request, "cards_manage"):
+                return redirect(reauthentication_url(operation))
+            return execute_operation(request, operation.public_id)
+        except PendingOperationError as exc:
+            messages.error(request, str(exc))
+            return redirect("vault:card_create")
+    if request.method == "POST":
+        _scrub_protected_form_values(form)
+    return render(request, "vault/card_form.html", {
+        "form": form,
+        "title": "Nueva tarjeta",
+        "operation_id": request.POST.get("operation_id") or new_operation_id(),
+    })
 
 
 @role_required(UserProfile.LEADER)
 def card_edit(request, pk):
-    _enforce_schedule(request, "UPDATE")
-    if not has_recent_reauth(request, "cards_manage"):
-        return redirect(f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={request.path}")
+    gate = _enforce_schedule(request, "UPDATE")
+    if hasattr(gate, "status_code"):
+        return gate
     card = get_object_or_404(PaymentCard, pk=pk)
     form = CardEditForm(request.POST or None, instance=card)
     if request.method == "POST" and form.is_valid():
-        with transaction.atomic():
-            card = form.save(user=request.user)
-            audit(request, "UPDATE", card, reason="Actualización de tarjeta", metadata={"changed_fields": list(form.changed_data)})
-        messages.success(request, f"Tarjeta •••• {card.last4} actualizada.")
-        return redirect("vault:card_detail", card.pk)
-    return render(request, "vault/card_form.html", {"form": form, "title": "Editar tarjeta"})
+        try:
+            operation = prepare_operation(
+                request,
+                operation_id=request.POST.get("operation_id") or new_operation_id(),
+                action="CARD_EDIT",
+                purpose="cards_manage",
+                target_type="card",
+                target_id=card.pk,
+                reason="Actualización de tarjeta",
+                success_url=reverse("vault:card_detail", args=[card.pk]),
+                protected_payload=_pending_form_payload(request.POST),
+            )
+            if not has_recent_reauth(request, "cards_manage"):
+                return redirect(reauthentication_url(operation))
+            return execute_operation(request, operation.public_id)
+        except PendingOperationError as exc:
+            messages.error(request, str(exc))
+            return redirect("vault:card_edit", pk=card.pk)
+    if request.method == "POST":
+        _scrub_protected_form_values(form)
+    return render(request, "vault/card_form.html", {
+        "form": form,
+        "title": "Editar tarjeta",
+        "operation_id": request.POST.get("operation_id") or new_operation_id(),
+    })
+
+
+def execute_pending_card_create(request, operation):
+    if request.user.vault_profile.role != UserProfile.LEADER or operation.target_type != "card_new":
+        raise PermissionDenied
+    form = CardForm(_pending_form_data(operation))
+    if not form.is_valid():
+        raise PendingOperationError("Los datos pendientes ya no son válidos. Diligencie nuevamente el formulario.")
+    card = form.save(user=request.user)
+    audit(
+        request,
+        "CREATE",
+        card,
+        reason=operation.reason,
+        metadata={
+            "fields": ["client_name", "cardholder_name", "brand", "purpose", "pan", "expiry", "company"],
+            "operation_id": str(operation.public_id),
+        },
+    )
+    operation.success_url = reverse("vault:card_detail", args=[card.pk])
+    operation.save(update_fields=["success_url"])
+    messages.success(request, f"Tarjeta •••• {card.last4} registrada y cifrada.")
+    return redirect(operation.success_url)
+
+
+def execute_pending_card_edit(request, operation):
+    if request.user.vault_profile.role != UserProfile.LEADER or operation.target_type != "card":
+        raise PermissionDenied
+    card = get_object_or_404(PaymentCard.objects.select_for_update(), pk=operation.target_id)
+    form = CardEditForm(_pending_form_data(operation), instance=card)
+    if not form.is_valid():
+        raise PendingOperationError("Los datos pendientes ya no son válidos. Diligencie nuevamente el formulario.")
+    changed_fields = list(form.changed_data)
+    card = form.save(user=request.user)
+    audit(
+        request,
+        "UPDATE",
+        card,
+        reason=operation.reason,
+        metadata={"changed_fields": changed_fields, "operation_id": str(operation.public_id)},
+    )
+    messages.success(request, f"Tarjeta •••• {card.last4} actualizada.")
+    return redirect(operation.success_url)
 
 
 @require_POST
@@ -196,6 +312,7 @@ def card_detail(request, pk):
         "card": card,
         "identity_window_active": bool(current_operation_window(request)),
         "operation_context_active": bool(current_operation_context(request, card)),
+        "deactivate_operation_id": new_operation_id(),
     })
 
 
@@ -204,10 +321,20 @@ def card_detail(request, pk):
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def reveal(request, pk):
     _enforce_schedule(request, "REVEAL")
-    card = get_object_or_404(PaymentCard, pk=pk, active=True)
+    card = PaymentCard.objects.filter(pk=pk, active=True).first()
+    if not card:
+        return _protected_error(
+            404,
+            "CARD_NOT_AVAILABLE",
+            "La tarjeta ya no está disponible para esta operación.",
+        )
     form = ProtectedActionForm(request.POST)
     if not form.is_valid():
-        return HttpResponseBadRequest("Acción protegida inválida.")
+        return _protected_error(
+            422,
+            "INVALID_PROTECTED_ACTION",
+            "La solicitud de revelado o copia no es válida.",
+        )
     field = form.cleaned_data["field"]
     action = form.cleaned_data["action"]
     context = current_operation_context(request, card)
@@ -225,9 +352,17 @@ def reveal(request, pk):
         value = {"company": card.get_company, "pan": card.get_pan, "expiry": card.get_expiry}[field]()
     except ValueError:
         audit(request, "REVEAL" if action == "reveal" else "COPY_ATTEMPT", card, field, result="FAILED", risk_level="HIGH", reason="No fue posible recuperar el dato protegido")
-        return HttpResponse("No fue posible recuperar el dato protegido.", status=503, content_type="text/plain")
+        return _protected_error(
+            422,
+            "PROTECTED_VALUE_UNAVAILABLE",
+            "No fue posible recuperar el dato protegido.",
+        )
     if field == "company" and not value:
-        return HttpResponse("La empresa no está configurada para esta tarjeta.", status=404, content_type="text/plain")
+        return _protected_error(
+            404,
+            "COMPANY_NOT_CONFIGURED",
+            "La empresa no está configurada para esta tarjeta.",
+        )
     token = create_reveal_grant(request, card, field, context)
     metadata = {
         "reference": context.internal_reference,
@@ -254,7 +389,11 @@ def protected_reauthenticate(request):
     intent_token = request.POST.get("intent", "")
     intent = get_intent(request, intent_token)
     if not intent or not _cards_for_operator(request).filter(pk=intent["card_id"], active=True).exists():
-        return HttpResponseBadRequest("La solicitud expiró. Inicie nuevamente la operación.")
+        return _protected_error(
+            409,
+            "PROTECTED_INTENT_EXPIRED",
+            "La solicitud expiró. Inicie nuevamente la operación.",
+        )
     form = ReauthenticationForm(request.POST)
     if form.is_valid() and request.user.check_password(form.cleaned_data["password"]) and verify_totp(request.user, form.cleaned_data["token"]):
         window = create_operation_window(request)
@@ -267,7 +406,7 @@ def protected_reauthenticate(request):
     secure_session = current_secure_session(request)
     create_alert(request, event, "REAUTH_FAILED", "HIGH", request.user, getattr(secure_session, "device", None), "Reautenticación fallida.")
     form.add_error(None, "No fue posible validar la identidad.")
-    return HttpResponse(render_to_string("vault/security/_protected_identity.html", {"form": form, "intent": intent_token}, request=request), status=400, content_type="text/html; charset=utf-8")
+    return HttpResponse(render_to_string("vault/security/_protected_identity.html", {"form": form, "intent": intent_token}, request=request), status=422, content_type="text/html; charset=utf-8")
 
 
 @never_cache
@@ -278,7 +417,11 @@ def protected_confirm(request):
     intent = get_intent(request, intent_token, require_identity=True)
     card = _cards_for_operator(request).filter(pk=intent["card_id"], active=True).first() if intent else None
     if not intent or not card:
-        return HttpResponseBadRequest("La solicitud expiró. Inicie nuevamente la operación.")
+        return _protected_error(
+            409,
+            "PROTECTED_INTENT_EXPIRED",
+            "La solicitud expiró. Inicie nuevamente la operación.",
+        )
     form = OperationContextForm(request.POST)
     if form.is_valid() and card.has_company:
         company = card.get_company().strip().casefold()
@@ -287,10 +430,14 @@ def protected_confirm(request):
             if company and company in supplied:
                 form.add_error(field_name, "No incluya datos protegidos en este campo.")
     if not form.is_valid():
-        return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": form, "intent": intent_token}, request=request), status=400, content_type="text/html; charset=utf-8")
+        return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": form, "intent": intent_token}, request=request), status=422, content_type="text/html; charset=utf-8")
     window = current_operation_window(request)
     if not window:
-        return HttpResponseBadRequest("La reautenticación expiró. Inicie nuevamente la operación.")
+        return _protected_error(
+            409,
+            "SENSITIVE_WINDOW_EXPIRED",
+            "La reautenticación expiró. Inicie nuevamente la operación.",
+        )
     context = create_operation_context(request, window, card, form.cleaned_data["reason"], form.cleaned_data["reference"])
     if not context:
         raise PermissionDenied
@@ -303,11 +450,21 @@ def protected_confirm(request):
 @role_required(UserProfile.LEADER, UserProfile.ANALYST)
 def copy_event(request, pk):
     _enforce_schedule(request, "COPY")
-    card = get_object_or_404(PaymentCard, pk=pk, active=True)
+    card = PaymentCard.objects.filter(pk=pk, active=True).first()
+    if not card:
+        return _protected_error(
+            404,
+            "CARD_NOT_AVAILABLE",
+            "La tarjeta ya no está disponible para esta operación.",
+        )
     grant = consume_copy_grant(request, card, request.POST.get("copy_token", ""))
     if not grant:
         audit(request, "COPY_ATTEMPT", card, result="DENIED", risk_level="HIGH", reason="Autorización de copia inválida o expirada")
-        return JsonResponse({"ok": False, "error": "Autorización inválida o expirada."}, status=403)
+        return _protected_error(
+            409,
+            "REVEAL_GRANT_EXPIRED",
+            "La autorización de copia ya fue utilizada o expiró.",
+        )
     result = "SUCCESS" if request.POST.get("result") == "success" else "FAILED"
     context = grant.operation_context
     audit(request, "COPY", card, grant.field_name, context.reason, metadata={

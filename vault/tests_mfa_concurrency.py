@@ -3,7 +3,7 @@ import time
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.db import connection, transaction
+from django.db import close_old_connections, connection, connections, transaction
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_otp.oath import TOTP
@@ -19,6 +19,7 @@ from .models import (
     UserProfile,
 )
 from .notifications import _audit_alert_delivery
+from .security import audit, verify_audit_chain
 from .tasks import run_async
 
 
@@ -146,3 +147,49 @@ class MFASQLiteConcurrencyTests(TransactionTestCase):
         self.assertEqual(replacement_alerts.count(), 1)
         self.assertEqual(NotificationRecord.objects.filter(alert=replacement_alerts.get()).count(), 1)
         self.assertTrue(AuditEvent.objects.filter(user=self.user, action="EMAIL_SENT").exists())
+
+    def test_sqlite_serializes_concurrent_audit_writers_without_lock_errors(self):
+        if connection.vendor != "sqlite":
+            self.skipTest("Endurecimiento específico del entorno SQLite de desarrollo")
+
+        barrier = threading.Barrier(3)
+        errors = []
+
+        def write_event(index):
+            close_old_connections()
+            try:
+                user = get_user_model().objects.get(pk=self.user.pk)
+                barrier.wait(timeout=2)
+                audit(None, "ACCESS", user=user, metadata={"writer": index})
+            except Exception as exc:  # La aserción conserva el error real.
+                errors.append(exc)
+            finally:
+                connections.close_all()
+
+        threads = [
+            threading.Thread(target=write_event, args=(index,))
+            for index in (1, 2)
+        ]
+        for thread in threads:
+            thread.start()
+        barrier.wait(timeout=2)
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(errors, errors)
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                user=self.user,
+                action="ACCESS",
+                metadata__writer__in=[1, 2],
+            ).count(),
+            2,
+        )
+        self.assertTrue(verify_audit_chain()[0])
+
+    def test_sqlite_uses_immediate_transactions_and_bounded_wait(self):
+        if connection.vendor != "sqlite":
+            self.skipTest("Configuración específica del entorno SQLite")
+        options = connection.settings_dict["OPTIONS"]
+        self.assertEqual(options["transaction_mode"], "IMMEDIATE")
+        self.assertGreaterEqual(options["timeout"], 10)

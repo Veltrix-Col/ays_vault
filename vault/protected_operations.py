@@ -74,23 +74,23 @@ def clear_intent(request):
     request.session.modified = True
 
 
-def _operator_is_eligible(request):
+def _session_is_eligible(request):
     profile = getattr(request.user, "vault_profile", None)
     if not request.user.is_active or not profile or not profile.active:
         return False
-    if profile.role not in {UserProfile.LEADER, UserProfile.ANALYST}:
+    if profile.role not in {UserProfile.ADMIN, UserProfile.LEADER, UserProfile.ANALYST}:
         return False
     record = SecureSession.objects.select_related("device").filter(
         user=request.user,
         session_hash=session_hash(request),
         status=SecureSession.ACTIVE,
-        expires_at__gte=timezone.now(),
+        expires_at__gt=timezone.now(),
     ).first()
     return bool(record and (not record.device_id or record.device.status != UserDevice.BLOCKED))
 
 
 def current_operation_window(request):
-    if not _operator_is_eligible(request):
+    if not _session_is_eligible(request):
         return None
     now = timezone.now()
     session_identifier = session_hash(request)
@@ -98,7 +98,7 @@ def current_operation_window(request):
         user=request.user,
         session_hash=session_identifier,
         revoked_at__isnull=True,
-        expires_at__lt=now,
+        expires_at__lte=now,
     )
     expired_ids = list(expired.values_list("pk", flat=True))
     expired_count = expired.update(revoked_at=now, revocation_reason="Expiración fija de 15 minutos")
@@ -111,16 +111,19 @@ def current_operation_window(request):
     return SensitiveOperationWindow.objects.filter(
         user=request.user,
         session_hash=session_identifier,
-        purpose="protected_data",
+        purpose__in=["protected_data", "sensitive_operations"],
         revoked_at__isnull=True,
-        expires_at__gte=now,
+        expires_at__gt=now,
     ).order_by("-created_at").first()
 
 
 def create_operation_window(request):
-    """Crea una ventana fija de identidad; nunca almacena justificación operativa."""
-    if not _operator_is_eligible(request):
+    """Obtiene o crea una ventana fija de 15 minutos; nunca extiende una vigente."""
+    if not _session_is_eligible(request):
         return None
+    current = current_operation_window(request)
+    if current:
+        return current
     now = timezone.now()
     identifier = session_hash(request)
     with transaction.atomic():
@@ -139,7 +142,7 @@ def create_operation_window(request):
         window = SensitiveOperationWindow.objects.create(
             user=request.user,
             session_hash=identifier,
-            purpose="protected_data",
+            purpose="sensitive_operations",
             expires_at=now + timedelta(minutes=WINDOW_TTL_MINUTES),
         )
         audit(
@@ -160,7 +163,7 @@ def current_operation_context(request, card):
         user=request.user,
         session_hash=session_hash(request),
         closed_at__isnull=True,
-        expires_at__lt=now,
+        expires_at__lte=now,
     ).update(closed_at=now, close_reason="Expiración del contexto")
     return ProtectedOperationContext.objects.filter(
         identity_window=window,
@@ -168,13 +171,13 @@ def current_operation_context(request, card):
         session_hash=session_hash(request),
         card=card,
         closed_at__isnull=True,
-        expires_at__gte=now,
+        expires_at__gt=now,
     ).order_by("-created_at").first()
 
 
 def create_operation_context(request, window, card, reason, internal_reference):
     """Crea una justificación para una tarjeta y sustituye cualquier contexto anterior."""
-    if not _operator_is_eligible(request):
+    if not _session_is_eligible(request):
         return None
     now = timezone.now()
     identifier = session_hash(request)
@@ -183,9 +186,9 @@ def create_operation_context(request, window, card, reason, internal_reference):
             pk=window.pk,
             user=request.user,
             session_hash=identifier,
-            purpose="protected_data",
+            purpose__in=["protected_data", "sensitive_operations"],
             revoked_at__isnull=True,
-            expires_at__gte=now,
+            expires_at__gt=now,
         ).first()
         if not locked_window:
             return None

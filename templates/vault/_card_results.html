@@ -1,1 +1,61 @@
-<section class="panel table-panel"><div class="panel-head"><div><h2>Resultados</h2><p>{% if query %}Coincidencias seguras para “{{ query }}”.{% else %}Seleccione una tarjeta para consultar su detalle protegido.{% endif %}</p></div><span class="result-count">{{ page.paginator.count }} tarjeta{{ page.paginator.count|pluralize }}</span></div><div class="table-wrap"><table class="table responsive-table"><thead><tr><th>Referencia</th><th>Alias</th><th>Franquicia</th><th>Tarjeta</th><th>Titular</th><th>Estado</th><th>Acción</th></tr></thead><tbody>{% for c in cards %}<tr><td data-label="Referencia">#{{ c.pk }}</td><td data-label="Alias"><b>{{ c.client_name }}</b></td><td data-label="Franquicia">{{ c.get_brand_display }}</td><td data-label="Tarjeta">{{ c.masked_pan }}</td><td data-label="Titular">{{ c.cardholder_name }}</td><td data-label="Estado">{% if c.active %}<span class="badge success">Activa</span>{% else %}<span class="badge">Inactiva</span>{% endif %}</td><td data-label="Acción"><a class="row-link" href="{% url 'vault:card_detail' c.pk %}" aria-label="Abrir detalle de {{ c.client_name }}">→</a></td></tr>{% empty %}<tr><td colspan="7"><div class="empty-state compact"><strong>Sin resultados</strong><span>Pruebe otra referencia, alias, franquicia o los últimos cuatro dígitos.</span></div></td></tr>{% endfor %}</tbody></table></div>{% if page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="Páginas de la Bóveda">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&amp;page={{ page.previous_page_number }}" data-search-page>Anterior</a>{% endif %}<span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?q={{ query|urlencode }}&amp;page={{ page.next_page_number }}" data-search-page>Siguiente</a>{% endif %}</nav>{% endif %}</section>
+<section class="panel table-panel vault-results" aria-labelledby="vault-results-title">
+  <div class="panel-head">
+    <div>
+      <h2 id="vault-results-title">Resultados</h2>
+      <p>{% if query %}Coincidencias seguras para “{{ query }}”.{% else %}Seleccione una tarjeta para consultar su detalle protegido.{% endif %}</p>
+    </div>
+    <span class="result-count">{{ page.paginator.count }} tarjeta{{ page.paginator.count|pluralize }}</span>
+  </div>
+  {% if cards %}
+    <div class="table-wrap vault-results-wrap">
+      <table class="table vault-results-table">
+        <thead>
+          <tr>
+            <th>Emp.</th>
+            <th>Titular</th>
+            <th>Referencia</th>
+            <th>Alias</th>
+            <th>Franquicia</th>
+            <th>Terminación</th>
+            <th>Estado</th>
+            <th>Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in cards %}
+            <tr>
+              <td data-label="Emp."><span class="cell-truncate" title="{% if c.has_company %}Empresa protegida configurada{% else %}Sin empresa configurada{% endif %}">{% if c.has_company %}Configurada{% else %}No configurada{% endif %}</span></td>
+              <td data-label="Titular"><span class="cell-truncate" title="{{ c.cardholder_name }}">{{ c.cardholder_name }}</span></td>
+              <td data-label="Referencia"><span class="cell-truncate" title="{{ c.purpose }}">{{ c.purpose }}</span></td>
+              <td data-label="Alias"><span class="cell-truncate" title="{{ c.client_name }}">{{ c.client_name }}</span></td>
+              <td data-label="Franquicia">{{ c.get_brand_display }}</td>
+              <td data-label="Terminación"><span class="card-ending">•••• {{ c.last4 }}</span></td>
+              <td data-label="Estado">{% if c.active %}<span class="badge success">Activa</span>{% else %}<span class="badge">Inactiva</span>{% endif %}</td>
+              <td data-label="Acción"><a class="btn ghost compact" href="{% url 'vault:card_detail' c.pk %}">Ver tarjeta</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="vault-empty-results" role="status" aria-live="polite">
+      <span class="vault-empty-icon" aria-hidden="true">⌕</span>
+      <h3>No se encontraron tarjetas</h3>
+      <p>Pruebe buscando por:</p>
+      <ul>
+        <li>Titular</li>
+        <li>Referencia</li>
+        <li>Alias</li>
+        <li>Franquicia</li>
+        <li>Últimos cuatro dígitos</li>
+      </ul>
+    </div>
+  {% endif %}
+  {% if page.paginator.num_pages > 1 %}
+    <nav class="pagination" aria-label="Páginas de la Bóveda">
+      {% if page.has_previous %}<a href="?q={{ query|urlencode }}&amp;page={{ page.previous_page_number }}" data-search-page>Anterior</a>{% endif %}
+      <span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>
+      {% if page.has_next %}<a href="?q={{ query|urlencode }}&amp;page={{ page.next_page_number }}" data-search-page>Siguiente</a>{% endif %}
+    </nav>
+  {% endif %}
+</section>

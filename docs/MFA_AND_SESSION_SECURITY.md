@@ -28,11 +28,13 @@ Cada sesión guarda SHA-256 del identificador y una copia cifrada únicamente pa
 
 El límite predeterminado es 600 segundos. `last_activity_at` se actualiza como máximo una vez por minuto. Al expirar se invalidan sesión Django, grants y revelados, se audita y se redirige con mensaje genérico.
 
-## Reautenticación por propósito
+## Ventana transversal de operaciones sensibles
 
-Los propósitos administrativos actuales incluyen `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change`, `mfa_manage`, `policy_admin` y `outside_hours`. Cada grant dura el periodo central configurado y queda ligado a usuario y hash de sesión.
+Los propósitos administrativos actuales incluyen `cards_manage`, `identity_admin`, `session_manage`, `device_manage`, `alerts_manage`, `password_change`, `mfa_manage`, `policy_admin` y `outside_hours`. Una validación correcta de contraseña y TOTP abre una única `SensitiveOperationWindow` fija de 15 minutos, ligada al usuario y al hash de la sesión. Los propósitos siguen delimitando la intención y la auditoría, pero una ventana vigente evita repetir factores en la siguiente operación sensible autorizada. La vigencia no se extiende con cada acción.
 
-Empresa, PAN y vencimiento usan dos autorizaciones separadas. La verificación reforzada de identidad valida contraseña y TOTP y crea una ventana fija de 15 minutos ligada al usuario y al hash de la sesión; esta ventana no conserva motivo ni referencia. Cada operación sobre una tarjeta exige después un motivo y una referencia nuevos y crea un contexto temporal exclusivo para esa tarjeta. Empresa, PAN y vencimiento, tanto al revelar como al copiar, comparten ese contexto mientras se permanezca en la misma operación. Volver a la Bóveda, confirmar otra tarjeta, expirar la ventana o invalidar la sesión cierra el contexto. Cada campo revelado se retira del DOM a los 20 segundos o al ocultarse/cambiar de pestaña; la copia mantiene token de un solo uso.
+`PendingSensitiveOperation` guarda la identidad y el estado de una acción específica cuando una redirección es necesaria. Nueva/Editar tarjeta cifran temporalmente su formulario; PAN, vencimiento y empresa nunca se colocan en URL, sesión o auditoría y el payload se borra al completar o expirar. El UUID, usuario, sesión, propósito, objeto y estado de consumo garantizan ejecución única.
+
+Empresa, PAN y vencimiento mantienen autorizaciones adicionales. Cada operación de revelado/copia exige un motivo y una referencia nuevos y crea un `ProtectedOperationContext` temporal exclusivo para esa tarjeta. Los tres campos comparten ese contexto mientras se permanezca en la misma operación. Volver a la Bóveda, confirmar otra tarjeta, expirar la ventana o invalidar la sesión cierra el contexto. `RevealGrant` limita cada campo; el valor se retira del DOM a los 20 segundos o al ocultarse/cambiar de pestaña y la copia mantiene token de un solo uso.
 
 Cambiar politicas, festivos, excepciones, destinatarios o reintentar correo exige `policy_admin`. La politica de sesion permite revocar la anterior, bloquear una nueva o conservar sesiones hasta el limite configurado. El valor predeterminado mantiene una sola sesion y revoca la anterior.
 

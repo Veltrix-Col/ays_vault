@@ -1,12 +1,17 @@
 import hashlib
 import json
 import secrets
+import threading
+from contextlib import nullcontext
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from .models import AuditChainState, AuditEvent, AuditVerificationRun, RevealGrant, SecurityAlert
+
+
+_SQLITE_AUDIT_WRITE_LOCK = threading.RLock()
 
 
 def client_ip(request):
@@ -60,36 +65,38 @@ def audit(request, action, card=None, field_name="", reason="", metadata=None, r
     if is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}:
         risk_level = "HIGH"
 
-    with transaction.atomic():
-        state, _ = AuditChainState.objects.select_for_update().get_or_create(singleton=1)
-        event = AuditEvent.objects.create(
-            sequence=state.last_sequence + 1,
-            user=actor,
-            actor_role=getattr(profile, "role", ""),
-            action=action,
-            card=card,
-            field_name=field_name,
-            reason=reason,
-            ip_address=client_ip(request),
-            user_agent=(request.META.get("HTTP_USER_AGENT", "")[:300] if request is not None else "system"),
-            session_key=session_hash(request) if request is not None else "",
-            path=((request.path or "")[:300] if request is not None else "management-command"),
-            method=(request.method or "" if request is not None else "SYSTEM"),
-            result=result,
-            risk_level=risk_level,
-            outside_office_hours=is_outside,
-            metadata=metadata or {},
-            previous_hash=state.last_hash,
-            event_hash="0" * 64,
-        )
-        if occurred_at is not None:
-            AuditEvent.objects.filter(pk=event.pk).update(created_at=occurred_at)
-            event.created_at = occurred_at
-        event.event_hash = _event_hash(event)
-        AuditEvent.objects.filter(pk=event.pk).update(event_hash=event.event_hash)
-        state.last_sequence = event.sequence
-        state.last_hash = event.event_hash
-        state.save(update_fields=["last_sequence", "last_hash"])
+    write_guard = _SQLITE_AUDIT_WRITE_LOCK if connection.vendor == "sqlite" else nullcontext()
+    with write_guard:
+        with transaction.atomic():
+            state, _ = AuditChainState.objects.select_for_update().get_or_create(singleton=1)
+            event = AuditEvent.objects.create(
+                sequence=state.last_sequence + 1,
+                user=actor,
+                actor_role=getattr(profile, "role", ""),
+                action=action,
+                card=card,
+                field_name=field_name,
+                reason=reason,
+                ip_address=client_ip(request),
+                user_agent=(request.META.get("HTTP_USER_AGENT", "")[:300] if request is not None else "system"),
+                session_key=session_hash(request) if request is not None else "",
+                path=((request.path or "")[:300] if request is not None else "management-command"),
+                method=(request.method or "" if request is not None else "SYSTEM"),
+                result=result,
+                risk_level=risk_level,
+                outside_office_hours=is_outside,
+                metadata=metadata or {},
+                previous_hash=state.last_hash,
+                event_hash="0" * 64,
+            )
+            if occurred_at is not None:
+                AuditEvent.objects.filter(pk=event.pk).update(created_at=occurred_at)
+                event.created_at = occurred_at
+            event.event_hash = _event_hash(event)
+            AuditEvent.objects.filter(pk=event.pk).update(event_hash=event.event_hash)
+            state.last_sequence = event.sequence
+            state.last_hash = event.event_hash
+            state.save(update_fields=["last_sequence", "last_hash"])
 
     should_create_alert = (
         is_outside and action in {"LOGIN", "REVEAL", "COPY", "CREATE", "UPDATE", "DEACTIVATE"}

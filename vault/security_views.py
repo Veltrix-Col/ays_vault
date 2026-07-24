@@ -56,7 +56,9 @@ def reauthenticate(request):
         if pending_operation.status == PendingSensitiveOperation.COMPLETED:
             messages.info(request, "La operación ya había sido completada; no se ejecutó nuevamente.")
             return redirect(pending_operation.success_url)
-        if pending_operation.expires_at < timezone.now():
+        if pending_operation.expires_at <= timezone.now():
+            pending_operation.encrypted_payload = ""
+            pending_operation.save(update_fields=["encrypted_payload"])
             messages.error(request, "La operación pendiente expiró. Iníciela nuevamente.")
             return redirect(pending_operation.success_url)
     form = ReauthenticationForm(request.POST or None)

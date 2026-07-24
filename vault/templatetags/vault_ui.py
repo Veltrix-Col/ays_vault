@@ -1,16 +1,9 @@
-import uuid
-
 from django import template
 from django.core.exceptions import ObjectDoesNotExist
 
 from vault.models import AuditEvent
 
 register = template.Library()
-
-
-@register.simple_tag
-def sensitive_operation_id():
-    return str(uuid.uuid4())
 
 ALERT_TYPES = {
     "OUTSIDE_HOURS": "Acceso fuera de horario", "NEW_DEVICE": "Dispositivo nuevo",

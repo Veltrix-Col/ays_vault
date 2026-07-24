@@ -7,11 +7,11 @@
   <form method="get" action="{% url 'vault:card_list' %}" class="vault-search" data-vault-search novalidate>
     <label class="sr-only" for="vault-search-input">Buscar tarjetas</label>
     <div class="vault-search-control">
-      <input id="vault-search-input" type="search" name="q" value="{{ query }}" maxlength="80" autocomplete="off" placeholder="Buscar por referencia, alias, banco o últimos 4 dígitos" aria-describedby="vault-search-help vault-search-status">
+      <input id="vault-search-input" type="search" name="q" value="{{ query }}" maxlength="80" autocomplete="off" placeholder="Titular, referencia, alias, franquicia o últimos 4 dígitos" aria-describedby="vault-search-help vault-search-status">
       <button class="search-clear" type="button" data-search-clear aria-label="Limpiar búsqueda" {% if not query %}hidden{% endif %}>×</button>
       <span class="search-spinner" data-search-spinner hidden aria-hidden="true"></span>
     </div>
-    <span id="vault-search-help" class="field-help">No es posible buscar por Empresa, número completo o vencimiento.</span>
+    <span id="vault-search-help" class="field-help">Busca únicamente en titular, referencia, alias, franquicia y últimos cuatro dígitos. No admite empresa, número completo ni vencimiento.</span>
     {% for error in search_form.q.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
   </form>
 </section>

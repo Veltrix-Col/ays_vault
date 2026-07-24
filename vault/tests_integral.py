@@ -1,6 +1,7 @@
 import time
 from datetime import timedelta
 from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
@@ -11,10 +12,12 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from openpyxl import load_workbook
 
 from .crypto import encrypt
+from .identity import has_recent_reauth
 from .models import (
     AuditEvent,
     NotificationRecipient,
     PaymentCard,
+    PendingSensitiveOperation,
     PolicyConfiguration,
     ProtectedOperationContext,
     ReauthenticationGrant,
@@ -171,7 +174,11 @@ class IntegralVaultFlowTests(TestCase):
             self.assertContains(response, "Cliente Seguro")
             self.assertNotContains(response, COMPANY)
             self.assertNotContains(response, PAN)
-        self.assertContains(client.get(url, {"q": "inexistente"}), "Sin resultados")
+        empty = client.get(url, {"q": "inexistente"})
+        self.assertContains(empty, "No se encontraron tarjetas")
+        self.assertContains(empty, "Últimos cuatro dígitos")
+        self.assertNotContains(empty, 'class="table vault-results-table"')
+        self.assertNotContains(empty, 'class="empty-row"')
         rejected = client.get(url, {"q": PAN}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
         self.assertNotContains(rejected, "Cliente Seguro")
 
@@ -202,8 +209,9 @@ class IntegralVaultFlowTests(TestCase):
             expires_at=timezone.now() + timedelta(minutes=5),
         )
         response = client.get(reverse("vault:card_edit", args=[historical.pk]))
-        self.assertContains(response, "Empresa actual:")
-        self.assertContains(response, "no configurada")
+        self.assertContains(response, "Emp.")
+        self.assertContains(response, "•••• •••• ••••")
+        self.assertContains(response, "••/••")
         self.assertNotContains(response, COMPANY)
 
     def test_first_operation_creates_identity_window_and_card_context(self):
@@ -280,14 +288,14 @@ class IntegralVaultFlowTests(TestCase):
         start = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "company", "action": "reveal"})
         intent = start.json()["intent"]
         bad = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": "incorrecta", "token": "000000"})
-        self.assertEqual(bad.status_code, 400)
-        self.assertNotContains(bad, "Referencia interna", status_code=400)
+        self.assertEqual(bad.status_code, 422)
+        self.assertNotContains(bad, "Referencia interna", status_code=422)
         premature = client.post(reverse("vault:protected_confirm"), {"intent": intent, "reason": "Pago autorizado", "reference": "POL-1"})
-        self.assertEqual(premature.status_code, 400)
+        self.assertEqual(premature.status_code, 409)
         ok = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": PASSWORD, "token": self.token(self.analyst)})
         self.assertEqual(ok.status_code, 200)
         protected = client.post(reverse("vault:protected_confirm"), {"intent": intent, "reason": f"Pago {COMPANY}", "reference": "12/29"})
-        self.assertEqual(protected.status_code, 400)
+        self.assertEqual(protected.status_code, 422)
         self.assertTrue(SensitiveOperationWindow.objects.filter(user=self.analyst, revoked_at__isnull=True).exists())
         self.assertFalse(ProtectedOperationContext.objects.filter(user=self.analyst).exists())
 
@@ -298,7 +306,9 @@ class IntegralVaultFlowTests(TestCase):
         token = reveal.headers["X-Vault-Copy-Token"]
         copy_url = reverse("vault:copy_event", args=[self.card.pk])
         self.assertEqual(client.post(copy_url, {"copy_token": token, "result": "success"}).status_code, 200)
-        self.assertEqual(client.post(copy_url, {"copy_token": token, "result": "success"}).status_code, 403)
+        consumed = client.post(copy_url, {"copy_token": token, "result": "success"})
+        self.assertEqual(consumed.status_code, 409)
+        self.assertEqual(consumed.json()["error_code"], "REVEAL_GRANT_EXPIRED")
         event = AuditEvent.objects.filter(action="COPY", user=self.analyst).latest("sequence")
         self.assertEqual(event.metadata["context_id"], str(context.public_id))
         self.assertEqual(event.reason, context.reason)
@@ -390,3 +400,352 @@ class IntegralVaultFlowTests(TestCase):
         created.refresh_from_db()
         self.assertEqual(created.get_company(), "Empresa Nueva Protegida")
         self.assertFalse(AuditEvent.objects.filter(card=created, metadata__icontains="Empresa Nueva Protegida").exists())
+
+    def test_card_create_survives_reauthentication_once_with_encrypted_pending_payload(self):
+        client = self.authenticated_client(self.leader)
+        session_key_before = client.session.session_key
+        payload = {
+            "client_name": "Cliente Pendiente",
+            "cardholder_name": "Titular Pendiente",
+            "brand": "VISA",
+            "purpose": "Pago pendiente seguro",
+            "active": "on",
+            "pan": "4012888888881881",
+            "expiry": "10/30",
+            "company": "Empresa Pendiente Protegida",
+        }
+        start = client.post(reverse("vault:card_create"), payload)
+        self.assertEqual(start.status_code, 302)
+        query = parse_qs(urlparse(start.url).query)
+        operation_id = query["operation"][0]
+        self.assertEqual(query["purpose"], ["cards_manage"])
+        self.assertNotIn(payload["pan"], start.url)
+        self.assertNotIn(payload["expiry"], start.url)
+        operation = PendingSensitiveOperation.objects.get(public_id=operation_id)
+        self.assertNotIn(payload["pan"], operation.encrypted_payload)
+        self.assertNotIn(payload["expiry"], operation.encrypted_payload)
+        self.assertNotIn(payload["company"], operation.encrypted_payload)
+        self.assertFalse(PaymentCard.objects.filter(client_name=payload["client_name"]).exists())
+
+        reauth_page = client.get(start.url)
+        self.assertContains(reauth_page, 'name="password"', count=1)
+        self.assertContains(reauth_page, 'name="token"', count=1)
+        self.assertNotContains(reauth_page, payload["pan"])
+        finish = client.post(
+            reverse("vault:reauthenticate"),
+            {
+                "purpose": "cards_manage",
+                "operation": operation_id,
+                "password": PASSWORD,
+                "token": self.token(self.leader),
+            },
+        )
+        created = PaymentCard.objects.get(client_name=payload["client_name"])
+        self.assertRedirects(finish, reverse("vault:card_detail", args=[created.pk]), fetch_redirect_response=False)
+        self.assertEqual(created.get_pan(), payload["pan"])
+        self.assertEqual(created.get_expiry(), payload["expiry"])
+        self.assertEqual(created.get_company(), payload["company"])
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, PendingSensitiveOperation.COMPLETED)
+        self.assertEqual(operation.encrypted_payload, "")
+        self.assertEqual(
+            AuditEvent.objects.filter(action="CREATE", metadata__operation_id=operation_id).count(),
+            1,
+        )
+        self.assertEqual(client.session.session_key, session_key_before)
+        self.assertFalse(
+            AuditEvent.objects.filter(
+                user=self.leader,
+                action="SESSION_REPLACED",
+            ).exists()
+        )
+
+        repeated = client.get(
+            reverse("vault:reauthenticate"),
+            {"purpose": "cards_manage", "operation": operation_id},
+        )
+        self.assertRedirects(repeated, reverse("vault:card_detail", args=[created.pk]), fetch_redirect_response=False)
+        self.assertEqual(PaymentCard.objects.filter(client_name=payload["client_name"]).count(), 1)
+        self.assertEqual(
+            AuditEvent.objects.filter(action="CREATE", metadata__operation_id=operation_id).count(),
+            1,
+        )
+
+    def test_global_fixed_window_allows_edit_and_deactivate_without_repeating_factors(self):
+        client = self.authenticated_client(self.leader)
+        authorize = client.post(
+            reverse("vault:reauthenticate"),
+            {
+                "purpose": "cards_manage",
+                "next": reverse("vault:card_detail", args=[self.card.pk]),
+                "password": PASSWORD,
+                "token": self.token(self.leader),
+            },
+        )
+        self.assertEqual(authorize.status_code, 302)
+        window = SensitiveOperationWindow.objects.get(user=self.leader, revoked_at__isnull=True)
+        original_expiry = window.expires_at
+        lifetime = (window.expires_at - window.created_at).total_seconds()
+        self.assertGreaterEqual(lifetime, 899)
+        self.assertLessEqual(lifetime, 901)
+
+        edit_page = client.get(reverse("vault:card_edit", args=[self.card.pk]))
+        self.assertEqual(edit_page.status_code, 200)
+        self.assertContains(edit_page, self.card.masked_pan)
+        self.assertNotContains(edit_page, PAN)
+        self.assertNotContains(edit_page, "12/29")
+        self.assertNotContains(edit_page, COMPANY)
+        edit = client.post(
+            reverse("vault:card_edit", args=[self.card.pk]),
+            {
+                "operation_id": "17c16ef0-292b-4fba-9f5e-98cdbb179cb5",
+                "client_name": "Alias actualizado",
+                "cardholder_name": self.card.cardholder_name,
+                "brand": "VISA",
+                "purpose": self.card.purpose,
+                "company": "",
+                "pan": "4222222222222",
+                "expiry": "11/31",
+            },
+        )
+        self.assertRedirects(edit, reverse("vault:card_detail", args=[self.card.pk]), fetch_redirect_response=False)
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.get_pan(), "4222222222222")
+        self.assertEqual(self.card.get_expiry(), "11/31")
+        self.assertEqual(self.card.get_company(), COMPANY)
+
+        deactivate = client.post(
+            reverse("vault:card_deactivate", args=[self.card.pk]),
+            {"operation_id": "2f63e7ba-76aa-421f-bdaa-1c7ba5075f2f"},
+        )
+        self.assertRedirects(deactivate, reverse("vault:card_list"), fetch_redirect_response=False)
+        self.card.refresh_from_db()
+        self.assertFalse(self.card.active)
+        window.refresh_from_db()
+        self.assertEqual(window.expires_at, original_expiry)
+        self.assertEqual(SensitiveOperationWindow.objects.filter(user=self.leader, revoked_at__isnull=True).count(), 1)
+
+    def test_reveal_window_covers_create_edit_and_deactivate_without_rotating_session(self):
+        client = self.authenticated_client(self.leader)
+        session_key_before = client.session.session_key
+        window, _ = self.authorize_operation(
+            client,
+            self.leader,
+            field="pan",
+            reason="Operación integral autorizada",
+            reference="QA-WINDOW-001",
+        )
+        original_expiry = window.expires_at
+        self.assertEqual(
+            client.post(
+                reverse("vault:reveal", args=[self.card.pk]),
+                {"field": "pan", "action": "reveal"},
+            ).status_code,
+            200,
+        )
+
+        create = client.post(
+            reverse("vault:card_create"),
+            {
+                "operation_id": "64e121f0-a5a6-4c60-807e-41d24af57a91",
+                "client_name": "Tarjeta ventana transversal",
+                "cardholder_name": "Titular transversal",
+                "brand": "VISA",
+                "purpose": "Operación transversal",
+                "active": "on",
+                "pan": "4000000000000002",
+                "expiry": "10/31",
+                "company": "Empresa transversal",
+            },
+        )
+        created = PaymentCard.objects.get(client_name="Tarjeta ventana transversal")
+        self.assertRedirects(
+            create,
+            reverse("vault:card_detail", args=[created.pk]),
+            fetch_redirect_response=False,
+        )
+
+        edit = client.post(
+            reverse("vault:card_edit", args=[created.pk]),
+            {
+                "operation_id": "f497ebc3-f094-4bc3-a843-910ea8c3dbcc",
+                "client_name": "Tarjeta transversal editada",
+                "cardholder_name": "Titular transversal",
+                "brand": "VISA",
+                "purpose": "Operación transversal",
+                "company": "",
+                "pan": "4222222222222",
+                "expiry": "11/31",
+            },
+        )
+        self.assertRedirects(
+            edit,
+            reverse("vault:card_detail", args=[created.pk]),
+            fetch_redirect_response=False,
+        )
+        deactivate = client.post(
+            reverse("vault:card_deactivate", args=[created.pk]),
+            {"operation_id": "113231be-7444-4bb2-b9fb-b5e3f6595721"},
+        )
+        self.assertRedirects(
+            deactivate,
+            reverse("vault:card_list"),
+            fetch_redirect_response=False,
+        )
+
+        window.refresh_from_db()
+        created.refresh_from_db()
+        self.assertFalse(created.active)
+        self.assertEqual(window.expires_at, original_expiry)
+        self.assertEqual(client.session.session_key, session_key_before)
+        self.assertEqual(
+            SensitiveOperationWindow.objects.filter(
+                user=self.leader,
+                revoked_at__isnull=True,
+            ).count(),
+            1,
+        )
+        events = AuditEvent.objects.filter(user=self.leader)
+        self.assertEqual(events.filter(action="REAUTH_SUCCESS").count(), 1)
+        self.assertEqual(events.filter(action="OPERATION_AUTHORIZED").count(), 1)
+        self.assertEqual(events.filter(action="CREATE", card=created).count(), 1)
+        self.assertEqual(events.filter(action="UPDATE", card=created).count(), 1)
+        self.assertEqual(events.filter(action="DEACTIVATE", card=created).count(), 1)
+        self.assertFalse(events.filter(action="SESSION_REPLACED").exists())
+        self.assertFalse(events.filter(action="LOGOUT").exists())
+
+    def test_async_reveal_with_invalid_secure_session_returns_safe_json_not_login_html(self):
+        client = self.authenticated_client(self.leader)
+        client.get(reverse("vault:card_detail", args=[self.card.pk]))
+        SecureSession.objects.filter(
+            user=self.leader,
+            status=SecureSession.ACTIVE,
+        ).update(
+            status=SecureSession.REVOKED,
+            revoked_at=timezone.now(),
+            revocation_reason="Prueba de contrato AJAX",
+        )
+        response = client.post(
+            reverse("vault:reveal", args=[self.card.pk]),
+            {"field": "pan", "action": "reveal"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error_code"], "SECURE_SESSION_INVALID")
+        self.assertEqual(response.headers["X-Vault-Auth-Required"], "1")
+        self.assertNotIn("<html", response.content.decode().lower())
+        self.assertNotIn("name=\"password\"", response.content.decode().lower())
+
+    def test_protected_endpoints_return_safe_status_contracts(self):
+        client = self.authenticated_client(self.analyst)
+        invalid = client.post(
+            reverse("vault:reveal", args=[self.card.pk]),
+            {"field": "unknown", "action": "reveal"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(invalid.json()["error_code"], "INVALID_PROTECTED_ACTION")
+
+        missing = client.post(
+            reverse("vault:reveal", args=[999999]),
+            {"field": "pan", "action": "reveal"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error_code"], "CARD_NOT_AVAILABLE")
+
+        expired_intent = client.post(
+            reverse("vault:protected_confirm"),
+            {
+                "intent": "expired-intent",
+                "reason": "Operación autorizada",
+                "reference": "QA-001",
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(expired_intent.status_code, 409)
+        self.assertEqual(
+            expired_intent.json()["error_code"],
+            "PROTECTED_INTENT_EXPIRED",
+        )
+
+    def test_expired_global_window_requires_reauthentication_for_next_card_change(self):
+        client = self.authenticated_client(self.leader)
+        window = SensitiveOperationWindow.objects.create(
+            user=self.leader,
+            session_hash=session_hash(client.session.session_key),
+            purpose="sensitive_operations",
+            expires_at=timezone.now() - timedelta(microseconds=1),
+        )
+        response = client.post(
+            reverse("vault:card_edit", args=[self.card.pk]),
+            {
+                "client_name": self.card.client_name,
+                "cardholder_name": self.card.cardholder_name,
+                "brand": self.card.brand,
+                "purpose": self.card.purpose,
+                "company": "",
+                "pan": "",
+                "expiry": "",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("purpose=cards_manage", response.url)
+        window.refresh_from_db()
+        self.assertIsNotNone(window.revoked_at)
+
+    def test_vault_results_are_compact_safe_and_search_reference(self):
+        client = self.authenticated_client(self.leader)
+        response = client.get(reverse("vault:card_list"), {"q": "Operación autorizada"})
+        self.assertContains(response, 'class="table vault-results-table"')
+        self.assertContains(response, 'data-label="Emp."')
+        self.assertContains(response, "Configurada")
+        self.assertContains(response, "Titular Autorizado")
+        self.assertContains(response, "•••• 1111")
+        self.assertNotContains(response, PAN)
+        self.assertNotContains(response, COMPANY)
+        self.assertContains(response, "No admite empresa, número completo ni vencimiento.")
+
+    def test_invalid_card_form_does_not_echo_protected_values(self):
+        client = self.authenticated_client(self.leader)
+        response = client.post(
+            reverse("vault:card_create"),
+            {
+                "client_name": "Alias inválido",
+                "cardholder_name": "Titular",
+                "brand": "MC",
+                "purpose": "Referencia",
+                "active": "on",
+                "pan": "4012888888881881",
+                "expiry": "12/29",
+                "company": COMPANY,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "4012888888881881")
+        self.assertNotContains(response, "12/29")
+        self.assertNotContains(response, COMPANY)
+        self.assertContains(response, "La franquicia no coincide")
+
+    def test_sensitive_window_is_shared_across_authorized_purposes(self):
+        client = self.authenticated_client(self.leader)
+        response = client.post(
+            reverse("vault:reauthenticate"),
+            {
+                "purpose": "cards_manage",
+                "next": reverse("vault:card_list"),
+                "password": PASSWORD,
+                "token": self.token(self.leader),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        window = SensitiveOperationWindow.objects.get(user=self.leader, revoked_at__isnull=True)
+        request = client.get(reverse("vault:card_list")).wsgi_request
+        self.assertTrue(has_recent_reauth(request, "cards_manage"))
+        self.assertTrue(has_recent_reauth(request, "identity_admin"))
+        window.refresh_from_db()
+        self.assertEqual(
+            SensitiveOperationWindow.objects.filter(user=self.leader, revoked_at__isnull=True).count(),
+            1,
+        )

@@ -17,7 +17,7 @@ A&S Vault es una bóveda interna Django para reemplazar el archivo operativo de 
 - Login en dos etapas: la contraseña correcta no crea una sesión autenticada hasta validar MFA o recuperación.
 - Una sesión activa por usuario, identificador por hash, session key cifrada para revocación real y expiración tras 10 minutos de inactividad.
 - Registro prudente de navegador, sistema, tipo de dispositivo e IP; estados Nuevo, Reconocido, Bloqueado y Revocado.
-- Reautenticación por propósito para administración y verificación reforzada de identidad durante 15 minutos, ligada a usuario y sesión. Cada operación protegida exige un motivo y una referencia nuevos, vinculados a una tarjeta concreta; sus campos comparten ese contexto y cada revelado permanece visible 20 segundos.
+- Reautenticación reforzada que abre una ventana transversal, fija y no deslizante de 15 minutos, ligada a usuario y sesión. Durante su vigencia evita repetir contraseña y OTP en operaciones sensibles autorizadas, sin alterar permisos. Cada operación de revelado/copia conserva además un motivo y una referencia propios, vinculados a una tarjeta concreta; sus campos comparten ese contexto y cada revelado permanece visible 20 segundos.
 - Alertas persistentes para dispositivo/IP nueva, MFA/reautenticación fallidos, recuperación, reinicio MFA, sesiones reemplazadas, bloqueos y cambios sensibles.
 - Auditoría secuencial con hash encadenado y verificación mediante `verify_audit_chain`.
 - CSP, Permissions Policy, no-cache, CSRF, Axes y endurecimiento HTTPS condicionado al entorno.

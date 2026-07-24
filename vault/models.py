@@ -342,6 +342,7 @@ class PendingSensitiveOperation(models.Model):
     target_id = models.PositiveBigIntegerField()
     reason = models.CharField(max_length=240)
     safe_payload = models.JSONField(default=dict, blank=True)
+    encrypted_payload = models.TextField(blank=True, editable=False)
     success_url = models.CharField(max_length=240)
     status = models.CharField(max_length=12, choices=STATUSES, default=PENDING)
     created_at = models.DateTimeField(auto_now_add=True)

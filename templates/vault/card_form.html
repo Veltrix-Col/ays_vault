@@ -1,1 +1,79 @@
-{% extends 'base.html' %}{% block title %}{{ title }} · A&amp;S Vault{% endblock %}{% block content %}<div class="page-heading"><div><span class="section-kicker">Solo Líder de cartera</span><h1>{{ title }}</h1><p>{% if form.pan %}El número, el vencimiento y la Empresa se cifran antes de persistirse. No registre el código de seguridad.{% else %}Este formulario no carga ni expone el número, el vencimiento o la Empresa actuales.{% endif %}</p></div></div><form method="post" class="form-panel" autocomplete="off" novalidate>{% csrf_token %}{{ form.non_field_errors }}<section class="form-section"><div class="form-section-header"><h2>Datos de la tarjeta</h2><p>Complete únicamente la información necesaria para la operación autorizada.</p></div>{% if form.company and not form.pan %}<div class="protected-value-state"><b>Empresa actual:</b> {% if form.instance.has_company %}configurada{% else %}no configurada{% endif %}</div>{% endif %}<div class="form-grid">{% for field in form %}{% include 'includes/form_field.html' with field=field %}{% endfor %}</div><div class="warning-box"><b>Prohibido registrar:</b> código de seguridad, PIN, fotografías de la tarjeta o datos de banda magnética.</div><div class="form-actions"><a class="btn ghost" href="{% url 'vault:card_list' %}">Cancelar</a><button class="btn primary" type="submit">Guardar tarjeta</button></div></section></form>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}{{ title }} · A&amp;S Vault{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Administración de tarjetas</span>
+    <h1>{{ title }}</h1>
+    <p>Complete la información autorizada. Los datos protegidos se cifran antes de almacenarse.</p>
+  </div>
+</div>
+
+<form method="post" class="form-panel card-admin-form" autocomplete="off" novalidate data-single-submit>
+  {% csrf_token %}
+  <input type="hidden" name="operation_id" value="{{ operation_id }}">
+  {{ form.non_field_errors }}
+
+  <section class="form-section" aria-labelledby="card-general-title">
+    <div class="form-section-header">
+      <h2 id="card-general-title">Información administrativa</h2>
+      <p>Identifique la tarjeta sin incluir información adicional innecesaria.</p>
+    </div>
+    <div class="form-grid">
+      {% include 'includes/form_field.html' with field=form.company %}
+      {% include 'includes/form_field.html' with field=form.client_name %}
+      {% include 'includes/form_field.html' with field=form.cardholder_name %}
+      {% include 'includes/form_field.html' with field=form.brand %}
+      {% include 'includes/form_field.html' with field=form.purpose %}
+      {% if form.active %}{% include 'includes/form_field.html' with field=form.active %}{% endif %}
+    </div>
+  </section>
+
+  <section class="form-section" aria-labelledby="card-protected-title">
+    <div class="form-section-header">
+      <h2 id="card-protected-title">Datos protegidos</h2>
+      {% if form.instance.pk %}
+        <p>Los valores actuales nunca se cargan en el formulario. Active únicamente el dato que necesita reemplazar.</p>
+      {% else %}
+        <p>Ingrese el número y el vencimiento en el formato indicado.</p>
+      {% endif %}
+    </div>
+
+    {% if form.instance.pk %}
+      <div class="protected-edit-grid">
+        <div class="protected-edit-card">
+          <span class="field-label">Número de tarjeta</span>
+          <div class="protected-edit-summary">
+            <span aria-label="Número de tarjeta terminado en {{ form.instance.last4 }}">•••• •••• •••• {{ form.instance.last4 }}</span>
+            <button class="btn ghost compact" type="button" data-protected-edit-toggle="protected-pan-edit" aria-controls="protected-pan-edit" aria-expanded="{% if form.pan.errors %}true{% else %}false{% endif %}">Modificar</button>
+          </div>
+          <div id="protected-pan-edit" class="protected-edit-input" {% if not form.pan.errors %}hidden{% endif %}>
+            {% include 'includes/form_field.html' with field=form.pan %}
+          </div>
+        </div>
+        <div class="protected-edit-card">
+          <span class="field-label">Vencimiento</span>
+          <div class="protected-edit-summary">
+            <span aria-label="Vencimiento protegido">••/••</span>
+            <button class="btn ghost compact" type="button" data-protected-edit-toggle="protected-expiry-edit" aria-controls="protected-expiry-edit" aria-expanded="{% if form.expiry.errors %}true{% else %}false{% endif %}">Modificar</button>
+          </div>
+          <div id="protected-expiry-edit" class="protected-edit-input" {% if not form.expiry.errors %}hidden{% endif %}>
+            {% include 'includes/form_field.html' with field=form.expiry %}
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <div class="form-grid">
+        {% include 'includes/form_field.html' with field=form.pan %}
+        {% include 'includes/form_field.html' with field=form.expiry %}
+      </div>
+    {% endif %}
+
+    <p class="field-help card-security-note">A&S Vault valida el número, cifra los valores y nunca los incluye en la URL, mensajes o auditoría.</p>
+    <div class="form-actions">
+      <a class="btn ghost" href="{% url 'vault:card_list' %}">Cancelar</a>
+      <button class="btn primary" type="submit">Guardar tarjeta</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

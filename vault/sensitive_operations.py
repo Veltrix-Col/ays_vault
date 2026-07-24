@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import timedelta
 from urllib.parse import urlencode
@@ -10,13 +11,16 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import PendingSensitiveOperation
+from .crypto import decrypt, encrypt
 from .security import session_hash
 
 
-OPERATION_TTL_MINUTES = 10
+OPERATION_TTL_MINUTES = 15
 HANDLERS = {
     "MFA_RESET": "vault.security_views.execute_pending_mfa_reset",
     "CARD_DEACTIVATE": "vault.views.execute_pending_card_deactivate",
+    "CARD_CREATE": "vault.views.execute_pending_card_create",
+    "CARD_EDIT": "vault.views.execute_pending_card_edit",
 }
 
 
@@ -46,6 +50,7 @@ def prepare_operation(
     reason,
     success_url,
     safe_payload=None,
+    protected_payload=None,
 ):
     public_id = _parse_operation_id(operation_id)
     defaults = {
@@ -57,6 +62,7 @@ def prepare_operation(
         "target_id": target_id,
         "reason": reason,
         "safe_payload": safe_payload or {},
+        "encrypted_payload": encrypt(json.dumps(protected_payload, ensure_ascii=False)) if protected_payload else "",
         "success_url": success_url,
         "expires_at": timezone.now() + timedelta(minutes=OPERATION_TTL_MINUTES),
     }
@@ -73,6 +79,18 @@ def prepare_operation(
         if not expected:
             raise PermissionDenied
     return operation
+
+
+def protected_payload(operation):
+    if not operation.encrypted_payload:
+        return {}
+    try:
+        value = json.loads(decrypt(operation.encrypted_payload))
+    except (TypeError, ValueError) as exc:
+        raise PendingOperationError("El contenido protegido de la operación no se pudo validar.") from exc
+    if not isinstance(value, dict):
+        raise PendingOperationError("El contenido protegido de la operación no es válido.")
+    return value
 
 
 def operation_for_reauthentication(request, token, purpose):
@@ -114,8 +132,11 @@ def execute_operation(request, token):
         if operation.status == PendingSensitiveOperation.COMPLETED:
             messages.info(request, "La operación ya había sido completada; no se ejecutó nuevamente.")
             return redirect(operation.success_url)
-        if operation.expires_at < timezone.now():
-            raise PendingOperationError("La operación pendiente expiró. Iníciela nuevamente.")
+        if operation.expires_at <= timezone.now():
+            operation.encrypted_payload = ""
+            operation.save(update_fields=["encrypted_payload"])
+            messages.error(request, "La operación pendiente expiró. Iníciela nuevamente.")
+            return redirect(operation.success_url)
 
         from .identity import has_recent_reauth
 
@@ -137,5 +158,6 @@ def execute_operation(request, token):
         response = _load_handler(handler_path)(request, operation)
         operation.status = PendingSensitiveOperation.COMPLETED
         operation.consumed_at = timezone.now()
-        operation.save(update_fields=["status", "consumed_at"])
+        operation.encrypted_payload = ""
+        operation.save(update_fields=["status", "consumed_at", "encrypted_payload"])
         return response

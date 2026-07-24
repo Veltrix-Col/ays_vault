@@ -70,12 +70,12 @@ def detected_brand(number):
 class CardForm(forms.ModelForm):
     pan = forms.CharField(label="Número de tarjeta", min_length=13, max_length=23, widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}))
     expiry = forms.CharField(label="Vencimiento (MM/AA)", max_length=5, widget=forms.TextInput(attrs={"placeholder": "MM/AA", "autocomplete": "off"}))
-    company = forms.CharField(label="Empresa", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Nombre de la empresa"}), help_text="Dato protegido: se almacena cifrado y no se mostrará sin autorización reforzada.")
+    company = forms.CharField(label="Emp.", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Empresa asociada"}))
 
     class Meta:
         model = PaymentCard
         fields = ["client_name", "cardholder_name", "brand", "purpose", "active"]
-        labels = {"client_name": "Cliente", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Finalidad", "active": "Tarjeta activa"}
+        labels = {"client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
 
     def clean_pan(self):
         digits = "".join(character for character in self.cleaned_data["pan"] if character.isdigit())
@@ -114,15 +114,53 @@ class CardForm(forms.ModelForm):
 
 
 class CardEditForm(forms.ModelForm):
-    company = forms.CharField(label="Nueva empresa", required=False, min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Deje vacío para conservar la empresa actual"}), help_text="El valor actual nunca se precarga. Si deja este campo vacío, se conservará sin cambios.")
+    pan = forms.CharField(label="Número de tarjeta", required=False, min_length=13, max_length=23, widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric", "placeholder": "Ingrese el nuevo número"}), help_text="Déjelo vacío para conservar el número actual.")
+    expiry = forms.CharField(label="Vencimiento", required=False, max_length=5, widget=forms.TextInput(attrs={"placeholder": "MM/AA", "autocomplete": "off"}), help_text="Déjelo vacío para conservar el vencimiento actual.")
+    company = forms.CharField(label="Emp.", required=False, min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Empresa asociada"}), help_text="Déjelo vacío para conservar la empresa actual.")
     class Meta:
         model = PaymentCard
         fields = ["client_name", "cardholder_name", "brand", "purpose"]
-        labels = {"client_name": "Cliente", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Finalidad"}
+        labels = {"client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia"}
+
+    def clean_pan(self):
+        value = self.cleaned_data.get("pan", "")
+        if not value:
+            return ""
+        digits = "".join(character for character in value if character.isdigit())
+        if len(digits) not in range(13, 20) or not luhn_valid(digits):
+            raise forms.ValidationError("El número no supera la validación requerida.")
+        if PaymentCard.objects.filter(pan_fingerprint=fingerprint(digits)).exclude(pk=self.instance.pk).exists():
+            raise forms.ValidationError("La tarjeta ya está registrada.")
+        return digits
+
+    def clean_expiry(self):
+        value = self.cleaned_data.get("expiry", "")
+        if not value:
+            return ""
+        if len(value) != 5 or value[2] != "/" or not (value[:2] + value[3:]).isdigit() or not 1 <= int(value[:2]) <= 12:
+            raise forms.ValidationError("Use formato MM/AA.")
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        brand = cleaned.get("brand")
+        pan = cleaned.get("pan")
+        comparison_pan = pan
+        if not comparison_pan and self.instance.pk:
+            comparison_pan = self.instance.get_pan()
+        if comparison_pan and brand and detected_brand(comparison_pan) != brand:
+            self.add_error("brand", "La franquicia no coincide con el número suministrado.")
+        return cleaned
 
     def save(self, commit=True, user=None):
         obj = super().save(False)
+        pan = self.cleaned_data.get("pan", "")
+        expiry = self.cleaned_data.get("expiry", "")
         company = self.cleaned_data.get("company", "").strip()
+        if pan:
+            obj.set_pan(pan)
+        if expiry:
+            obj.set_expiry(expiry)
         if company:
             obj.set_company(company)
         if user:

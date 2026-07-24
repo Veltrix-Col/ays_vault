@@ -24,7 +24,11 @@ El dispositivo se identifica prudentemente mediante HMAC del User-Agent normaliz
 
 ## Reautenticación
 
-La operación protegida conserva primero una intención aleatoria de cinco minutos en sesión, sin valores protegidos. Contraseña y TOTP validan la identidad y crean `SensitiveOperationWindow`, ligada al usuario/hash de sesión y con expiración fija de 15 minutos; este modelo no contiene motivo ni referencia. Después se exige una justificación nueva y se crea `ProtectedOperationContext`, ligado a una sola tarjeta, a la ventana y a la sesión. Empresa, PAN y vencimiento comparten ese contexto para revelar o copiar, pero otra tarjeta o una nueva operación requieren un contexto nuevo. Cada evento conserva su contexto, campo y acción, y la copia usa un token de un solo uso con 20 segundos de vigencia. Cerrar/revocar/expirar sesión, cambiar contraseña, bloquear dispositivo o reiniciar MFA invalida ambas autorizaciones.
+Contraseña y TOTP validan la identidad y crean `SensitiveOperationWindow`, ligada al usuario/hash de sesión y con expiración fija, no deslizante, de 15 minutos. La ventana es transversal a los propósitos sensibles autorizados, no contiene motivo ni referencia y nunca cambia los permisos del rol. Cerrar/revocar/expirar sesión, cambiar contraseña, bloquear el dispositivo o reiniciar MFA la invalida.
+
+`PendingSensitiveOperation` conserva una acción que debe sobrevivir a una redirección. Está ligada a usuario, sesión, propósito, objeto, UUID opaco y expiración; el payload de Nueva/Editar tarjeta se cifra con la llave de campos, nunca viaja por URL y se elimina al consumir o expirar la operación. La fila se reclama y consume atómicamente para impedir dobles ejecuciones.
+
+Para revelar o copiar, una intención aleatoria de cinco minutos no conserva valores protegidos. Después de validar la ventana se exige una justificación nueva y se crea `ProtectedOperationContext`, ligado a una sola tarjeta, a la ventana y a la sesión. Empresa, PAN y vencimiento comparten ese contexto para revelar o copiar, pero otra tarjeta o una nueva operación requieren un contexto nuevo. `RevealGrant` autoriza un campo y copia concretos, es de un solo uso cuando corresponde y dura 20 segundos. Cada evento conserva contexto, campo y acción sin incluir el valor.
 
 ## Alertas y auditoría
 
