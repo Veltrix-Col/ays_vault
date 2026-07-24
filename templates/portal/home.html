@@ -1,0 +1,61 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal de Aplicaciones A&amp;S</title>
+  <meta name="description" content="Acceso institucional a las aplicaciones de A&S Asesores en Seguros">
+  <meta name="theme-color" content="#152036">
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="preload" href="{% static 'fonts/Poppins-Regular.ttf' %}" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="{% static 'fonts/Zain-Regular.ttf' %}" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/portal.css' %}">
+</head>
+<body class="public-portal">
+  <a class="skip-link" href="#portal-applications">Ir a las aplicaciones</a>
+  <div class="portal-page">
+    <header class="portal-header" aria-labelledby="portal-title">
+      <img class="portal-logo" src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en Seguros">
+      <div class="portal-heading">
+        <span class="portal-kicker">Ecosistema digital</span>
+        <h1 id="portal-title">Portal de Aplicaciones A&amp;S</h1>
+        <p>Seleccione el módulo al que desea acceder.</p>
+      </div>
+    </header>
+
+    <main id="portal-applications" class="portal-main" tabindex="-1">
+      <div class="application-grid" role="list" aria-label="Aplicaciones disponibles">
+        {% for app in applications %}
+          <article class="application-card{% if not app.active %} is-disabled{% endif %}" role="listitem">
+            <div class="application-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="{{ app.icon_path }}"></path>
+              </svg>
+            </div>
+            <div class="application-copy">
+              <h2>{{ app.name }}</h2>
+              <p>{{ app.description }}</p>
+            </div>
+            <div class="application-action">
+              {% if app.active %}
+                <a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}>
+                  Ingresar <span aria-hidden="true">→</span>
+                </a>
+              {% else %}
+                <span class="access-unavailable" role="status">Acceso no configurado</span>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </main>
+
+    <footer class="portal-footer">
+      <span>© A&amp;S Asesores en Seguros</span>
+      <span>Acceso institucional</span>
+    </footer>
+  </div>
+</body>
+</html>

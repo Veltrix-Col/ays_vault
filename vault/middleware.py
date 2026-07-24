@@ -43,6 +43,8 @@ class SecureSessionMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if request.path_info == "/":
+            return self.get_response(request)
         if not request.user.is_authenticated:
             return self.get_response(request)
         if request.path.startswith("/static/"):

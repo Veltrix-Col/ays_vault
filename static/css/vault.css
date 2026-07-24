@@ -485,6 +485,21 @@ p { line-height: 1.65; }
 .login-card details { margin: 12px 0 18px; }
 .login-card details > summary { color: var(--ays-primary-strong); font-size: .75rem; font-weight: 700; cursor: pointer; }
 .login-card > a { display: inline-flex; margin-top: 18px; font-size: .75rem; font-weight: 700; }
+.portal-return-link {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 14px;
+  color: var(--ays-muted);
+  font-size: .73rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+.portal-return-link:hover {
+  color: var(--ays-primary-strong);
+  text-decoration-color: currentColor;
+}
 .enroll-card { width: min(100%, 560px); }
 
 .table-panel { border-radius: var(--ays-radius) var(--ays-radius) var(--ays-radius) 6px; }
