@@ -139,11 +139,11 @@ def revoke_session(record, actor=None, reason="Revocación", request=None, actio
 
 
 def establish_secure_session(request, user, otp_device, device):
-    otp_login(request, otp_device)
-    if request.session.session_key is None:
-        request.session.save()
-    current_hash = session_hash(request)
     with transaction.atomic():
+        otp_login(request, otp_device)
+        if request.session.session_key is None:
+            request.session.save()
+        current_hash = session_hash(request)
         previous = list(SecureSession.objects.select_for_update().filter(user=user, status=SecureSession.ACTIVE).exclude(session_hash=current_hash))
         policy = get_policy()
         if policy.new_session_policy == "ALLOW_LIMIT":
@@ -165,7 +165,7 @@ def establish_secure_session(request, user, otp_device, device):
             "mfa_completed_at": now, "new_device": device.status == UserDevice.NEW,
             "outside_office_hours": outside_hours(), "trust_level": "MEDIUM" if device.status == UserDevice.TRUSTED else "LOW",
         })
-    audit(request, "SESSION_CREATED", user=user, metadata={"secure_session_id": record.pk, "device_id": device.pk})
+        audit(request, "SESSION_CREATED", user=user, metadata={"secure_session_id": record.pk, "device_id": device.pk})
     return record
 
 

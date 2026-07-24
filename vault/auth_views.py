@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model, login, logout
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import F
 from django.shortcuts import redirect, render
 from django.utils import timezone
@@ -109,15 +110,16 @@ def mfa_verify(request):
     if request.method == "POST" and form.is_valid():
         otp_device = verify_totp(user, form.cleaned_data.get("token")) if form.cleaned_data.get("token") else confirmed_totp_device(user) if consume_recovery_code(user, form.cleaned_data.get("recovery_code")) else None
         if otp_device:
-            recovery_used = bool(form.cleaned_data.get("recovery_code"))
-            user.vault_profile.mfa_failed_attempts = 0
-            user.vault_profile.save(update_fields=["mfa_failed_attempts"])
-            if not _complete_login(request, user, otp_device, device):
-                form.add_error(None, "La política vigente no permite una nueva sesión.")
-                return render(request, "registration/mfa_verify.html", {"form": form})
-            event = audit(request, "MFA_RECOVERY_USED" if recovery_used else "MFA_SUCCESS", user=user, risk_level="HIGH" if recovery_used else "LOW")
-            if recovery_used:
-                create_alert(request, event, "RECOVERY_CODE_USED", "HIGH", user, device, "Se utilizó un código de recuperación.")
+            with transaction.atomic():
+                recovery_used = bool(form.cleaned_data.get("recovery_code"))
+                user.vault_profile.mfa_failed_attempts = 0
+                user.vault_profile.save(update_fields=["mfa_failed_attempts"])
+                if not _complete_login(request, user, otp_device, device):
+                    form.add_error(None, "La política vigente no permite una nueva sesión.")
+                    return render(request, "registration/mfa_verify.html", {"form": form})
+                event = audit(request, "MFA_RECOVERY_USED" if recovery_used else "MFA_SUCCESS", user=user, risk_level="HIGH" if recovery_used else "LOW")
+                if recovery_used:
+                    create_alert(request, event, "RECOVERY_CODE_USED", "HIGH", user, device, "Se utilizó un código de recuperación.")
             return redirect(role_home_name(user))
         _mfa_failure(request, user, device)
         form.add_error(None, "No fue posible validar el segundo factor.")
@@ -136,20 +138,21 @@ def mfa_enroll(request):
     form = MFAEnrollmentForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         if user.check_password(form.cleaned_data["password"]) and device.verify_token(form.cleaned_data["token"]):
-            TOTPDevice.objects.filter(user=user, confirmed=True).delete()
-            device.confirmed = True; device.save(update_fields=["confirmed"])
-            user.vault_profile.mfa_status = UserProfile.MFA_ACTIVE
-            user.vault_profile.mfa_enabled = True
-            user.vault_profile.mfa_failed_attempts = 0
-            user.vault_profile.mfa_changed_at = timezone.now()
-            user.vault_profile.save(update_fields=["mfa_status", "mfa_enabled", "mfa_failed_attempts", "mfa_changed_at"])
-            codes = generate_recovery_codes(user)
-            browser_device, _ = get_or_register_device(request, user)
-            if not _complete_login(request, user, device, browser_device):
-                form.add_error(None, "La política vigente no permite una nueva sesión.")
-                return render(request, "registration/mfa_enroll.html", {"form": form, "manual_key": "", "qr_data_uri": ""})
-            request.session["recovery_codes_pending"] = True
-            audit(request, "MFA_ENROLL_COMPLETE", user=user)
+            with transaction.atomic():
+                TOTPDevice.objects.filter(user=user, confirmed=True).delete()
+                device.confirmed = True; device.save(update_fields=["confirmed"])
+                user.vault_profile.mfa_status = UserProfile.MFA_ACTIVE
+                user.vault_profile.mfa_enabled = True
+                user.vault_profile.mfa_failed_attempts = 0
+                user.vault_profile.mfa_changed_at = timezone.now()
+                user.vault_profile.save(update_fields=["mfa_status", "mfa_enabled", "mfa_failed_attempts", "mfa_changed_at"])
+                codes = generate_recovery_codes(user)
+                browser_device, _ = get_or_register_device(request, user)
+                if not _complete_login(request, user, device, browser_device):
+                    form.add_error(None, "La política vigente no permite una nueva sesión.")
+                    return render(request, "registration/mfa_enroll.html", {"form": form, "manual_key": "", "qr_data_uri": ""})
+                request.session["recovery_codes_pending"] = True
+                audit(request, "MFA_ENROLL_COMPLETE", user=user)
             return render(request, "registration/recovery_codes.html", {"codes": codes, "first_display": True})
         form.add_error(None, "No fue posible confirmar el enrolamiento.")
     manual_key = base64.b32encode(device.bin_key).decode().rstrip("=")
