@@ -64,10 +64,10 @@ class PublicHomeTests(TestCase):
         self.assertNotContains(response, "Cerrar sesión")
 
     @override_settings(SOAT_APP_URL="")
-    def test_soat_is_disabled_when_url_is_not_configured(self):
+    def test_soat_uses_internal_module_when_external_url_is_not_configured(self):
         response = self.client.get("/")
-        self.assertContains(response, "Acceso no configurado")
-        self.assertNotContains(response, 'href=""')
+        self.assertContains(response, f'href="{reverse("soat:upload")}"')
+        self.assertNotContains(response, "Acceso no configurado")
 
     @override_settings(SOAT_APP_URL="https://soat.example.invalid/access")
     def test_soat_uses_configured_http_url(self):
@@ -78,7 +78,7 @@ class PublicHomeTests(TestCase):
     @override_settings(SOAT_APP_URL="javascript:alert(1)")
     def test_soat_rejects_unsafe_configured_url(self):
         response = self.client.get("/")
-        self.assertContains(response, "Acceso no configurado")
+        self.assertContains(response, f'href="{reverse("soat:upload")}"')
         self.assertNotContains(response, "javascript:")
 
     def test_authentication_and_blocked_access_screens_return_to_portal(self):

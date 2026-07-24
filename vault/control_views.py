@@ -216,13 +216,40 @@ def email_test(request):
         messages.error(request, "Ingrese un destinatario corporativo válido para la prueba.")
         return redirect("vault:recipients")
     recipient = form.cleaned_data["recipient"]
+    scenario = form.cleaned_data.get("scenario") or "LOGIN_OUTSIDE_HOURS"
+    scenario_labels = dict(EmailTestForm.SCENARIOS)
+    scenario_label = scenario_labels[scenario]
+    is_reveal = scenario.startswith("REVEAL_")
+    subject = (
+        "A&S Vault | Revelado de tarjeta fuera del horario habitual"
+        if is_reveal
+        else "A&S Vault | Inicio de sesión fuera del horario habitual"
+    )
+    safe_details = (
+        "Tarjeta ficticia #0000 · terminación •••• 0000 · certificado Zoho PRUEBA-0000."
+        if is_reveal
+        else "Usuario ficticio: prueba.control · rol: Prueba administrativa."
+    )
+    text_body = (
+        f"A&S Vault — PRUEBA CONTROLADA\n\nEscenario: {scenario_label}.\n"
+        f"{safe_details}\nIP ficticia: 192.0.2.1.\n"
+        "Recomendación: validar el evento en el Centro de Control.\n\n"
+        "Este mensaje no contiene datos operativos ni secretos."
+    )
+    html_body = (
+        "<p><strong>A&amp;S Vault — PRUEBA CONTROLADA</strong></p>"
+        f"<p><strong>Escenario:</strong> {scenario_label}</p>"
+        f"<p>{safe_details}</p><p><strong>IP ficticia:</strong> 192.0.2.1</p>"
+        "<p>Recomendación: validar el evento en el Centro de Control.</p>"
+        "<p>Este mensaje no contiene datos operativos ni secretos.</p>"
+    )
     record = send_notification(
         notification_type="EMAIL_TEST",
         recipient=recipient,
-        subject="[A&S Vault] Prueba de configuración de correo",
-        text_body="A&S Vault confirmó una prueba controlada del servicio de correo. Este mensaje no contiene datos operativos.",
-        html_body="<p><strong>A&amp;S Vault</strong></p><p>Prueba controlada del servicio de correo. Este mensaje no contiene datos operativos.</p>",
-        idempotency_key=f"email-test:{request.user.pk}:{recipient.lower()}:{timezone.localdate().isoformat()}",
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        idempotency_key=f"email-test:{request.user.pk}:{recipient.lower()}:{scenario}:{timezone.localdate().isoformat()}",
     )
     delivered = record.result == NotificationRecord.SENT
     audit(
@@ -236,6 +263,7 @@ def email_test(request):
             "delivery_result": record.result,
             "attempts": record.attempts,
             "safe_error_code": record.safe_error_code,
+            "test_scenario": scenario,
         },
     )
     if delivered:

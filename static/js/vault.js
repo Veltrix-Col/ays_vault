@@ -313,6 +313,40 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("visibilitychange", () => { if (document.hidden) timers.forEach((_, field) => hideField(field)); });
   }
 
+  const sensitiveWindow = document.querySelector("[data-sensitive-window]");
+  if (sensitiveWindow) {
+    const countdown = sensitiveWindow.querySelector("[data-sensitive-countdown]");
+    const expiresAt = Date.parse(sensitiveWindow.dataset.expiresAt || "");
+    let lastMinute = null;
+    const updateWindowCountdown = () => {
+      const remaining = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
+      if (!remaining) {
+        sensitiveWindow.classList.add("expired");
+        sensitiveWindow.classList.remove("warning");
+        sensitiveWindow.firstChild.textContent = "Ventana segura vencida ";
+        if (countdown) countdown.textContent = "";
+        return false;
+      }
+      const seconds = Math.floor(remaining / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const rest = String(seconds % 60).padStart(2, "0");
+      sensitiveWindow.classList.toggle("warning", seconds <= 180);
+      sensitiveWindow.firstChild.textContent = seconds <= 180
+        ? "Ventana segura próxima a vencer "
+        : "Ventana segura activa ";
+      if (countdown) countdown.textContent = `· ${String(minutes).padStart(2, "0")}:${rest}`;
+      if (minutes !== lastMinute) {
+        sensitiveWindow.setAttribute("aria-label", `${sensitiveWindow.firstChild.textContent.trim()}. ${minutes} minutos restantes.`);
+        lastMinute = minutes;
+      }
+      return true;
+    };
+    updateWindowCountdown();
+    const timer = window.setInterval(() => {
+      if (!updateWindowCountdown()) window.clearInterval(timer);
+    }, 1000);
+  }
+
   const reportDialog = document.querySelector("#report-dialog");
   if (reportDialog) {
     const reportForm = reportDialog.querySelector("[data-report-form]");

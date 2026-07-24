@@ -811,6 +811,19 @@ p { line-height: 1.65; }
   .vault-empty-results ul { grid-template-columns: 1fr; }
 }
 
+.sensitive-window-status {
+  margin: 10px 0 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(49, 220, 211, .38);
+  border-radius: 10px;
+  color: #d9fffc;
+  background: rgba(49, 220, 211, .08);
+  font-size: .76rem;
+  line-height: 1.25;
+}
+.sensitive-window-status.warning { border-color: rgba(255, 193, 7, .55); color: #fff0b3; }
+.sensitive-window-status.expired { border-color: rgba(255,255,255,.18); color: rgba(255,255,255,.7); background: rgba(255,255,255,.04); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }

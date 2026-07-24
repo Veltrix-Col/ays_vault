@@ -26,6 +26,8 @@ Los accesos rapidos permanecen en parametros GET. Los chips permiten quitar filt
 
 `WeasyPrint==69.0` genera PDF A4 en memoria con orientación automática o seleccionada, logo, metadatos, filtros, tabla, advertencia y numeración de páginas. La configuración se abre en un modal reutilizable; los botones muestran estado de carga y bloquean envíos dobles. La tabla usa disposición fija y evita reglas de salto por fila costosas. No usa ReportLab ni deja temporales. En Windows pueden aparecer avisos GLib del sistema que no invalidan el PDF.
 
+En el entorno Windows/OneDrive de QA, el módulo `brotli.py` instalado era un marcador sin contenido local y provocaba `PermissionError` durante la importación de WeasyPrint. Se fijó `brotlicffi==1.2.0.0`, sin cambiar el motor PDF. La validación real posterior generó 295 registros, 46 páginas y 180.829 bytes con firma `%PDF`; el endpoint registró 8.937 ms. El primer uso de un proceso puede sumar el costo de inicialización de WeasyPrint.
+
 ## Seguridad, auditoria y limites
 
 Solo se genera por POST autenticado. Los endpoints verifican perfil activo y rol; no confian en IDs o tipos enviados por la interfaz. Los valores predeterminados son:

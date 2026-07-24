@@ -63,7 +63,7 @@ def reauthenticate(request):
             return redirect(pending_operation.success_url)
     form = ReauthenticationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        if request.user.check_password(form.cleaned_data["password"]) and verify_totp(request.user, form.cleaned_data["token"]):
+        if request.user.check_password(form.cleaned_data["password"]):
             grant_reauthentication(request, purpose)
             audit(request, "REAUTH_SUCCESS", reason=purpose)
             if pending_operation:

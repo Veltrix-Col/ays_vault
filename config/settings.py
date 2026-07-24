@@ -31,7 +31,7 @@ DEBUG=env_bool('DEBUG',APP_ENV=='development')
 SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if DEBUG else '')
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
@@ -82,6 +82,11 @@ EMAIL_TIMEOUT=EMAIL_TIMEOUT_SECONDS
 EMAIL_MAX_RETRIES=email_env_int('EMAIL_MAX_RETRIES',3,1,10)
 VAULT_BASE_URL=os.getenv('VAULT_BASE_URL','http://127.0.0.1:8000').rstrip('/')
 SOAT_APP_URL=os.getenv('SOAT_APP_URL','').strip()
+SOAT_ZOHO_REPORT_URL=os.getenv('SOAT_ZOHO_REPORT_URL','').strip()
+SOAT_REFERENCE_FILE=Path(os.getenv('SOAT_REFERENCE_FILE',BASE_DIR/'private_assets'/'soat'/'SOAT_prueba_3_Def.xlsx'))
+SOAT_MAX_UPLOAD_BYTES=int(os.getenv('SOAT_MAX_UPLOAD_BYTES',str(25*1024*1024)))
+SOAT_MAX_ROWS=int(os.getenv('SOAT_MAX_ROWS','100000'))
+SOAT_MAX_COLUMNS=int(os.getenv('SOAT_MAX_COLUMNS','200'))
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 REPORT_DEFAULT_MAX_DAYS=int(os.getenv('REPORT_DEFAULT_MAX_DAYS','90'))

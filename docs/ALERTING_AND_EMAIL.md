@@ -36,8 +36,8 @@ La bitacora conserva destinatario enmascarado/hash, fechas, resultado, codigo se
 
 ## Plantillas y tipos
 
-Las plantillas HTML/texto incluyen A&S Vault, tipo, severidad, usuario, fecha/hora, IP, dispositivo resumido, motivo, recomendacion y enlace. Los tipos se derivan de las alertas de acceso fuera de horario, revelado/copia, dispositivo, MFA/usuario bloqueado, reinicio MFA, contrasena, politicas/excepciones, inactividad/adopcion, integridad y correo.
+Las plantillas HTML/texto incluyen A&S Vault, tipo, severidad, usuario, fecha/hora, IP, dispositivo resumido, motivo, recomendación y enlace. Los únicos correos automáticos son: inicio de sesión fuera de horario, inicio de sesión en fin de semana, revelado fuera de horario y revelado en fin de semana. Festivos y coincidencias de varias condiciones producen un único mensaje. Copia, creación/edición/desactivación, reautenticación, ventanas, contextos, reportes, SOAT y operaciones administrativas normales conservan auditoría/alerta cuando aplica, pero no generan correo.
 
 ## Prueba de produccion simulada
 
-Use primero console/locmem, simule fallo y reintento y confirme idempotencia. Después configure un buzón institucional de prueba y use el botón administrativo **Enviar correo de prueba**. No configure credenciales reales durante pruebas automatizadas. En Graph, un HTTP 202 confirma aceptación, no entrega final. **No usar datos reales todavía.**
+Use primero console/locmem, simule fallo y reintento y confirme idempotencia. Después configure un buzón institucional de prueba y use el botón administrativo **Enviar correo de prueba**, seleccionando uno de los cuatro escenarios ficticios. No configure credenciales reales durante pruebas automatizadas. En Graph, un HTTP 202 confirma aceptación, no entrega final. **No usar datos reales todavía.**

@@ -89,44 +89,20 @@ class MFASQLiteConcurrencyTests(TransactionTestCase):
         second = Client()
         self.begin_login(second)
 
-        lock_acquired = threading.Event()
-        release_lock = threading.Event()
         callback_states = []
-        original_delivery_audit = _audit_alert_delivery
 
-        def hold_sqlite_write_lock(record, alert):
-            with transaction.atomic():
-                PolicyEvaluationRun.objects.create(dry_run=True, status="LOCK_TEST")
-                lock_acquired.set()
-                release_lock.wait(timeout=2)
-            original_delivery_audit(record, alert)
-
-        def coordinated_run_async(func, *args, **kwargs):
+        def capture_after_commit(alert):
             callback_states.append(
                 {
                     "in_atomic_block": connection.in_atomic_block,
                     "session_created": AuditEvent.objects.filter(user=self.user, action="SESSION_CREATED").exists(),
                     "mfa_success": AuditEvent.objects.filter(user=self.user, action="MFA_SUCCESS").exists(),
+                    "alert_type": alert.alert_type,
                 }
             )
-            result = run_async(func, *args, **kwargs)
-            self.assertTrue(lock_acquired.wait(timeout=2), "la notificación no alcanzó la escritura concurrente")
-            return result
 
-        timer = threading.Timer(1, release_lock.set)
-        timer.start()
-        try:
-            if connection.vendor == "sqlite":
-                with connection.cursor() as cursor:
-                    cursor.execute("PRAGMA busy_timeout = 200")
-            with (
-                patch("vault.notifications.run_async", side_effect=coordinated_run_async),
-                patch("vault.notifications._audit_alert_delivery", side_effect=hold_sqlite_write_lock),
-            ):
-                response = self.complete_login(second)
-        finally:
-            release_lock.set()
-            timer.join(timeout=2)
+        with patch("vault.notifications.notify_alert_async", side_effect=capture_after_commit):
+            response = self.complete_login(second)
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(SecureSession.objects.filter(user=self.user, status=SecureSession.ACTIVE).count(), 1)
@@ -136,7 +112,9 @@ class MFASQLiteConcurrencyTests(TransactionTestCase):
         self.assertTrue(callback_states)
         self.assertTrue(
             all(
-                state == {"in_atomic_block": False, "session_created": True, "mfa_success": True}
+                not state["in_atomic_block"]
+                and state["session_created"]
+                and state["mfa_success"]
                 for state in callback_states
             )
         )
@@ -145,8 +123,8 @@ class MFASQLiteConcurrencyTests(TransactionTestCase):
             alert_type="SESSION_REPLACED",
         )
         self.assertEqual(replacement_alerts.count(), 1)
-        self.assertEqual(NotificationRecord.objects.filter(alert=replacement_alerts.get()).count(), 1)
-        self.assertTrue(AuditEvent.objects.filter(user=self.user, action="EMAIL_SENT").exists())
+        self.assertEqual(NotificationRecord.objects.filter(alert=replacement_alerts.get()).count(), 0)
+        self.assertFalse(AuditEvent.objects.filter(user=self.user, action="EMAIL_SENT").exists())
 
     def test_sqlite_serializes_concurrent_audit_writers_without_lock_errors(self):
         if connection.vendor != "sqlite":

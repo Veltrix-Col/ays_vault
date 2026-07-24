@@ -12,7 +12,8 @@ def _safe_external_url(value):
 
 def application_catalog():
     """Catálogo declarativo del portal; no contiene datos operativos."""
-    soat_url = _safe_external_url(getattr(settings, "SOAT_APP_URL", ""))
+    external_soat_url = _safe_external_url(getattr(settings, "SOAT_APP_URL", ""))
+    soat_url = external_soat_url or reverse("soat:upload")
     return [
         {
             "name": "A&S Vault",
@@ -27,7 +28,7 @@ def application_catalog():
             "description": "Validación, procesamiento y gestión de información asociada al proceso SOAT.",
             "icon_path": "M7 3h7l4 4v14H7V3Zm7 0v5h5M10 12h5M10 16h5",
             "url": soat_url,
-            "active": bool(soat_url),
-            "external": True,
+            "active": True,
+            "external": bool(external_soat_url),
         },
     ]

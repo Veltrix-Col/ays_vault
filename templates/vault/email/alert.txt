@@ -6,6 +6,10 @@ Usuario: {{ alert.affected_user|default:"No identificado" }}
 Fecha y hora: {{ alert.created_at|date:"d/m/Y H:i:s" }}
 IP: {{ alert.ip_address|default:"No disponible" }}
 Dispositivo: {% if alert.device %}{{ alert.device.friendly_name|default:alert.device.device_type }}{% else %}No disponible{% endif %}
+{% if alert.event.action == "REVEAL" %}Tarjeta: ID interno #{{ alert.event.card_id }} · terminación •••• {{ alert.event.card.last4 }}
+Campo: {{ alert.event.metadata.field|default:"Dato protegido" }}
+Número certificado recibo - Zoho: {{ alert.event.metadata.reference|default:"No disponible" }}
+{% endif %}
 Motivo: {{ alert.description }}
 Recomendación: {{ alert.recommendation|default:"Revisar el caso en el Centro de Control." }}
 

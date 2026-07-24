@@ -11,7 +11,7 @@ from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from .identity import grant_reauthentication
-from .models import AccessException, AlertTransition, AuditEvent, Holiday, NotificationRecord, PaymentCard, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, UserProfile
+from .models import AccessException, AlertTransition, AuditEvent, Holiday, NotificationRecord, PaymentCard, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, SensitiveOperationWindow, UserProfile
 from .notifications import send_alert_notification
 from .policies import evaluate_access_policy, invalidate_policy_cache
 from .policy_evaluation import evaluate_security_policies
@@ -222,7 +222,11 @@ class ControlCenterPermissionTests(TestCase):
         self.assertEqual(response.context["page"].paginator.per_page, 50); self.assertTrue(response.context["page"].has_next())
 
     def test_policy_change_requires_reauthentication(self):
-        response = self.login(self.admin).post(reverse("vault:policy_settings"), {})
+        client = self.login(self.admin)
+        SensitiveOperationWindow.objects.filter(user=self.admin).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
+        response = client.post(reverse("vault:policy_settings"), {})
         self.assertIn("purpose=policy_admin", response.url)
 
     def test_unauthorized_user_cannot_modify_recipients(self):

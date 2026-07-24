@@ -287,3 +287,23 @@ class EmailTestViewTests(TestCase):
             HTTP_X_CSRFTOKEN=token,
         )
         self.assertEqual(response.status_code, 302)
+
+    def test_reveal_weekend_preview_uses_only_fictitious_safe_data(self):
+        client = self.authenticated_client(self.admin)
+        response = client.post(
+            reverse("vault:email_test"),
+            {
+                "recipient": "admin@example.invalid",
+                "scenario": "REVEAL_WEEKEND",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        rendered = message.subject + message.body
+        self.assertIn("Revelado de tarjeta fuera del horario habitual", message.subject)
+        self.assertIn("PRUEBA CONTROLADA", rendered)
+        self.assertIn("certificado Zoho PRUEBA-0000", rendered)
+        self.assertNotRegex(rendered, r"(?<!\d)\d{13,19}(?!\d)")
+        event = AuditEvent.objects.filter(user=self.admin, action="EMAIL_SENT").latest("sequence")
+        self.assertEqual(event.metadata["test_scenario"], "REVEAL_WEEKEND")

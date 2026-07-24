@@ -395,7 +395,7 @@ def protected_reauthenticate(request):
             "La solicitud expiró. Inicie nuevamente la operación.",
         )
     form = ReauthenticationForm(request.POST)
-    if form.is_valid() and request.user.check_password(form.cleaned_data["password"]) and verify_totp(request.user, form.cleaned_data["token"]):
+    if form.is_valid() and request.user.check_password(form.cleaned_data["password"]):
         window = create_operation_window(request)
         if not window:
             raise PermissionDenied
@@ -425,10 +425,9 @@ def protected_confirm(request):
     form = OperationContextForm(request.POST)
     if form.is_valid() and card.has_company:
         company = card.get_company().strip().casefold()
-        for field_name in ("reason", "reference"):
-            supplied = form.cleaned_data[field_name].casefold()
-            if company and company in supplied:
-                form.add_error(field_name, "No incluya datos protegidos en este campo.")
+        supplied = form.cleaned_data["zoho_reference"].casefold()
+        if company and company in supplied:
+            form.add_error("zoho_reference", "No incluya datos protegidos en este campo.")
     if not form.is_valid():
         return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": form, "intent": intent_token}, request=request), status=422, content_type="text/html; charset=utf-8")
     window = current_operation_window(request)
@@ -438,7 +437,13 @@ def protected_confirm(request):
             "SENSITIVE_WINDOW_EXPIRED",
             "La reautenticación expiró. Inicie nuevamente la operación.",
         )
-    context = create_operation_context(request, window, card, form.cleaned_data["reason"], form.cleaned_data["reference"])
+    context = create_operation_context(
+        request,
+        window,
+        card,
+        "Consulta asociada a certificado o recibo Zoho",
+        form.cleaned_data["zoho_reference"],
+    )
     if not context:
         raise PermissionDenied
     clear_intent(request)

@@ -183,11 +183,24 @@ class CardSearchForm(forms.Form):
 
 
 class EmailTestForm(forms.Form):
+    SCENARIOS = [
+        ("LOGIN_OUTSIDE_HOURS", "Inicio de sesión fuera de horario"),
+        ("LOGIN_WEEKEND", "Inicio de sesión durante fin de semana"),
+        ("REVEAL_OUTSIDE_HOURS", "Revelado fuera de horario"),
+        ("REVEAL_WEEKEND", "Revelado durante fin de semana"),
+    ]
     recipient = forms.EmailField(
         label="Destinatario de la prueba",
         max_length=254,
         help_text="Use una dirección corporativa autorizada. La prueba no incluye datos operativos.",
         widget=forms.EmailInput(attrs={"autocomplete": "email", "placeholder": "administrador@ays.com.co"}),
+    )
+    scenario = forms.ChoiceField(
+        label="Escenario ficticio",
+        choices=SCENARIOS,
+        initial="LOGIN_OUTSIDE_HOURS",
+        required=False,
+        help_text="Permite revisar los cuatro únicos tipos de aviso automático habilitados.",
     )
 
 
@@ -237,21 +250,30 @@ class MFAEnrollmentForm(forms.Form):
 
 class ReauthenticationForm(forms.Form):
     password = forms.CharField(widget=forms.PasswordInput(attrs={"autocomplete": "current-password", "placeholder": "Ingrese su contraseña"}), label="Contraseña")
-    token = forms.CharField(min_length=6, max_length=6, label="Código de verificación", widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code", "placeholder": "Código de 6 dígitos", "maxlength": "6"}))
 
 
 class OperationContextForm(forms.Form):
-    reason = forms.CharField(label="Motivo", min_length=5, max_length=240, strip=True, widget=forms.TextInput(attrs={"placeholder": "Pago renovación empresa A&S", "autocomplete": "off"}))
-    reference = forms.CharField(label="Referencia interna", min_length=3, max_length=120, strip=True, widget=forms.TextInput(attrs={"placeholder": "Póliza # 123456486789", "autocomplete": "off"}))
+    zoho_reference = forms.CharField(
+        label="Número certificado recibo - Zoho",
+        min_length=1,
+        max_length=120,
+        strip=True,
+        help_text="Este número permite relacionar la consulta con la gestión registrada en Zoho.",
+        widget=forms.TextInput(attrs={
+            "placeholder": "Ingrese el número del certificado o recibo registrado en Zoho",
+            "autocomplete": "off",
+        }),
+    )
 
     def clean(self):
         cleaned = super().clean()
-        for field in ("reason", "reference"):
-            value = cleaned.get(field, "")
-            if re.search(r"(?<!\d)\d{13,19}(?!\d)", value):
-                self.add_error(field, "No incluya números completos de tarjeta en este campo.")
-            if re.search(r"(?<!\d)(0[1-9]|1[0-2])[/\-]\d{2,4}(?!\d)", value):
-                self.add_error(field, "No incluya fechas de vencimiento en este campo.")
+        value = cleaned.get("zoho_reference", "")
+        if re.search(r"(?<!\d)\d{13,19}(?!\d)", value):
+            self.add_error("zoho_reference", "No incluya números completos de tarjeta en este campo.")
+        if re.search(r"(?<!\d)(0[1-9]|1[0-2])[/\-]\d{2,4}(?!\d)", value):
+            self.add_error("zoho_reference", "No incluya fechas de vencimiento en este campo.")
+        if any(marker in value.lower() for marker in ("<script", "javascript:", "data:text/html")):
+            self.add_error("zoho_reference", "El valor contiene contenido no permitido.")
         return cleaned
 
 

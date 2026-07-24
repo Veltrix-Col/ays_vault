@@ -77,8 +77,11 @@ class NotifyAlertAsyncTests(TransactionTestCase):
         self.user.vault_profile.save()
         NotificationRecipient.objects.create(name="Admin demo", email="admin@example.invalid", active=True, is_primary=True, minimum_severity="LOW")
 
-    def make_alert(self):
-        event = audit(None, "ACCESS", user=self.user, metadata={"safe": True})
+    def make_alert(self, *, action="LOGIN", outside_office_hours=True):
+        event = audit(None, action, user=self.user, metadata={"safe": True})
+        if event.outside_office_hours != outside_office_hours:
+            event.outside_office_hours = outside_office_hours
+            event.save(update_fields=["outside_office_hours"])
         return SecurityAlert.objects.create(event=event, alert_type="ASYNC_TEST", severity="HIGH", affected_user=self.user, description="Evento seguro")
 
     def test_notify_alert_async_delivers_notification_via_background_thread(self):
@@ -96,3 +99,12 @@ class NotifyAlertAsyncTests(TransactionTestCase):
 
     def test_notify_alert_by_id_ignores_missing_alert(self):
         self.assertEqual(notify_alert_by_id(999999), [])
+
+    def test_automatic_email_is_not_sent_for_normal_or_non_whitelisted_events(self):
+        normal_login = self.make_alert(outside_office_hours=False)
+        card_change = self.make_alert(action="CREATE", outside_office_hours=True)
+        self.assertEqual(notify_alert_by_id(normal_login.pk), [])
+        self.assertEqual(notify_alert_by_id(card_change.pk), [])
+        self.assertFalse(
+            NotificationRecord.objects.filter(alert__in=[normal_login, card_change]).exists()
+        )

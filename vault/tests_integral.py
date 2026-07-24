@@ -119,7 +119,7 @@ class IntegralVaultFlowTests(TestCase):
         totp.time = time.time()
         return str(totp.token()).zfill(device.digits)
 
-    def authorize_operation(self, client, user, card=None, field="company", action="reveal", reason="Pago autorizado de renovación", reference="POL-123456", expect_identity=True):
+    def authorize_operation(self, client, user, card=None, field="company", action="reveal", reason=None, reference="POL-123456", expect_identity=True):
         card = card or self.card
         start = client.post(reverse("vault:reveal", args=[card.pk]), {"field": field, "action": action})
         self.assertEqual(start.status_code, 428)
@@ -130,16 +130,16 @@ class IntegralVaultFlowTests(TestCase):
             self.assertIn("Ingrese su contraseña", payload["form_html"])
             identity = client.post(
                 reverse("vault:protected_reauthenticate"),
-                {"intent": intent, "password": PASSWORD, "token": self.token(user)},
+                {"intent": intent, "password": PASSWORD},
             )
             self.assertEqual(identity.status_code, 200)
-            self.assertContains(identity, "Indique el contexto de esta operación")
+            self.assertContains(identity, "Relacione la consulta con Zoho")
         else:
-            self.assertIn("Referencia interna", payload["form_html"])
+            self.assertIn("Número certificado recibo - Zoho", payload["form_html"])
             self.assertNotIn("Ingrese su contraseña", payload["form_html"])
         confirm = client.post(
             reverse("vault:protected_confirm"),
-            {"intent": intent, "reason": reason, "reference": reference},
+            {"intent": intent, "zoho_reference": reference},
         )
         self.assertEqual(confirm.status_code, 200)
         return (
@@ -218,12 +218,12 @@ class IntegralVaultFlowTests(TestCase):
         client = self.authenticated_client(self.analyst)
         window, context = self.authorize_operation(client, self.analyst)
         lifetime = (window.expires_at - window.created_at).total_seconds()
-        self.assertGreaterEqual(lifetime, 899)
-        self.assertLessEqual(lifetime, 901)
+        self.assertGreaterEqual(lifetime, 1799)
+        self.assertLessEqual(lifetime, 1801)
         self.assertFalse(hasattr(window, "reason"))
         self.assertFalse(hasattr(window, "internal_reference"))
         self.assertEqual(context.card, self.card)
-        self.assertEqual(context.reason, "Pago autorizado de renovación")
+        self.assertEqual(context.reason, "Consulta asociada a certificado o recibo Zoho")
         self.assertEqual(context.internal_reference, "POL-123456")
 
     def test_three_fields_of_same_card_share_context_and_audit_individually(self):
@@ -261,13 +261,13 @@ class IntegralVaultFlowTests(TestCase):
         first_context.refresh_from_db()
         self.assertIsNotNone(first_context.closed_at)
         self.assertEqual(second_context.card, self.other_card)
-        self.assertEqual(second_context.reason, "Segunda compra")
+        self.assertEqual(second_context.reason, "Consulta asociada a certificado o recibo Zoho")
         self.assertEqual(second_context.internal_reference, "REF-SEGUNDA")
-        self.assertNotEqual(second_context.reason, first_context.reason)
+        self.assertEqual(second_context.reason, first_context.reason)
         response = client.post(reverse("vault:reveal", args=[self.other_card.pk]), {"field": "expiry", "action": "reveal"})
         self.assertEqual(response.status_code, 200)
         event = AuditEvent.objects.filter(action="REVEAL", card=self.other_card).latest("sequence")
-        self.assertEqual(event.reason, "Segunda compra")
+        self.assertEqual(event.reason, "Consulta asociada a certificado o recibo Zoho")
         self.assertEqual(event.metadata["reference"], "REF-SEGUNDA")
         self.assertNotIn("REF-PRIMERA", str(event.metadata))
 
@@ -281,20 +281,20 @@ class IntegralVaultFlowTests(TestCase):
             client, self.analyst, reason="Nueva operación", reference="REF-2", expect_identity=False,
         )
         self.assertEqual(same_window.pk, window.pk)
-        self.assertEqual(second_context.reason, "Nueva operación")
+        self.assertEqual(second_context.reason, "Consulta asociada a certificado o recibo Zoho")
 
     def test_identity_must_succeed_before_context_and_context_rejects_protected_values(self):
         client = self.authenticated_client(self.analyst)
         start = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "company", "action": "reveal"})
         intent = start.json()["intent"]
-        bad = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": "incorrecta", "token": "000000"})
+        bad = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": "incorrecta"})
         self.assertEqual(bad.status_code, 422)
-        self.assertNotContains(bad, "Referencia interna", status_code=422)
-        premature = client.post(reverse("vault:protected_confirm"), {"intent": intent, "reason": "Pago autorizado", "reference": "POL-1"})
+        self.assertNotContains(bad, "Número certificado recibo - Zoho", status_code=422)
+        premature = client.post(reverse("vault:protected_confirm"), {"intent": intent, "zoho_reference": "POL-1"})
         self.assertEqual(premature.status_code, 409)
-        ok = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": PASSWORD, "token": self.token(self.analyst)})
+        ok = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": PASSWORD})
         self.assertEqual(ok.status_code, 200)
-        protected = client.post(reverse("vault:protected_confirm"), {"intent": intent, "reason": f"Pago {COMPANY}", "reference": "12/29"})
+        protected = client.post(reverse("vault:protected_confirm"), {"intent": intent, "zoho_reference": f"Pago {COMPANY} 12/29"})
         self.assertEqual(protected.status_code, 422)
         self.assertTrue(SensitiveOperationWindow.objects.filter(user=self.analyst, revoked_at__isnull=True).exists())
         self.assertFalse(ProtectedOperationContext.objects.filter(user=self.analyst).exists())
@@ -429,7 +429,7 @@ class IntegralVaultFlowTests(TestCase):
 
         reauth_page = client.get(start.url)
         self.assertContains(reauth_page, 'name="password"', count=1)
-        self.assertContains(reauth_page, 'name="token"', count=1)
+        self.assertNotContains(reauth_page, 'name="token"')
         self.assertNotContains(reauth_page, payload["pan"])
         finish = client.post(
             reverse("vault:reauthenticate"),
@@ -437,7 +437,6 @@ class IntegralVaultFlowTests(TestCase):
                 "purpose": "cards_manage",
                 "operation": operation_id,
                 "password": PASSWORD,
-                "token": self.token(self.leader),
             },
         )
         created = PaymentCard.objects.get(client_name=payload["client_name"])
@@ -479,15 +478,14 @@ class IntegralVaultFlowTests(TestCase):
                 "purpose": "cards_manage",
                 "next": reverse("vault:card_detail", args=[self.card.pk]),
                 "password": PASSWORD,
-                "token": self.token(self.leader),
             },
         )
         self.assertEqual(authorize.status_code, 302)
         window = SensitiveOperationWindow.objects.get(user=self.leader, revoked_at__isnull=True)
         original_expiry = window.expires_at
         lifetime = (window.expires_at - window.created_at).total_seconds()
-        self.assertGreaterEqual(lifetime, 899)
-        self.assertLessEqual(lifetime, 901)
+        self.assertGreaterEqual(lifetime, 1799)
+        self.assertLessEqual(lifetime, 1801)
 
         edit_page = client.get(reverse("vault:card_edit", args=[self.card.pk]))
         self.assertEqual(edit_page.status_code, 200)
@@ -659,8 +657,7 @@ class IntegralVaultFlowTests(TestCase):
             reverse("vault:protected_confirm"),
             {
                 "intent": "expired-intent",
-                "reason": "Operación autorizada",
-                "reference": "QA-001",
+                "zoho_reference": "QA-001",
             },
             HTTP_X_REQUESTED_WITH="XMLHttpRequest",
         )
@@ -736,7 +733,6 @@ class IntegralVaultFlowTests(TestCase):
                 "purpose": "cards_manage",
                 "next": reverse("vault:card_list"),
                 "password": PASSWORD,
-                "token": self.token(self.leader),
             },
         )
         self.assertEqual(response.status_code, 302)

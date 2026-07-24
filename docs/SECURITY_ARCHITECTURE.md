@@ -24,11 +24,11 @@ El dispositivo se identifica prudentemente mediante HMAC del User-Agent normaliz
 
 ## Reautenticación
 
-Contraseña y TOTP validan la identidad y crean `SensitiveOperationWindow`, ligada al usuario/hash de sesión y con expiración fija, no deslizante, de 15 minutos. La ventana es transversal a los propósitos sensibles autorizados, no contiene motivo ni referencia y nunca cambia los permisos del rol. Cerrar/revocar/expirar sesión, cambiar contraseña, bloquear el dispositivo o reiniciar MFA la invalida.
+La contraseña y el TOTP del login validan la identidad y crean `SensitiveOperationWindow`, ligada al usuario/hash de sesión y con expiración fija, no deslizante, de 30 minutos. Al expirar, la siguiente operación sensible revalida solo la contraseña dentro de la sesión existente. La ventana es transversal a los propósitos sensibles autorizados, no contiene contexto operativo y nunca cambia permisos. Cerrar/revocar/expirar sesión, cambiar contraseña, bloquear el dispositivo o reiniciar MFA la invalida.
 
 `PendingSensitiveOperation` conserva una acción que debe sobrevivir a una redirección. Está ligada a usuario, sesión, propósito, objeto, UUID opaco y expiración; el payload de Nueva/Editar tarjeta se cifra con la llave de campos, nunca viaja por URL y se elimina al consumir o expirar la operación. La fila se reclama y consume atómicamente para impedir dobles ejecuciones.
 
-Para revelar o copiar, una intención aleatoria de cinco minutos no conserva valores protegidos. Después de validar la ventana se exige una justificación nueva y se crea `ProtectedOperationContext`, ligado a una sola tarjeta, a la ventana y a la sesión. Empresa, PAN y vencimiento comparten ese contexto para revelar o copiar, pero otra tarjeta o una nueva operación requieren un contexto nuevo. `RevealGrant` autoriza un campo y copia concretos, es de un solo uso cuando corresponde y dura 20 segundos. Cada evento conserva contexto, campo y acción sin incluir el valor.
+Para revelar o copiar, una intención aleatoria de cinco minutos no conserva valores protegidos. Después de validar la ventana se exige `Número certificado recibo - Zoho` y se crea `ProtectedOperationContext`, ligado a una sola tarjeta, a la ventana y a la sesión. Empresa, PAN y vencimiento comparten ese contexto para revelar o copiar, pero otra tarjeta o una nueva operación requieren un contexto nuevo. `RevealGrant` autoriza un campo y copia concretos, es de un solo uso cuando corresponde y dura 20 segundos. Cada evento conserva contexto, campo y acción sin incluir el valor.
 
 ## Alertas y auditoría
 
@@ -39,6 +39,12 @@ El Centro de Control agrega politicas, festivos, excepciones, transiciones de al
 `evaluate_access_policy()` es la unica autoridad horaria. Devuelve permiso, pertenencia al horario, motivo, politica, severidad, necesidad de reautenticacion/alerta/bloqueo y excepcion aplicada. Vistas sensibles consumen esa decision sin duplicar calendarios.
 
 El servicio de correo admite consola, SMTP de Microsoft 365 y Microsoft Graph mediante una interfaz común. SMTP usa TLS y una contraseña de aplicación tomada solo del entorno; Graph usa MSAL y credenciales de aplicación. No se persisten contraseñas, client secrets, access tokens ni contenido del mensaje. La bitácora conserva destinatario enmascarado, hash, resultado, intentos, backend e identificador externo.
+
+El envío automático está desacoplado de auditoría y alertas internas. Solo se notifica por correo un `LOGIN` o `REVEAL` marcado fuera del horario permitido (incluidos sábado, domingo y festivo según la política central). El hash de idempotencia evita duplicados y el envío comienza después del commit.
+
+## Límite público SOAT
+
+Gestión SOAT vive bajo `/soat/` sin autenticación, modelos, sesiones de Vault ni escritura de auditoría. Valida estructura ZIP/XLSX, nombre, tamaño y dimensiones; procesa en un temporal exclusivo por solicitud, neutraliza fórmulas y elimina hipervínculos antes de responder. La referencia operativa permanece fuera de rutas estáticas y de Git.
 
 ## Informes y limites de datos
 

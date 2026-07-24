@@ -47,6 +47,8 @@ def _complete_login(request, user, otp_device, device):
         return False
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     establish_secure_session(request, user, otp_device, device)
+    from .protected_operations import create_operation_window
+    create_operation_window(request)
     request.session.set_expiry(policy.session_inactivity_minutes * 60)
     return True
 

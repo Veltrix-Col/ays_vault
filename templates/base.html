@@ -64,6 +64,10 @@
       <div class="sidebar-footer">
         <a class="security-link" href="{% url 'vault:password_change' %}">Cambiar contraseña</a>
         <div class="user-card"><span class="avatar">{{ user.username|first|upper }}</span><span><b>{{ user.get_full_name|default:user.username }}</b><small>{{ vault_profile.get_role_display|default:'Sin rol asignado' }}</small></span></div>
+        <div class="sensitive-window-status{% if not sensitive_window_expires_at %} expired{% endif %}" data-sensitive-window {% if sensitive_window_expires_at %}data-expires-at="{{ sensitive_window_expires_at }}"{% endif %} role="status" aria-live="polite">
+          {% if sensitive_window_expires_at %}Ventana segura activa{% else %}Ventana segura vencida{% endif %}
+          <span data-sensitive-countdown aria-hidden="true"></span>
+        </div>
         <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="logout" type="submit">Cerrar sesión <span aria-hidden="true">→</span></button></form>
       </div>
     </aside>

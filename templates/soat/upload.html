@@ -1,0 +1,62 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gestión SOAT | A&amp;S</title>
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/soat.css' %}">
+  <script defer src="{% static 'js/soat.js' %}"></script>
+</head>
+<body class="soat-page">
+  <a class="skip-link" href="#contenido">Ir al contenido principal</a>
+  <header class="soat-header">
+    <a href="{% url 'public_home' %}" class="soat-brand" aria-label="Volver al Portal de Aplicaciones">
+      <img src="{% static 'img/branding/logo-ays-blanco.png' %}" alt="A&S">
+      <span>Portal de Aplicaciones</span>
+    </a>
+  </header>
+  <main id="contenido" class="soat-shell">
+    <section class="soat-intro">
+      <span class="eyebrow">Herramienta pública</span>
+      <h1>Gestión SOAT</h1>
+      <p>Genere el informe consolidado para revisión y carga en Zoho. El archivo se procesa de forma efímera y no se almacena en A&amp;S Vault.</p>
+    </section>
+    <section class="soat-card" aria-labelledby="upload-title">
+      <div>
+        <h2 id="upload-title">Cargar reporte de Zoho</h2>
+        <p>Descargue desde Zoho el reporte requerido y guárdelo con el nombre <strong>SOAT_prueba_4.xlsx</strong>.</p>
+        {% if zoho_url %}
+          <a class="soat-link" href="{{ zoho_url }}" target="_blank" rel="noopener noreferrer">Abrir reporte en Zoho</a>
+        {% else %}
+          <p class="soat-muted">Enlace de Zoho pendiente de configuración.</p>
+        {% endif %}
+      </div>
+      <form method="post" enctype="multipart/form-data" data-soat-form novalidate>
+        {% csrf_token %}
+        <label class="upload-zone" for="{{ form.source_file.id_for_label }}">
+          <span class="upload-icon" aria-hidden="true">XLSX</span>
+          <strong>Seleccione el reporte</strong>
+          <span data-file-name>SOAT_prueba_4.xlsx</span>
+          {{ form.source_file }}
+        </label>
+        {% if form.source_file.errors %}<div class="soat-error" role="alert">{{ form.source_file.errors|striptags }}</div>{% endif %}
+        {% if processing_error %}<div class="soat-error" role="alert"><strong>No fue posible procesar el archivo</strong><br>{{ processing_error }}</div>{% endif %}
+        <button class="soat-button" type="submit" data-soat-submit>Procesar archivo</button>
+        <p class="soat-progress" data-soat-progress hidden role="status">Procesando el archivo. Esto puede tomar algunos segundos…</p>
+      </form>
+    </section>
+    <section class="soat-result" data-soat-result hidden aria-labelledby="result-title">
+      <h2 id="result-title">Archivo procesado correctamente</h2>
+      <p data-result-file></p>
+      <div class="result-grid" data-result-grid></div>
+      <div class="result-actions">
+        <button class="soat-button" type="button" data-result-download>Descargar informe</button>
+        <button class="soat-button secondary" type="button" data-result-reset>Procesar otro archivo</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -17,7 +17,7 @@ A&S Vault es una bóveda interna Django para reemplazar el archivo operativo de 
 - Login en dos etapas: la contraseña correcta no crea una sesión autenticada hasta validar MFA o recuperación.
 - Una sesión activa por usuario, identificador por hash, session key cifrada para revocación real y expiración tras 10 minutos de inactividad.
 - Registro prudente de navegador, sistema, tipo de dispositivo e IP; estados Nuevo, Reconocido, Bloqueado y Revocado.
-- Reautenticación reforzada que abre una ventana transversal, fija y no deslizante de 15 minutos, ligada a usuario y sesión. Durante su vigencia evita repetir contraseña y OTP en operaciones sensibles autorizadas, sin alterar permisos. Cada operación de revelado/copia conserva además un motivo y una referencia propios, vinculados a una tarjeta concreta; sus campos comparten ese contexto y cada revelado permanece visible 20 segundos.
+- Después del MFA obligatorio de ingreso se abre una ventana transversal, fija y no deslizante de 30 minutos, ligada a usuario y sesión. Al expirar, la siguiente operación sensible revalida únicamente la contraseña dentro de la misma sesión y abre otra ventana de 30 minutos. Revelar o copiar exige además un único `Número certificado recibo - Zoho`, vinculado a una tarjeta concreta; sus campos comparten ese contexto y cada revelado permanece visible 20 segundos.
 - Alertas persistentes para dispositivo/IP nueva, MFA/reautenticación fallidos, recuperación, reinicio MFA, sesiones reemplazadas, bloqueos y cambios sensibles.
 - Auditoría secuencial con hash encadenado y verificación mediante `verify_audit_chain`.
 - CSP, Permissions Policy, no-cache, CSRF, Axes y endurecimiento HTTPS condicionado al entorno.
@@ -43,6 +43,8 @@ Configure valores independientes en `FIELD_ENCRYPTION_KEY` y `FIELD_FINGERPRINT_
 ## Dependencias
 
 Las versiones están fijadas en `requirements.txt`. MFA usa `django-otp==1.7.0`; Segno genera el QR sin archivos temporales. `pip-audit==2.10.1` está separado en `requirements-dev.txt` y no es una dependencia productiva.
+
+Gestión SOAT usa `pandas==2.3.3` y `openpyxl==3.1.5`. WeasyPrint usa `brotlicffi==1.2.0.0` como implementación Brotli compatible con el entorno Windows/OneDrive validado.
 
 La auditoría inicial detectó avisos en Django 5.2.15, cryptography 45.0.5 y python-dotenv 1.1.1. Se actualizaron respectivamente a 5.2.16, 48.0.1 y 1.2.2, se repitieron todas las pruebas y el resultado final fue `No known vulnerabilities found`.
 
@@ -102,6 +104,10 @@ Consulte [Configuración de correo](docs/EMAIL_CONFIGURATION.md). Nunca use la c
 - `REPORT_PDF_MAX_ROWS=1000`
 - `REPORT_DEFAULT_MAX_DAYS=90`
 - `REPORT_LARGE_EXPORT_ALERT_THRESHOLD=1000`
+
+## Gestión SOAT pública
+
+`/soat/` es un módulo público e independiente de Vault: no exige login, no crea modelos ni auditorías de Vault y procesa cada archivo en un directorio temporal aislado. Solo admite `SOAT_prueba_4.xlsx`; utiliza la referencia privada `SOAT_prueba_3_Def.xlsx`, reproduce las reglas del script operativo entregado y descarga un Excel de cinco hojas. Consulte [Gestión SOAT pública](docs/SOAT_PUBLIC_MODULE.md).
 
 ## Limitaciones y riesgos pendientes
 

@@ -19,7 +19,7 @@ from .security import audit, session_hash
 INTENT_SESSION_KEY = "protected_operation_intent"
 INTENT_TTL_SECONDS = 300
 IDENTITY_TTL_SECONDS = 180
-WINDOW_TTL_MINUTES = 15
+WINDOW_TTL_MINUTES = 30
 PROTECTED_FIELDS = {"company", "pan", "expiry"}
 PROTECTED_ACTIONS = {"reveal", "copy"}
 
@@ -101,7 +101,10 @@ def current_operation_window(request):
         expires_at__lte=now,
     )
     expired_ids = list(expired.values_list("pk", flat=True))
-    expired_count = expired.update(revoked_at=now, revocation_reason="Expiración fija de 15 minutos")
+    expired_count = expired.update(
+        revoked_at=now,
+        revocation_reason=f"Expiración fija de {WINDOW_TTL_MINUTES} minutos",
+    )
     if expired_count:
         ProtectedOperationContext.objects.filter(
             identity_window_id__in=expired_ids,
@@ -118,7 +121,7 @@ def current_operation_window(request):
 
 
 def create_operation_window(request):
-    """Obtiene o crea una ventana fija de 15 minutos; nunca extiende una vigente."""
+    """Obtiene o crea una ventana fija de 30 minutos; nunca extiende una vigente."""
     if not _session_is_eligible(request):
         return None
     current = current_operation_window(request)

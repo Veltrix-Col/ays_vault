@@ -269,10 +269,17 @@ def send_notification(*, notification_type, recipient, subject, text_body, html_
 def send_alert_notification(alert, recipient, force_retry=False):
     context = {"alert": alert, "detail_url": f"{settings.VAULT_BASE_URL}/security/alerts/{alert.pk}/"}
     alert_label = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
+    action = getattr(getattr(alert, "event", None), "action", "")
+    if action == "LOGIN":
+        subject = "A&S Vault | Inicio de sesión fuera del horario habitual"
+    elif action == "REVEAL":
+        subject = "A&S Vault | Revelado de tarjeta fuera del horario habitual"
+    else:
+        subject = f"[A&S Vault] {alert.get_severity_display()}: {alert_label}"
     return send_notification(
         notification_type=alert.alert_type,
         recipient=recipient,
-        subject=f"[A&S Vault] {alert.get_severity_display()}: {alert_label}",
+        subject=subject,
         text_body=render_to_string("vault/email/alert.txt", context),
         html_body=render_to_string("vault/email/alert.html", context),
         idempotency_key=f"alert:{alert.pk}:{alert.alert_type}:{recipient.lower()}",
@@ -285,12 +292,24 @@ def notify_alert(alert):
     return [send_alert_notification(alert, recipient) for recipient in configured_recipients(alert)]
 
 
+def automatic_alert_email_allowed(alert):
+    """Correo automático solo para login/revelado fuera de horario o fin de semana."""
+    event = getattr(alert, "event", None)
+    return bool(
+        event
+        and event.action in {"LOGIN", "REVEAL"}
+        and event.outside_office_hours
+    )
+
+
 def notify_alert_by_id(alert_id):
     from .models import SecurityAlert
 
     try:
         alert = SecurityAlert.objects.get(pk=alert_id)
     except SecurityAlert.DoesNotExist:
+        return []
+    if not automatic_alert_email_allowed(alert):
         return []
     return notify_alert(alert)
 

@@ -19,6 +19,7 @@ from .models import (
     PendingSensitiveOperation,
     SecureSession,
     SecurityAlert,
+    SensitiveOperationWindow,
     UserProfile,
 )
 
@@ -82,6 +83,12 @@ class PendingSensitiveOperationTests(TestCase):
         response = self.client.post(reverse("mfa_verify"), {"token": self.token(user), "recovery_code": ""})
         self.assertRedirects(response, reverse(role_home_name(user)), fetch_redirect_response=False)
 
+    def expire_sensitive_window(self, user):
+        SensitiveOperationWindow.objects.filter(
+            user=user,
+            revoked_at__isnull=True,
+        ).update(expires_at=timezone.now() - timedelta(seconds=1))
+
     def begin_reset(self, operation_id=None):
         operation_id = operation_id or uuid.uuid4()
         response = self.client.post(
@@ -94,6 +101,47 @@ class PendingSensitiveOperationTests(TestCase):
         self.assertEqual(query["operation"], [str(operation_id)])
         return operation_id, response
 
+    def test_login_opens_fixed_30_minute_window_bound_to_same_session(self):
+        self.login_user(self.leader)
+        session_key = self.client.session.session_key
+        window = SensitiveOperationWindow.objects.get(
+            user=self.leader,
+            revoked_at__isnull=True,
+        )
+        lifetime = (window.expires_at - window.created_at).total_seconds()
+        self.assertGreaterEqual(lifetime, 1799)
+        self.assertLessEqual(lifetime, 1801)
+
+        window.expires_at = timezone.now() - timedelta(seconds=1)
+        window.save(update_fields=["expires_at"])
+        page = self.client.get(
+            reverse("vault:reauthenticate"),
+            {"purpose": "cards_manage", "next": reverse("vault:card_list")},
+        )
+        self.assertContains(page, 'name="password"', count=1)
+        self.assertNotContains(page, 'name="token"')
+        response = self.client.post(
+            reverse("vault:reauthenticate"),
+            {
+                "purpose": "cards_manage",
+                "next": reverse("vault:card_list"),
+                "password": PASSWORD,
+            },
+        )
+        self.assertRedirects(
+            response,
+            reverse("vault:card_list"),
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(self.client.session.session_key, session_key)
+        renewed = SensitiveOperationWindow.objects.get(
+            user=self.leader,
+            revoked_at__isnull=True,
+        )
+        renewed_lifetime = (renewed.expires_at - renewed.created_at).total_seconds()
+        self.assertGreaterEqual(renewed_lifetime, 1799)
+        self.assertLessEqual(renewed_lifetime, 1801)
+
     def complete_reset(self, operation_id):
         return self.client.post(
             reverse("vault:reauthenticate"),
@@ -102,12 +150,12 @@ class PendingSensitiveOperationTests(TestCase):
                 "operation": str(operation_id),
                 "next": reverse("vault:dashboard"),
                 "password": PASSWORD,
-                "token": self.token(self.admin),
             },
         )
 
     def test_mfa_reset_preserves_reason_and_executes_after_one_reauthentication(self):
         self.login_admin()
+        self.expire_sensitive_window(self.admin)
         page = self.client.get(reverse("vault:admin_mfa_reset", args=[self.target.pk]))
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, 'name="reason"', count=1)
@@ -121,7 +169,7 @@ class PendingSensitiveOperationTests(TestCase):
         self.assertEqual(reauth.status_code, 200)
         self.assertNotContains(reauth, 'name="reason"')
         self.assertContains(reauth, 'name="password"', count=1)
-        self.assertContains(reauth, 'name="token"', count=1)
+        self.assertNotContains(reauth, 'name="token"')
 
         completed = self.complete_reset(operation_id)
         self.assertRedirects(completed, reverse("vault:identity_users"), fetch_redirect_response=False)
@@ -141,6 +189,7 @@ class PendingSensitiveOperationTests(TestCase):
 
     def test_repeated_initial_post_and_callback_do_not_execute_twice(self):
         self.login_admin()
+        self.expire_sensitive_window(self.admin)
         operation_id, _ = self.begin_reset()
         self.complete_reset(operation_id)
 
@@ -160,7 +209,6 @@ class PendingSensitiveOperationTests(TestCase):
                 "purpose": "identity_admin",
                 "operation": str(operation_id),
                 "password": PASSWORD,
-                "token": "000000",
             },
         )
         self.assertRedirects(repeated_callback, reverse("vault:identity_users"), fetch_redirect_response=False)
@@ -169,6 +217,7 @@ class PendingSensitiveOperationTests(TestCase):
 
     def test_pending_operation_is_bound_to_purpose_user_session_and_expiry(self):
         self.login_admin()
+        self.expire_sensitive_window(self.admin)
         operation_id, _ = self.begin_reset()
         wrong_purpose = self.client.get(
             reverse("vault:reauthenticate"),
@@ -207,6 +256,7 @@ class PendingSensitiveOperationTests(TestCase):
 
     def test_card_deactivation_resumes_after_reauthentication_and_is_idempotent(self):
         self.login_user(self.leader)
+        self.expire_sensitive_window(self.leader)
         detail = self.client.get(reverse("vault:card_detail", args=[self.card.pk]))
         operation_id = re.search(
             r'name="operation_id" value="([^"]+)"',
@@ -227,7 +277,6 @@ class PendingSensitiveOperationTests(TestCase):
                 "purpose": "cards_manage",
                 "operation": operation_id,
                 "password": PASSWORD,
-                "token": self.token(self.leader),
             },
         )
         self.assertRedirects(finish, reverse("vault:card_list"), fetch_redirect_response=False)

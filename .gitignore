@@ -41,3 +41,6 @@ Thumbs.db
 *.temp
 *.bak
 ~$*
+
+# Referencias operativas privadas (nunca publicar ni versionar)
+private_assets/soat/*.xlsx
