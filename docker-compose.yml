@@ -1,0 +1,96 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      DB_ENGINE: postgres
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: db
+      DB_PORT: 5432
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      FIELD_FINGERPRINT_KEY: ${FIELD_FINGERPRINT_KEY}
+      OFFICE_START: ${OFFICE_START:-07:00}
+      OFFICE_END: ${OFFICE_END:-18:00}
+      ALERT_EMAIL: ${ALERT_EMAIL}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
+      ALERT_EMAIL_BACKEND: ${ALERT_EMAIL_BACKEND:-smtp}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
+      ALERT_EMAIL_ADMIN: ${ALERT_EMAIL_ADMIN}
+      ALERT_EMAIL_LEADER: ${ALERT_EMAIL_LEADER}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.office365.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+      EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
+      MS_GRAPH_TENANT_ID: ${MS_GRAPH_TENANT_ID}
+      MS_GRAPH_CLIENT_ID: ${MS_GRAPH_CLIENT_ID}
+      MS_GRAPH_CLIENT_SECRET: ${MS_GRAPH_CLIENT_SECRET}
+      MS_GRAPH_SENDER: ${MS_GRAPH_SENDER}
+      EMAIL_TIMEOUT_SECONDS: ${EMAIL_TIMEOUT_SECONDS:-10}
+      EMAIL_MAX_RETRIES: ${EMAIL_MAX_RETRIES:-3}
+      VAULT_BASE_URL: ${VAULT_BASE_URL}
+      SOAT_APP_URL: ${SOAT_APP_URL}
+      SOAT_ZOHO_REPORT_URL: ${SOAT_ZOHO_REPORT_URL}
+      SOAT_REFERENCE_FILE: ${SOAT_REFERENCE_FILE:-private_assets/soat/SOAT_prueba_3_Def.xlsx}
+      SOAT_MAX_UPLOAD_BYTES: ${SOAT_MAX_UPLOAD_BYTES:-26214400}
+      SOAT_MAX_ROWS: ${SOAT_MAX_ROWS:-100000}
+      SOAT_MAX_COLUMNS: ${SOAT_MAX_COLUMNS:-200}
+      REPORT_XLSX_MAX_ROWS: ${REPORT_XLSX_MAX_ROWS:-5000}
+      REPORT_PDF_MAX_ROWS: ${REPORT_PDF_MAX_ROWS:-1000}
+      REPORT_DEFAULT_MAX_DAYS: ${REPORT_DEFAULT_MAX_DAYS:-90}
+      REPORT_LARGE_EXPORT_ALERT_THRESHOLD: ${REPORT_LARGE_EXPORT_ALERT_THRESHOLD:-1000}
+      SESSION_INACTIVITY_SECONDS: ${SESSION_INACTIVITY_SECONDS:-600}
+      SESSION_ACTIVITY_THROTTLE_SECONDS: ${SESSION_ACTIVITY_THROTTLE_SECONDS:-60}
+      REAUTH_TTL_SECONDS: ${REAUTH_TTL_SECONDS:-300}
+      MFA_FAILURE_LIMIT: ${MFA_FAILURE_LIMIT:-5}
+      MFA_ISSUER: ${MFA_ISSUER:-A&S Vault}
+    volumes:
+      - vault_media:/app/media
+    networks:
+      - dokploy-network
+      - vault-internal
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - vault_db_data:/var/lib/postgresql/data
+    networks:
+      - vault-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  vault_db_data:
+  vault_media:
+
+networks:
+  dokploy-network:
+    external: true
+  vault-internal:

@@ -44,3 +44,5 @@ Thumbs.db
 
 # Referencias operativas privadas (nunca publicar ni versionar)
 private_assets/soat/*.xlsx
+
+docker-compose.override.yml
