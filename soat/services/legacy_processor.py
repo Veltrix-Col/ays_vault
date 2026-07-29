@@ -54,20 +54,26 @@ Políticas de Gestión SOAT A&S
 -----------------------------
 La precedencia efectiva es:
 
-1. Vendedor contiene ``Fonconstruimos``:
-   ``Gestión A&S``. Es inamovible.
-2. Estado asegurado Movilidad es ``Cancelado`` y el motivo es
+1. Vendedor contiene ``Fonconstruimos`` y estado asegurado Movilidad es
+   ``Excluido``: ``No gestión``. Corresponde al criterio 8; es la única
+   excepción al criterio 1.
+2. Estado de la póliza Movilidad es ``Vigente`` y estado asegurado
+   Movilidad es ``Excluido``: ``No gestión``. Corresponde al criterio 9.
+3. Vendedor contiene ``Fonconstruimos``:
+   ``Gestión A&S``. Corresponde al criterio 1; inamovible salvo los
+   criterios 8 y 9.
+4. Estado asegurado Movilidad es ``Cancelado`` y el motivo es
    ``Por venta`` o ``Por cambio de intermediario``:
-   ``No gestión``.
-3. Vendedor contiene ``Fabio Arango``:
-   ``No gestión``.
-4. Existe estado asegurado Movilidad y no contiene ``Activo``:
+   ``No gestión``. Corresponde al criterio 5.
+5. Vendedor contiene ``Fabio Arango``:
+   ``No gestión``. Corresponde al criterio 4.
+6. Existe estado asegurado Movilidad y no contiene ``Activo``:
    ``No gestión``. Corresponde al criterio 6.
-5. Líder Comercial Movilidad contiene ``Angelina``:
-   ``Autogestión cliente``.
-6. Estado asegurado Movilidad contiene ``Activo``:
-   ``Gestión A&S``.
-7. Si no aplica ningún criterio:
+7. Líder Comercial Movilidad contiene ``Angelina``:
+   ``Autogestión cliente``. Corresponde al criterio 3.
+8. Estado asegurado Movilidad contiene ``Activo``:
+   ``Gestión A&S``. Corresponde al criterio 2.
+9. Si no aplica ningún criterio:
    se deja en blanco. Corresponde al criterio 7.
 
 Los criterios 6 y 7 conservan el fondo durazno del archivo de referencia.
@@ -537,14 +543,24 @@ def determinar_gestion(
     lider_movilidad: object,
     estado_movilidad: object,
     motivo_cancelacion: object,
+    estado_poliza_movilidad: object,
 ) -> tuple[str | None, int]:
     """Retorna la gestión y el número del criterio formal aplicado."""
     vendedor_key = clave_texto(vendedor)
     lider_key = clave_texto(lider_movilidad)
     estado_key = clave_texto(estado_movilidad)
     motivo_key = clave_texto(motivo_cancelacion)
+    estado_poliza_key = clave_texto(estado_poliza_movilidad)
 
-    # Criterio 1: inamovible.
+    # Criterio 8: única excepción al criterio 1 (que es inamovible en todo lo demás).
+    if "FONCONSTRUIMOS" in vendedor_key and estado_key == "EXCLUIDO":
+        return "No gestión", 8
+
+    # Criterio 9: la póliza de Movilidad vigente no gestiona asegurados excluidos.
+    if estado_poliza_key == "VIGENTE" and estado_key == "EXCLUIDO":
+        return "No gestión", 9
+
+    # Criterio 1: inamovible salvo los criterios 8 y 9.
     if "FONCONSTRUIMOS" in vendedor_key:
         return "Gestión A&S", 1
 
@@ -648,12 +664,14 @@ def construir_formato(
         lider_movilidad = obtener(fila_mov, "Líder Comercial")
         estado_movilidad = obtener(fila_mov, "Estado asegurado")
         motivo_cancelacion = obtener(fila_mov, "Motivo cancelación")
+        estado_poliza_movilidad = obtener(fila_mov, "Estado de la póliza")
 
         gestion, criterio = determinar_gestion(
             vendedor=vendedor,
             lider_movilidad=lider_movilidad,
             estado_movilidad=estado_movilidad,
             motivo_cancelacion=motivo_cancelacion,
+            estado_poliza_movilidad=estado_poliza_movilidad,
         )
 
         id_soat = obtener(
@@ -1009,6 +1027,7 @@ def validar_politicas(formato: pd.DataFrame) -> None:
             motivo_cancelacion=fila[
                 "Motivo cancelación  póliza Movilidad"
             ],
+            estado_poliza_movilidad=fila["Estado de la póliza Movilidad"],
         )
 
         actual = texto_limpio(

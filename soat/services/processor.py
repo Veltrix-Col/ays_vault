@@ -56,13 +56,8 @@ def _remove_hyperlinks(path: Path) -> None:
     workbook.save(path)
 
 
-def process_soat(uploaded_file, reference_path=None) -> SoatResult:
+def process_soat(uploaded_file) -> SoatResult:
     started = monotonic()
-    reference = Path(reference_path or settings.SOAT_REFERENCE_FILE)
-    if not reference.is_file():
-        raise SoatProcessingError(
-            "El archivo de referencia requerido no está disponible. Contacte al administrador."
-        )
 
     with TemporaryDirectory(prefix="ays-soat-") as directory:
         root = Path(directory)
@@ -75,8 +70,6 @@ def process_soat(uploaded_file, reference_path=None) -> SoatResult:
         _validate_dimensions(source)
         try:
             fuente = legacy.leer_fuente(source, "Sheet0")
-            referencia = legacy.leer_movilidad_referencia(reference, "Movilidad")
-            fuente = legacy.enriquecer_motivo_cancelacion(fuente, referencia)
             es_soat = fuente["Ramo (Póliza)"].map(legacy.clave_texto) == "SOAT"
             soat = legacy.seleccionar_por_placa(fuente[es_soat].copy())
             movilidad = legacy.seleccionar_por_placa(fuente[~es_soat].copy())

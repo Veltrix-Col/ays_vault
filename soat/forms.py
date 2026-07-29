@@ -1,14 +1,15 @@
-from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from django import forms
 from django.conf import settings
 
+from .services import legacy_processor as legacy
+
 
 class SoatUploadForm(forms.Form):
     source_file = forms.FileField(
         label="Reporte de Zoho",
-        help_text="Adjunte el archivo SOAT_prueba_4.xlsx.",
+        help_text="Adjunte el reporte Excel exportado desde Zoho.",
         widget=forms.ClearableFileInput(attrs={
             "accept": ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }),
@@ -16,10 +17,6 @@ class SoatUploadForm(forms.Form):
 
     def clean_source_file(self):
         uploaded = self.cleaned_data["source_file"]
-        if Path(uploaded.name).name != "SOAT_prueba_4.xlsx":
-            raise forms.ValidationError(
-                "El archivo debe descargarse desde Zoho y conservar el nombre SOAT_prueba_4.xlsx."
-            )
         if uploaded.size <= 0:
             raise forms.ValidationError("El archivo está vacío.")
         if uploaded.size > settings.SOAT_MAX_UPLOAD_BYTES:
@@ -43,4 +40,17 @@ class SoatUploadForm(forms.Form):
             raise forms.ValidationError("El archivo no corresponde a un Excel válido.") from exc
         finally:
             uploaded.seek(0)
+
+        try:
+            hoja = legacy.resolver_hoja(uploaded, "Sheet0")
+            uploaded.seek(0)
+            legacy.detectar_fila_encabezado(uploaded, hoja, requiere_ramo=True)
+        except (KeyError, ValueError, OSError) as exc:
+            raise forms.ValidationError(
+                "El archivo no tiene la estructura de un reporte SOAT de Zoho "
+                "(deben existir las columnas 'Placa' y 'Ramo (Póliza)')."
+            ) from exc
+        finally:
+            uploaded.seek(0)
+
         return uploaded

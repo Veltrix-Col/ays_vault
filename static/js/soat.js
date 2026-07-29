@@ -15,7 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   input?.addEventListener("change", () => {
     const file = input.files?.[0];
-    fileName.textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB` : "SOAT_prueba_4.xlsx";
+    fileName.textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB` : "Ningún archivo seleccionado";
   });
 
   const labels = {
@@ -65,5 +65,5 @@ document.addEventListener("DOMContentLoaded", () => {
     const link = document.createElement("a"); link.href = objectUrl; link.download = outputName;
     document.body.appendChild(link); link.click(); link.remove();
   });
-  reset?.addEventListener("click", () => { form.reset(); result.hidden = true; fileName.textContent = "SOAT_prueba_4.xlsx"; input?.focus(); });
+  reset?.addEventListener("click", () => { form.reset(); result.hidden = true; fileName.textContent = "Ningún archivo seleccionado"; input?.focus(); });
 });

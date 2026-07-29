@@ -27,7 +27,7 @@
     <section class="soat-card" aria-labelledby="upload-title">
       <div>
         <h2 id="upload-title">Cargar reporte de Zoho</h2>
-        <p>Descargue desde Zoho el reporte requerido y guárdelo con el nombre <strong>SOAT_prueba_4.xlsx</strong>.</p>
+        <p>Descargue desde Zoho el reporte requerido y cárguelo aquí. El sistema valida automáticamente que tenga la estructura de un reporte SOAT.</p>
         {% if zoho_url %}
           <a class="soat-link" href="{{ zoho_url }}" target="_blank" rel="noopener noreferrer">Abrir reporte en Zoho</a>
         {% else %}
@@ -39,7 +39,7 @@
         <label class="upload-zone" for="{{ form.source_file.id_for_label }}">
           <span class="upload-icon" aria-hidden="true">XLSX</span>
           <strong>Seleccione el reporte</strong>
-          <span data-file-name>SOAT_prueba_4.xlsx</span>
+          <span data-file-name>Ningún archivo seleccionado</span>
           {{ form.source_file }}
         </label>
         {% if form.source_file.errors %}<div class="soat-error" role="alert">{{ form.source_file.errors|striptags }}</div>{% endif %}
