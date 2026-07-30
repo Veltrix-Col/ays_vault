@@ -1,4 +1,5 @@
 import smtplib
+import json
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from unittest.mock import Mock, patch
 
@@ -15,7 +16,14 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from .crypto import encrypt
 from .email_config import email_configuration_issues
 from .models import AuditEvent, NotificationRecord, PaymentCard, SecureSession, SecurityAlert, UserProfile
-from .notifications import EmailDeliveryError, MicrosoftGraphEmailBackend, SMTPEmailBackend, get_backend, send_alert_notification
+from .notifications import (
+    EMAIL_BRAND_CID,
+    EmailDeliveryError,
+    MicrosoftGraphEmailBackend,
+    SMTPEmailBackend,
+    get_backend,
+    send_alert_notification,
+)
 from .security import audit, session_hash
 
 
@@ -120,6 +128,37 @@ class EmailConfigurationTests(SimpleTestCase):
         self.assertEqual(external_id, "request-1")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 10)
 
+    @override_settings(
+        ALERT_EMAIL_BACKEND="graph",
+        MS_GRAPH_TENANT_ID="tenant",
+        MS_GRAPH_CLIENT_ID="client",
+        MS_GRAPH_CLIENT_SECRET="fake-secret",
+        MS_GRAPH_SENDER="alertas@example.invalid",
+    )
+    @patch("vault.notifications.urllib.request.urlopen")
+    @patch("msal.ConfidentialClientApplication")
+    def test_graph_embeds_cardmanager_logo_only_when_html_references_it(
+        self, app_class, urlopen
+    ):
+        app_class.return_value.acquire_token_for_client.return_value = {
+            "access_token": "fake-access-token"
+        }
+        urlopen.return_value.__enter__.return_value = Mock(
+            status=202, headers={"request-id": "request-2"}
+        )
+        MicrosoftGraphEmailBackend().send(
+            "Asunto",
+            "Texto",
+            f'<img src="cid:{EMAIL_BRAND_CID}" alt="CardManager">',
+            "admin@example.invalid",
+        )
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        attachment = payload["message"]["attachments"][0]
+        self.assertEqual(attachment["contentId"], EMAIL_BRAND_CID)
+        self.assertTrue(attachment["isInline"])
+        self.assertEqual(attachment["contentType"], "image/png")
+        self.assertTrue(attachment["contentBytes"])
+
 
 @override_settings(
     **BASE_SETTINGS,
@@ -169,6 +208,15 @@ class SMTPDeliveryTests(TestCase):
         message = connection.send_messages.call_args.args[0][0]
         self.assertEqual(message.from_email, "alertas@example.invalid")
         self.assertEqual(message.to, ["admin@example.invalid"])
+        html_body = message.alternatives[0].content
+        self.assertIn(f"cid:{EMAIL_BRAND_CID}", html_body)
+        inline_images = [
+            attachment
+            for attachment in message.attachments
+            if attachment.get("Content-ID") == f"<{EMAIL_BRAND_CID}>"
+        ]
+        self.assertEqual(len(inline_images), 1)
+        self.assertEqual(inline_images[0].get_content_type(), "image/png")
 
     def test_transient_failure_is_retried_only_to_configured_limit(self):
         backend = Mock()

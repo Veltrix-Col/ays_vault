@@ -1,4 +1,5 @@
 import hashlib
+import base64
 import json
 import logging
 import re
@@ -7,9 +8,12 @@ import socket
 import urllib.error
 import urllib.request
 from datetime import timedelta
+from email.mime.image import MIMEImage
+from pathlib import Path
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
+from django.contrib.staticfiles import finders
 from django.template.loader import render_to_string
 from django.utils import timezone
 
@@ -21,6 +25,8 @@ from .tasks import run_async
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 logger = logging.getLogger("vault.notifications")
+EMAIL_BRAND_CID = "cardmanager-brand-logo"
+EMAIL_BRAND_STATIC_PATH = "img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png"
 
 
 class EmailDeliveryError(Exception):
@@ -76,6 +82,51 @@ def configured_recipients(alert):
     return sorted(set(recipients))
 
 
+def _email_brand_logo_bytes():
+    logo_path = finders.find(EMAIL_BRAND_STATIC_PATH)
+    if not logo_path:
+        logger.warning("No fue posible localizar el logo de CardManager para el correo.")
+        return b""
+    try:
+        return Path(logo_path).read_bytes()
+    except OSError:
+        logger.exception("No fue posible leer el logo de CardManager para el correo.")
+        return b""
+
+
+def _attach_email_brand_logo(message, html_body):
+    if f"cid:{EMAIL_BRAND_CID}" not in (html_body or ""):
+        return
+    logo_bytes = _email_brand_logo_bytes()
+    if not logo_bytes:
+        return
+    image = MIMEImage(logo_bytes, _subtype="png")
+    image.add_header("Content-ID", f"<{EMAIL_BRAND_CID}>")
+    image.add_header(
+        "Content-Disposition",
+        "inline",
+        filename="cardmanager-ays-white.png",
+    )
+    message.mixed_subtype = "related"
+    message.attach(image)
+
+
+def _graph_brand_attachment(html_body):
+    if f"cid:{EMAIL_BRAND_CID}" not in (html_body or ""):
+        return []
+    logo_bytes = _email_brand_logo_bytes()
+    if not logo_bytes:
+        return []
+    return [{
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": "cardmanager-ays-white.png",
+        "contentType": "image/png",
+        "contentId": EMAIL_BRAND_CID,
+        "isInline": True,
+        "contentBytes": base64.b64encode(logo_bytes).decode("ascii"),
+    }]
+
+
 class MicrosoftGraphEmailBackend:
     name = "graph"
 
@@ -97,6 +148,7 @@ class MicrosoftGraphEmailBackend:
                 "subject": subject,
                 "body": {"contentType": "HTML", "content": html_body},
                 "toRecipients": [{"emailAddress": {"address": recipient}}],
+                "attachments": _graph_brand_attachment(html_body),
             },
             "saveToSentItems": True,
         }
@@ -124,6 +176,7 @@ class ConsoleEmailBackend:
         connection = get_connection(backend=settings.EMAIL_BACKEND, fail_silently=False)
         message = EmailMultiAlternatives(subject, text_body, settings.ALERT_EMAIL_FROM, [recipient], connection=connection)
         message.attach_alternative(html_body, "text/html")
+        _attach_email_brand_logo(message, html_body)
         if message.send(fail_silently=False) != 1:
             raise EmailDeliveryError("CONSOLE_EMAIL_NOT_SENT")
         return ""
@@ -153,6 +206,7 @@ class SMTPEmailBackend:
                 connection=connection,
             )
             message.attach_alternative(html_body, "text/html")
+            _attach_email_brand_logo(message, html_body)
             if message.send(fail_silently=False) != 1:
                 raise EmailDeliveryError("SMTP_EMAIL_NOT_SENT", retryable=True)
             return ""

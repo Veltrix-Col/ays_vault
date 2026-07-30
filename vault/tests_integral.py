@@ -210,6 +210,35 @@ class IntegralVaultFlowTests(TestCase):
         self.assertNotIn(CODE, text)
         self.assertNotIn(PAN, text)
 
+    def test_card_detail_shows_local_copyable_cardholder_before_protected_data(self):
+        response = self.authenticated_client(self.leader).get(
+            reverse("vault:card_detail", args=[self.card.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertEqual(html.count(self.card.cardholder_name), 1)
+        self.assertLess(
+            html.index('class="cardholder-summary"'),
+            html.index("<h2>Datos protegidos</h2>"),
+        )
+        holder_start = html.index('<section class="cardholder-summary"')
+        holder_end = html.index(
+            '<section class="panel protected-data-panel"', holder_start
+        )
+        holder_block = html[holder_start:holder_end]
+        self.assertIn("Titular", holder_block)
+        self.assertIn(self.card.cardholder_name, holder_block)
+        self.assertIn("data-cardholder-value", holder_block)
+        self.assertIn("data-copy-cardholder", holder_block)
+        self.assertIn('type="button"', holder_block)
+        self.assertIn('aria-label="Copiar nombre del titular"', holder_block)
+        self.assertIn('aria-live="polite"', holder_block)
+        self.assertNotIn("Revelar", holder_block)
+        self.assertNotIn("protected-action", holder_block)
+        self.assertNotIn("data-field", holder_block)
+        self.assertNotIn(PAN, html)
+        self.assertNotIn(CODE, html)
+
     def test_historical_card_without_code_is_supported(self):
         historical = PaymentCard(company_name="Empresa Histórica", client_name="Histórica", cardholder_name="Titular", brand="VISA", purpose="Histórica", created_by=self.leader)
         historical.set_pan("4012888888881881")

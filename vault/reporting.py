@@ -491,7 +491,7 @@ def build_pdf(data, generated_by, actor_role, orientation="auto", base_url=None)
     from weasyprint import HTML
 
     selected_orientation = data.orientation if orientation == "auto" else orientation
-    logo_path = finders.find("img/branding/logo-ays-azul.png")
+    logo_path = finders.find("img/branding/cardmanager/Logo-CardManager-CO-COLOR.png")
     html = render_to_string("vault/reports/report_pdf.html", {
         "report": data,
         "generated_at": timezone.localtime(),

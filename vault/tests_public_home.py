@@ -60,6 +60,22 @@ class PublicHomeTests(TestCase):
         self.assertContains(response, 'class="application-card', count=2)
         self.assertContains(response, "CardManager")
         self.assertContains(response, "Gestión SOAT")
+        self.assertContains(
+            response,
+            "/static/img/branding/cardmanager/Logo-CardManager-COLOR.png",
+        )
+        self.assertNotContains(
+            response,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-COLOR.png",
+        )
+        self.assertContains(response, "application-logo--cardmanager")
+        self.assertContains(
+            response,
+            'class="application-logo application-logo--cardmanager"',
+            count=1,
+        )
+        self.assertContains(response, 'class="application-icon"', count=1)
+        self.assertContains(response, "M7 3h7l4 4v14H7V3", count=1)
         self.assertNotContains(response, "Centro de Control")
         self.assertNotContains(response, "Correo y destinatarios")
         self.assertNotContains(response, "Cerrar sesión")

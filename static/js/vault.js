@@ -29,6 +29,47 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  const cardholderCopyButton = document.querySelector("[data-copy-cardholder]");
+  if (cardholderCopyButton) {
+    const cardholderValue = document.querySelector("[data-cardholder-value]");
+    const cardholderStatus = document.querySelector("[data-cardholder-copy-status]");
+    const writeCardholderToClipboard = async (value) => {
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const fallback = document.createElement("textarea");
+      fallback.value = value;
+      fallback.readOnly = true;
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      if (!copied) throw new Error("Clipboard unavailable");
+    };
+    cardholderCopyButton.addEventListener("click", async () => {
+      const value = cardholderValue?.textContent.trim();
+      if (!value) return;
+      const originalText = cardholderCopyButton.textContent;
+      cardholderCopyButton.disabled = true;
+      try {
+        await writeCardholderToClipboard(value);
+        cardholderCopyButton.textContent = "Copiado";
+        if (cardholderStatus) cardholderStatus.textContent = "Titular copiado";
+      } catch (error) {
+        cardholderCopyButton.textContent = "No fue posible copiar";
+        if (cardholderStatus) cardholderStatus.textContent = "No fue posible copiar el titular";
+      } finally {
+        window.setTimeout(() => {
+          cardholderCopyButton.textContent = originalText;
+          cardholderCopyButton.disabled = false;
+        }, 1800);
+      }
+    });
+  }
+
   const sidebar = document.querySelector("#app-sidebar");
   const openButton = document.querySelector("[data-sidebar-open]");
   const closeButtons = document.querySelectorAll("[data-sidebar-close]");

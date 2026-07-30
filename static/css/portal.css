@@ -5,6 +5,17 @@
     radial-gradient(circle at 88% 10%, rgba(0, 204, 255, .14), transparent 24rem),
     linear-gradient(180deg, #fff 0%, rgba(0, 124, 255, .045) 100%);
 }
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 
 .portal-page {
   width: min(100% - 48px, 1180px);
@@ -102,6 +113,32 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.application-logo {
+  position: relative;
+  width: min(100%, 228px);
+  height: 68px;
+  margin-bottom: 22px;
+  overflow: hidden;
+}
+.application-logo img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 286px;
+  max-width: none;
+  height: auto;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
+}
+.application-logo--cardmanager {
+  width: min(100%, 260px);
+  height: 126px;
+  margin-bottom: 18px;
+}
+.application-logo--cardmanager img {
+  width: 330px;
+}
 .is-disabled .application-icon {
   color: var(--navy);
   background: rgba(0, 204, 255, .15);
@@ -170,6 +207,10 @@
   .application-grid { grid-template-columns: 1fr; }
   .application-card { min-height: 280px; padding: 26px; border-radius: 28px 28px 28px 9px; }
   .application-icon { margin-bottom: 22px; }
+  .application-logo { width: min(100%, 210px); height: 62px; margin-bottom: 18px; }
+  .application-logo img { width: 264px; }
+  .application-logo--cardmanager { width: min(100%, 240px); height: 116px; }
+  .application-logo--cardmanager img { width: 305px; }
   .portal-button { width: 100%; }
   .portal-footer { align-items: flex-start; flex-direction: column; gap: 5px; }
 }

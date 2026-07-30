@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 from django.template import Context, Template
 from django.template.loader import render_to_string
 from django.test import Client, RequestFactory, TestCase
+from django.urls import reverse
 
 from .forms import AccessExceptionForm, NotificationRecipientForm, PolicyConfigurationForm
 from .models import NotificationRecipient, PolicyConfiguration, UserProfile
@@ -102,8 +104,46 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         html = self.render_shell(UserProfile.ADMIN)
         self.assertIn('aria-controls="app-sidebar"', html)
         self.assertIn('aria-expanded="false"', html)
-        self.assertIn('class="brand-logo-image"', html)
+        self.assertIn('class="cardmanager-brand"', html)
+        self.assertIn(
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png",
+            html,
+        )
+        self.assertIn(
+            "/static/img/branding/cardmanager/Logo-CardManager-COLOR.png",
+            html,
+        )
         self.assertIn('class="sidebar-backdrop"', html)
+
+    def test_login_uses_joint_cardmanager_brand_without_changing_flow(self):
+        response = Client().get(reverse("login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-COLOR.png",
+        )
+        self.assertContains(
+            response,
+            'alt="CardManager de A&amp;S Asesores en Seguros"',
+        )
+
+    def test_cardholder_copy_javascript_is_local_and_scoped_to_visible_name(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "static" / "js" / "vault.js"
+        ).read_text(encoding="utf-8")
+        start = source.index('document.querySelector("[data-copy-cardholder]")')
+        end = source.index('const sidebar = document.querySelector("#app-sidebar")')
+        handler = source[start:end]
+        self.assertIn("[data-cardholder-value]", handler)
+        self.assertIn("navigator.clipboard.writeText(value)", handler)
+        self.assertIn('document.execCommand("copy")', handler)
+        self.assertIn("Titular copiado", handler)
+        self.assertNotIn("fetch(", handler)
+        self.assertNotIn("protectedMeta", handler)
+        self.assertNotIn("data-field", handler)
+        self.assertNotIn("pan", handler.lower())
+        self.assertNotIn("expiry", handler.lower())
+        self.assertNotIn("code", handler.lower())
 
     def test_favicon_reference_and_root_route_are_valid(self):
         html = self.render_shell(UserProfile.ADMIN)

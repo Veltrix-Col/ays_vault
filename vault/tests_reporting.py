@@ -5,6 +5,7 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -260,6 +261,13 @@ class ReportingTests(TestCase):
         self.assertNotIn(b"4111111111111111", response.content)
         self.assertNotIn(b"12/29", response.content)
         self.assertTrue(ReportExport.objects.filter(user=self.admin, result="SUCCESS", export_format="PDF").exists())
+
+    def test_pdf_brand_logo_is_available_from_staticfiles(self):
+        logo_path = finders.find(
+            "img/branding/cardmanager/Logo-CardManager-CO-COLOR.png"
+        )
+        self.assertIsNotNone(logo_path)
+        self.assertTrue(logo_path.endswith("Logo-CardManager-CO-COLOR.png"))
 
     def test_excel_failure_is_logged_and_stored_without_security_alert(self):
         client = self.login(self.admin)
