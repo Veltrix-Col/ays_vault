@@ -15,7 +15,8 @@ class PublicHomeTests(TestCase):
         self.assertEqual(resolve("/").func, public_home)
         self.assertTemplateUsed(response, "portal/home.html")
         self.assertFalse(response.has_header("Location"))
-        self.assertContains(response, "Portal de Aplicaciones A&amp;S", html=False)
+        self.assertContains(response, "Banco de Herramientas")
+        self.assertNotContains(response, "Portal de Aplicaciones")
         self.assertContains(response, "Seleccione el módulo al que desea acceder.")
         self.assertContains(response, f'href="{reverse("vault:dashboard")}"')
         self.assertEqual(reverse("login"), "/login/")
@@ -28,8 +29,8 @@ class PublicHomeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "portal/home.html")
         self.assertFalse(response.has_header("Location"))
-        self.assertContains(response, "Portal de Aplicaciones A&amp;S", html=False)
-        self.assertContains(response, "A&amp;S Vault")
+        self.assertContains(response, "Banco de Herramientas")
+        self.assertContains(response, "CardManager")
 
     def test_root_ignores_invalid_session_cookie(self):
         self.client.cookies[settings.SESSION_COOKIE_NAME] = "invalid-or-revoked-session"
@@ -57,7 +58,7 @@ class PublicHomeTests(TestCase):
     def test_catalog_renders_two_cards_without_system_information(self):
         response = self.client.get("/")
         self.assertContains(response, 'class="application-card', count=2)
-        self.assertContains(response, "A&amp;S Vault")
+        self.assertContains(response, "CardManager")
         self.assertContains(response, "Gestión SOAT")
         self.assertNotContains(response, "Centro de Control")
         self.assertNotContains(response, "Correo y destinatarios")
@@ -97,4 +98,4 @@ class PublicHomeTests(TestCase):
             with self.subTest(template=template_name):
                 content = render_to_string(template_name, context)
                 self.assertIn('href="/"', content)
-                self.assertIn("Volver al Portal de Aplicaciones", content)
+                self.assertIn("Volver al Banco de Herramientas", content)

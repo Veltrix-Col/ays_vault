@@ -125,6 +125,7 @@ class UserProfile(models.Model):
 
 class PaymentCard(models.Model):
     BRAND = [("VISA", "Visa"), ("MC", "Mastercard"), ("AMEX", "American Express")]
+    company_name = models.CharField(max_length=160, blank=True)
     client_name = models.CharField(max_length=140)
     cardholder_name = models.CharField(max_length=140)
     brand = models.CharField(max_length=10, choices=BRAND)
@@ -132,7 +133,10 @@ class PaymentCard(models.Model):
     pan_fingerprint = models.CharField(max_length=64, editable=False, unique=True)
     last4 = models.CharField(max_length=4, editable=False, db_index=True)
     encrypted_expiry = models.TextField(editable=False)
+    # Conservación histórica: algunos registros fueron cifrados con llaves
+    # anteriores. No se expone ni se utiliza en flujos nuevos.
     encrypted_company = models.TextField(blank=True, editable=False)
+    encrypted_code = models.TextField(blank=True, editable=False)
     purpose = models.CharField(max_length=200)
     active = models.BooleanField(default=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cards_created")
@@ -157,15 +161,15 @@ class PaymentCard(models.Model):
     def get_expiry(self):
         return decrypt(self.encrypted_expiry)
 
-    def set_company(self, value):
-        self.encrypted_company = encrypt((value or "").strip())
+    def set_code(self, value):
+        self.encrypted_code = encrypt((value or "").strip())
 
-    def get_company(self):
-        return decrypt(self.encrypted_company) if self.encrypted_company else ""
+    def get_code(self):
+        return decrypt(self.encrypted_code) if self.encrypted_code else ""
 
     @property
-    def has_company(self):
-        return bool(self.encrypted_company)
+    def has_code(self):
+        return bool(self.encrypted_code)
 
     @property
     def masked_pan(self):

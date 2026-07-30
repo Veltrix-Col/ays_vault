@@ -1,9 +1,11 @@
 import time
 from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
+from django.conf import settings
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -34,8 +36,8 @@ class VaultIdentitySecurityTests(TestCase):
         for user, role in ((cls.admin_user, UserProfile.ADMIN), (cls.leader, UserProfile.LEADER), (cls.analyst, UserProfile.ANALYST)):
             profile = user.vault_profile; profile.role = role; profile.active = True; profile.mfa_enabled = True; profile.mfa_status = UserProfile.MFA_ACTIVE; profile.save()
             TOTPDevice.objects.create(user=user, name="Test", confirmed=True)
-        cls.card = PaymentCard(client_name="Cliente Demo", cardholder_name="Titular Demo", brand="VISA", purpose="Prueba autorizada", created_by=cls.leader, updated_by=cls.leader)
-        cls.card.set_pan(PAN); cls.card.set_expiry("12/29"); cls.card.set_company("Empresa Protegida Demo"); cls.card.save()
+        cls.card = PaymentCard(company_name="Empresa Demo", client_name="Cliente Demo", cardholder_name="Titular Demo", brand="VISA", purpose="Prueba autorizada", created_by=cls.leader, updated_by=cls.leader)
+        cls.card.set_pan(PAN); cls.card.set_expiry("12/29"); cls.card.set_code("CODIGO-PROTEGIDO-DEMO"); cls.card.save()
 
     def token(self, user, reset_last_t=False):
         device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
@@ -120,6 +122,36 @@ class VaultIdentitySecurityTests(TestCase):
         device.refresh_from_db(); self.assertTrue(device.confirmed)
         self.analyst.vault_profile.refresh_from_db(); self.assertEqual(self.analyst.vault_profile.mfa_status, UserProfile.MFA_ACTIVE)
         self.assertEqual(MFARecoveryCode.objects.filter(user=self.analyst).count(), 10)
+
+    def test_new_totp_enrollment_uses_cardmanager_without_resetting_existing_mfa(self):
+        existing = TOTPDevice.objects.get(user=self.admin_user, confirmed=True)
+        existing_key = existing.key
+        self.analyst.vault_profile.mfa_status = UserProfile.MFA_PENDING
+        self.analyst.vault_profile.mfa_enabled = False
+        self.analyst.vault_profile.save()
+        TOTPDevice.objects.filter(user=self.analyst).delete()
+
+        self.client.post(
+            reverse("login"),
+            {"username": self.analyst.username, "password": PASSWORD},
+        )
+        response = self.client.get(reverse("mfa_enroll"))
+        self.assertEqual(response.status_code, 200)
+        device = TOTPDevice.objects.get(user=self.analyst, confirmed=False)
+        secret_before_uri = device.key
+        uri = device.config_url
+        query = parse_qs(urlparse(uri).query)
+
+        self.assertEqual(settings.MFA_ISSUER, "CardManager")
+        self.assertEqual(settings.OTP_TOTP_ISSUER, "CardManager")
+        self.assertEqual(query["issuer"], ["CardManager"])
+        self.assertIn("CardManager", uri)
+        self.assertEqual(device.name, "CardManager")
+        device.refresh_from_db()
+        self.assertEqual(device.key, secret_before_uri)
+        existing.refresh_from_db()
+        self.assertTrue(existing.confirmed)
+        self.assertEqual(existing.key, existing_key)
 
     def test_totp_device_is_not_registered_in_admin(self):
         self.assertFalse(admin.site.is_registered(TOTPDevice))
@@ -277,7 +309,7 @@ class VaultIdentitySecurityTests(TestCase):
     def test_pan_expiry_encrypted_and_duplicate_rejected(self):
         stored = PaymentCard.objects.get(pk=self.card.pk)
         self.assertNotIn(PAN, stored.encrypted_pan); self.assertNotIn("12/29", stored.encrypted_expiry); self.assertTrue(luhn_valid(PAN))
-        form = CardForm(data={"client_name": "Otro", "cardholder_name": "Demo", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30", "company": "Empresa Demo"})
+        form = CardForm(data={"company_name": "Empresa Demo", "client_name": "Otro", "cardholder_name": "Demo", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30", "code": "CODIGO-DEMO"})
         self.assertFalse(form.is_valid())
 
     def test_session_records_contain_no_plain_session_key(self):

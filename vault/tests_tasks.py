@@ -7,7 +7,7 @@ from django.db import connection
 from django.test import TestCase, TransactionTestCase, override_settings
 
 from .models import NotificationRecipient, NotificationRecord, SecurityAlert, UserProfile
-from .notifications import notify_alert_async, notify_alert_by_id
+from .notifications import configured_recipients, notify_alert_async, notify_alert_by_id, send_alert_notification
 from .security import audit
 from .tasks import run_async
 
@@ -78,11 +78,21 @@ class NotifyAlertAsyncTests(TransactionTestCase):
         NotificationRecipient.objects.create(name="Admin demo", email="admin@example.invalid", active=True, is_primary=True, minimum_severity="LOW")
 
     def make_alert(self, *, action="LOGIN", outside_office_hours=True):
-        event = audit(None, action, user=self.user, metadata={"safe": True})
+        # El fixture controla explícitamente el estado horario. Evita que la
+        # hora real de ejecución dispare la notificación automática antes de
+        # que el caso de prueba termine de construir su alerta.
+        with patch("vault.security.outside_hours", return_value=False):
+            event = audit(None, action, user=self.user, metadata={"safe": True})
         if event.outside_office_hours != outside_office_hours:
             event.outside_office_hours = outside_office_hours
             event.save(update_fields=["outside_office_hours"])
-        return SecurityAlert.objects.create(event=event, alert_type="ASYNC_TEST", severity="HIGH", affected_user=self.user, description="Evento seguro")
+        return SecurityAlert.objects.create(
+            event=event,
+            alert_type="ASYNC_TEST",
+            severity="HIGH",
+            affected_user=self.user,
+            description="Evento seguro",
+        )
 
     def test_notify_alert_async_delivers_notification_via_background_thread(self):
         alert = self.make_alert()
@@ -102,9 +112,46 @@ class NotifyAlertAsyncTests(TransactionTestCase):
 
     def test_automatic_email_is_not_sent_for_normal_or_non_whitelisted_events(self):
         normal_login = self.make_alert(outside_office_hours=False)
+        normal_reveal = self.make_alert(action="REVEAL", outside_office_hours=False)
         card_change = self.make_alert(action="CREATE", outside_office_hours=True)
+        copy_event = self.make_alert(action="COPY", outside_office_hours=True)
         self.assertEqual(notify_alert_by_id(normal_login.pk), [])
+        self.assertEqual(notify_alert_by_id(normal_reveal.pk), [])
         self.assertEqual(notify_alert_by_id(card_change.pk), [])
+        self.assertEqual(notify_alert_by_id(copy_event.pk), [])
         self.assertFalse(
-            NotificationRecord.objects.filter(alert__in=[normal_login, card_change]).exists()
+            NotificationRecord.objects.filter(
+                alert__in=[normal_login, normal_reveal, card_change, copy_event]
+            ).exists()
         )
+
+    def test_all_active_recipients_receive_allowed_alerts_without_legacy_filters(self):
+        NotificationRecipient.objects.create(
+            name="Destinatario heredado",
+            email="segundo@example.invalid",
+            active=True,
+            delivery_mode=NotificationRecipient.WEEKLY,
+            alert_types=["UNRELATED"],
+            minimum_severity="CRITICAL",
+        )
+        alert = self.make_alert(action="REVEAL", outside_office_hours=True)
+        self.assertEqual(
+            configured_recipients(alert),
+            ["admin@example.invalid", "segundo@example.invalid"],
+        )
+
+    @patch("vault.notifications.send_notification")
+    def test_allowed_alerts_use_professional_cardmanager_subjects(self, send_mock):
+        login_alert = self.make_alert(action="LOGIN", outside_office_hours=True)
+        reveal_alert = self.make_alert(action="REVEAL", outside_office_hours=True)
+        send_alert_notification(login_alert, "admin@example.invalid")
+        self.assertEqual(
+            send_mock.call_args.kwargs["subject"],
+            "CardManager | Inicio de sesión fuera del horario permitido",
+        )
+        send_alert_notification(reveal_alert, "admin@example.invalid")
+        self.assertEqual(
+            send_mock.call_args.kwargs["subject"],
+            "CardManager | Revelado de información fuera del horario permitido",
+        )
+        self.assertNotIn("4111111111111111", send_mock.call_args.kwargs["html_body"])

@@ -16,7 +16,7 @@ def application_catalog():
     soat_url = external_soat_url or reverse("soat:upload")
     return [
         {
-            "name": "A&S Vault",
+            "name": "CardManager",
             "description": "Gestión segura, controlada y auditable de tarjetas y operaciones protegidas.",
             "icon_path": "M12 3 5 6v5c0 4.6 2.9 8.4 7 10 4.1-1.6 7-5.4 7-10V6l-7-3Zm-3 9 2 2 4-4",
             "url": reverse("vault:dashboard"),

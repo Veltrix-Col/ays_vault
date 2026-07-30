@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% load vault_ui %}
-{% block title %}Centro de Control · A&amp;S Vault{% endblock %}
+{% block title %}Centro de Control · CardManager{% endblock %}
 {% block content %}
 <div class="page-heading"><div><span class="section-kicker">Administración restringida</span><h1>Centro de Control</h1><p>Monitoreo accionable para una operación pequeña y sensible.</p></div><span class="health health-{{ health|lower }}">{{ health|health_label }}</span></div>
 <section class="panel health-panel"><div class="panel-head"><div><h2>Salud operativa</h2><p>Estado explicable según los controles y eventos recientes.</p></div></div><ul>{% for reason in health_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></section>

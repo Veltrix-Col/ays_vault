@@ -6,7 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import AccessException, AuditEvent, PaymentCard, PolicyConfiguration, SecurityAlert, UserDevice, UserProfile
-from .notifications import notify_alert
+from .notifications import notify_alert_by_id
 from .policies import get_policy
 from .security import audit, refresh_chain_verification, verify_audit_chain
 
@@ -35,7 +35,7 @@ def _create_alert(kind, severity, description, recommendation, period, user=None
         policy=policy if policy.pk else None,
         idempotency_key=identifier,
     )
-    transaction.on_commit(lambda: notify_alert(alert))
+    transaction.on_commit(lambda: notify_alert_by_id(alert.pk))
     return True
 
 

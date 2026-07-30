@@ -1,12 +1,11 @@
 from types import SimpleNamespace
 
-from django.forms.models import model_to_dict
 from django.template import Context, Template
 from django.template.loader import render_to_string
 from django.test import Client, RequestFactory, TestCase
 
 from .forms import AccessExceptionForm, NotificationRecipientForm, PolicyConfigurationForm
-from .models import PolicyConfiguration, UserProfile
+from .models import NotificationRecipient, PolicyConfiguration, UserProfile
 
 
 class _TemplateUser:
@@ -34,20 +33,44 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         request.resolver_match = SimpleNamespace(url_name="dashboard")
         return render_to_string("base.html", {"request": request, "user": _TemplateUser(), "vault_profile": _TemplateProfile(role)})
 
-    def test_policy_form_uses_spanish_labels_and_visual_choices(self):
+    def test_policy_form_exposes_only_schedule_fields(self):
         form = PolicyConfigurationForm()
         self.assertEqual(form["timezone_name"].label, "Zona horaria")
-        self.assertEqual(form["enabled"].label, "Activar esta política")
-        self.assertEqual(form["reauthentication_operations"].field.widget.__class__.__name__, "CheckboxSelectMultiple")
-        self.assertNotIn("textarea", str(form["reauthentication_operations"]).lower())
+        self.assertEqual(
+            list(form.fields),
+            [
+                "timezone_name", "weekday_start", "weekday_end", "saturday_enabled",
+                "saturday_start", "saturday_end", "sunday_enabled",
+                "outside_hours_behavior", "reason",
+            ],
+        )
+        self.assertNotIn("reauthentication_operations", form.fields)
+        self.assertNotIn("inactivity_login_days", form.fields)
+        self.assertNotIn("alert_review_hours", form.fields)
+        self.assertNotIn("enabled", form.fields)
 
-    def test_recipient_and_exception_lists_are_visual_choices(self):
+    def test_recipient_form_only_contains_name_and_email(self):
         recipient = NotificationRecipientForm()
         exception = AccessExceptionForm()
-        self.assertEqual(recipient["alert_types"].field.widget.__class__.__name__, "CheckboxSelectMultiple")
-        self.assertContainsHTML(str(recipient["alert_types"]), "Posible uso paralelo de Excel")
+        self.assertEqual(list(recipient.fields), ["name", "email"])
+        self.assertNotIn("alert_types", recipient.fields)
+        self.assertNotIn("minimum_severity", recipient.fields)
+        self.assertNotIn("delivery_mode", recipient.fields)
         self.assertEqual(exception["operations"].field.widget.__class__.__name__, "CheckboxSelectMultiple")
         self.assertNotIn("reason", recipient.fields)
+
+    def test_recipient_form_trims_values_rejects_html_and_active_duplicates(self):
+        valid = NotificationRecipientForm({"name": "  Control principal  ", "email": "  ADMIN@EXAMPLE.INVALID  "})
+        self.assertTrue(valid.is_valid(), valid.errors)
+        self.assertEqual(valid.cleaned_data["name"], "Control principal")
+        self.assertEqual(valid.cleaned_data["email"], "admin@example.invalid")
+        NotificationRecipient.objects.create(name="Existente", email="admin@example.invalid", active=True)
+        duplicate = NotificationRecipientForm({"name": "Otro", "email": "ADMIN@example.invalid"})
+        self.assertFalse(duplicate.is_valid())
+        self.assertIn("email", duplicate.errors)
+        unsafe = NotificationRecipientForm({"name": "<b>Administrador</b>", "email": "nuevo@example.invalid"})
+        self.assertFalse(unsafe.is_valid())
+        self.assertIn("name", unsafe.errors)
 
     def assertContainsHTML(self, html, text):
         self.assertIn(text, html)
@@ -56,7 +79,8 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         html = self.render_shell(UserProfile.ADMIN)
         self.assertIn(">Centro de Control<", html)
         self.assertNotIn(">Resumen<", html)
-        self.assertIn("Configuración de Seguridad", html)
+        self.assertIn(">Horarios<", html)
+        self.assertNotIn("Configuración de Seguridad", html)
         self.assertIn("Correo y destinatarios", html)
         self.assertNotIn(">Bóveda<", html)
 
@@ -98,14 +122,20 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         for value, label in expected.items():
             self.assertEqual(template.render(Context({"value": value})), label)
 
-    def test_policy_form_keeps_json_storage_without_raw_json_control(self):
-        policy = PolicyConfiguration.objects.create(singleton=1)
-        data = model_to_dict(policy)
-        data.update({
+    def test_policy_form_does_not_modify_obsolete_security_fields(self):
+        policy = PolicyConfiguration.objects.create(
+            singleton=1,
+            reauthentication_operations=["REVEAL_PAN", "COPY_PAN"],
+            inactivity_login_days=44,
+        )
+        data = {
+            "timezone_name": "America/Bogota",
             "weekday_start": "07:00", "weekday_end": "18:00", "saturday_start": "08:00", "saturday_end": "12:00",
-            "reauthentication_operations": ["REVEAL_PAN", "COPY_PAN"], "reason": "Ajuste visual verificado",
-        })
+            "saturday_enabled": "on", "outside_hours_behavior": "ALLOW_ALERT",
+            "reason": "Ajuste de jornada autorizado",
+        }
         form = PolicyConfigurationForm(data, instance=policy)
         self.assertTrue(form.is_valid(), form.errors)
         saved = form.save()
         self.assertEqual(saved.reauthentication_operations, ["REVEAL_PAN", "COPY_PAN"])
+        self.assertEqual(saved.inactivity_login_days, 44)

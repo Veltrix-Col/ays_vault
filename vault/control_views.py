@@ -14,7 +14,6 @@ from .decorators import role_required
 from .forms import AccessExceptionForm, EmailTestForm, HolidayForm, NotificationRecipientForm, PolicyConfigurationForm, ReasonForm, TimelineFilterForm
 from .identity import create_alert, has_recent_reauth
 from .models import AccessException, AuditEvent, AuditVerificationRun, Holiday, NotificationRecipient, NotificationRecord, PaymentCard, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, UserDevice, UserProfile
-from .email_config import email_configuration_status
 from .notifications import mask_email, retry_notification, send_notification
 from .policies import get_policy, invalidate_policy_cache
 from .reporting import apply_timeline_filters, filter_chips, timeline_queryset
@@ -197,15 +196,60 @@ def recipient_settings(request, pk=None):
             create_alert(request, event, "RECIPIENT_CHANGED", "HIGH", request.user, description="Configuración de destinatarios modificada.")
             messages.success(request, "Destinatario guardado y auditado.")
             return redirect("vault:recipients")
+    notification_page = Paginator(
+        NotificationRecord.objects.select_related("alert").order_by("-created_at"),
+        25,
+    ).get_page(request.GET.get("page"))
     return render(request, "vault/control/recipients.html", {
         "form": form,
         "editing_recipient": recipient,
         "recipients": NotificationRecipient.objects.order_by("name"),
-        "notifications": NotificationRecord.objects.select_related("alert")[:100],
-        "email_status": email_configuration_status(),
+        "notification_page": notification_page,
         "email_test_form": EmailTestForm(),
-        "last_email_test": NotificationRecord.objects.filter(notification_type="EMAIL_TEST").first(),
     })
+
+
+@role_required(UserProfile.ADMIN)
+@require_POST
+def recipient_toggle(request, pk):
+    if not has_recent_reauth(request, "policy_admin"):
+        return redirect(f"{reverse('vault:reauthenticate')}?purpose=policy_admin&next={reverse('vault:recipients')}")
+    recipient = get_object_or_404(NotificationRecipient, pk=pk)
+    activating = not recipient.active
+    if activating and NotificationRecipient.objects.filter(
+        active=True,
+        email__iexact=recipient.email,
+    ).exclude(pk=recipient.pk).exists():
+        messages.error(request, "Ya existe un destinatario activo con este correo.")
+        return redirect("vault:recipients")
+    recipient.active = activating
+    recipient.updated_by = request.user
+    recipient.save(update_fields=["active", "updated_by", "updated_at"])
+    event = audit(
+        request,
+        "POLICY_CHANGED",
+        reason="Actualización administrativa del estado de un destinatario",
+        risk_level="HIGH",
+        metadata={
+            "recipient_id": recipient.pk,
+            "recipient": mask_email(recipient.email),
+            "changed_fields": ["active"],
+            "active": recipient.active,
+        },
+    )
+    create_alert(
+        request,
+        event,
+        "RECIPIENT_CHANGED",
+        "HIGH",
+        request.user,
+        description="Estado de destinatario modificado.",
+    )
+    messages.success(
+        request,
+        f"Destinatario {'activado' if recipient.active else 'desactivado'} y auditado.",
+    )
+    return redirect("vault:recipients")
 
 
 @role_required(UserProfile.ADMIN)
@@ -213,35 +257,18 @@ def recipient_settings(request, pk=None):
 def email_test(request):
     form = EmailTestForm(request.POST)
     if not form.is_valid():
-        messages.error(request, "Ingrese un destinatario corporativo válido para la prueba.")
+        messages.error(request, "El correo electrónico ingresado no es válido.")
         return redirect("vault:recipients")
     recipient = form.cleaned_data["recipient"]
-    scenario = form.cleaned_data.get("scenario") or "LOGIN_OUTSIDE_HOURS"
-    scenario_labels = dict(EmailTestForm.SCENARIOS)
-    scenario_label = scenario_labels[scenario]
-    is_reveal = scenario.startswith("REVEAL_")
-    subject = (
-        "A&S Vault | Revelado de tarjeta fuera del horario habitual"
-        if is_reveal
-        else "A&S Vault | Inicio de sesión fuera del horario habitual"
-    )
-    safe_details = (
-        "Tarjeta ficticia #0000 · terminación •••• 0000 · certificado Zoho PRUEBA-0000."
-        if is_reveal
-        else "Usuario ficticio: prueba.control · rol: Prueba administrativa."
-    )
+    operation_id = form.cleaned_data.get("operation_id")
+    subject = "[PRUEBA] CardManager | Envío de prueba"
     text_body = (
-        f"A&S Vault — PRUEBA CONTROLADA\n\nEscenario: {scenario_label}.\n"
-        f"{safe_details}\nIP ficticia: 192.0.2.1.\n"
-        "Recomendación: validar el evento en el Centro de Control.\n\n"
-        "Este mensaje no contiene datos operativos ni secretos."
+        "Este es un correo de prueba enviado desde CardManager. "
+        "No corresponde a una alerta real."
     )
     html_body = (
-        "<p><strong>A&amp;S Vault — PRUEBA CONTROLADA</strong></p>"
-        f"<p><strong>Escenario:</strong> {scenario_label}</p>"
-        f"<p>{safe_details}</p><p><strong>IP ficticia:</strong> 192.0.2.1</p>"
-        "<p>Recomendación: validar el evento en el Centro de Control.</p>"
-        "<p>Este mensaje no contiene datos operativos ni secretos.</p>"
+        "<p>Este es un correo de prueba enviado desde <strong>CardManager</strong>.</p>"
+        "<p>No corresponde a una alerta real.</p>"
     )
     record = send_notification(
         notification_type="EMAIL_TEST",
@@ -249,9 +276,17 @@ def email_test(request):
         subject=subject,
         text_body=text_body,
         html_body=html_body,
-        idempotency_key=f"email-test:{request.user.pk}:{recipient.lower()}:{scenario}:{timezone.localdate().isoformat()}",
+        idempotency_key=(
+            f"email-test:{request.user.pk}:{recipient.lower()}:{operation_id}"
+            if operation_id
+            else f"email-test:{request.user.pk}:{recipient.lower()}:{timezone.localdate().isoformat()}"
+        ),
+        require_external_delivery=True,
     )
-    delivered = record.result == NotificationRecord.SENT
+    delivered = (
+        record.result == NotificationRecord.SENT
+        and record.backend in {"smtp", "graph"}
+    )
     audit(
         request,
         "EMAIL_SENT" if delivered else "EMAIL_FAILED",
@@ -263,13 +298,28 @@ def email_test(request):
             "delivery_result": record.result,
             "attempts": record.attempts,
             "safe_error_code": record.safe_error_code,
-            "test_scenario": scenario,
         },
     )
     if delivered:
-        messages.success(request, "La prueba de correo finalizó correctamente.")
+        messages.success(
+            request,
+            f"Correo de prueba enviado correctamente a {recipient}. "
+            "El servidor de correo aceptó el mensaje; revise también spam o cuarentena.",
+        )
+    elif record.safe_error_code == "EMAIL_BACKEND_CONSOLE":
+        messages.error(
+            request,
+            "El backend de correo está configurado en modo consola. "
+            "No se realizó un envío externo.",
+        )
+    elif record.safe_error_code == "EMAIL_BACKEND_LOCAL":
+        messages.error(request, "El backend actual no realiza envíos externos.")
     else:
-        messages.error(request, f"La prueba no pudo completarse. Código seguro: {record.safe_error_code or 'EMAIL_DELIVERY_ERROR'}.")
+        messages.error(
+            request,
+            "No fue posible enviar el correo de prueba. Revise la configuración "
+            "del servicio de correo o intente nuevamente.",
+        )
     return redirect("vault:recipients")
 
 

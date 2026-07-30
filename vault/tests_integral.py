@@ -16,6 +16,7 @@ from .identity import has_recent_reauth
 from .models import (
     AuditEvent,
     NotificationRecipient,
+    NotificationRecord,
     PaymentCard,
     PendingSensitiveOperation,
     PolicyConfiguration,
@@ -31,6 +32,7 @@ from .policies import invalidate_policy_cache
 
 PASSWORD = "IntegralSecure123!"
 COMPANY = "Empresa Ultrasecreta S.A.S."
+CODE = "CODIGO-ULTRASECRETO-001"
 PAN = "4111111111111111"
 
 
@@ -58,6 +60,7 @@ class IntegralVaultFlowTests(TestCase):
             profile.save()
             TOTPDevice.objects.create(user=user, confirmed=True)
         cls.card = PaymentCard(
+            company_name=COMPANY,
             client_name="Cliente Seguro",
             cardholder_name="Titular Autorizado",
             brand="VISA",
@@ -66,9 +69,10 @@ class IntegralVaultFlowTests(TestCase):
         )
         cls.card.set_pan(PAN)
         cls.card.set_expiry("12/29")
-        cls.card.set_company(COMPANY)
+        cls.card.set_code(CODE)
         cls.card.save()
         cls.other_card = PaymentCard(
+            company_name="Otra Empresa S.A.S.",
             client_name="Segundo Cliente",
             cardholder_name="Otra Persona",
             brand="MC",
@@ -77,7 +81,7 @@ class IntegralVaultFlowTests(TestCase):
         )
         cls.other_card.set_pan("5555555555554444")
         cls.other_card.set_expiry("09/30")
-        cls.other_card.set_company("Otra Empresa Protegida")
+        cls.other_card.set_code("OTRO-CODIGO-PROTEGIDO")
         cls.other_card.save()
 
     def setUp(self):
@@ -119,7 +123,7 @@ class IntegralVaultFlowTests(TestCase):
         totp.time = time.time()
         return str(totp.token()).zfill(device.digits)
 
-    def authorize_operation(self, client, user, card=None, field="company", action="reveal", reason=None, reference="POL-123456", expect_identity=True):
+    def authorize_operation(self, client, user, card=None, field="code", action="reveal", reason=None, reference="POL-123456", expect_identity=True):
         card = card or self.card
         start = client.post(reverse("vault:reveal", args=[card.pk]), {"field": field, "action": action})
         self.assertEqual(start.status_code, 428)
@@ -168,12 +172,13 @@ class IntegralVaultFlowTests(TestCase):
     def test_server_search_uses_safe_fields_ajax_and_pagination(self):
         client = self.authenticated_client(self.analyst)
         url = reverse("vault:card_list")
-        for query in (str(self.card.pk), "Cliente Seguro", "Titular Autorizado", "VISA", "1111"):
+        for query in (str(self.card.pk), COMPANY, "Cliente Seguro", "Titular Autorizado", "VISA", "1111"):
             response = client.get(url, {"q": query}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
             self.assertEqual(response.status_code, 200)
             self.assertContains(response, "Cliente Seguro")
-            self.assertNotContains(response, COMPANY)
+            self.assertContains(response, COMPANY)
             self.assertNotContains(response, PAN)
+            self.assertNotContains(response, CODE)
         empty = client.get(url, {"q": "inexistente"})
         self.assertContains(empty, "No se encontraron tarjetas")
         self.assertContains(empty, "Últimos cuatro dígitos")
@@ -181,26 +186,36 @@ class IntegralVaultFlowTests(TestCase):
         self.assertNotContains(empty, 'class="empty-row"')
         rejected = client.get(url, {"q": PAN}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
         self.assertNotContains(rejected, "Cliente Seguro")
+        protected_code = client.get(url, {"q": CODE}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertNotContains(protected_code, "Cliente Seguro")
+        self.assertContains(protected_code, "0 tarjetas")
 
-    def test_company_is_encrypted_and_absent_from_initial_html_and_admin_exports(self):
+    def test_company_is_administrative_and_code_is_encrypted_and_safe(self):
         stored = PaymentCard.objects.get(pk=self.card.pk)
-        self.assertNotIn(COMPANY, stored.encrypted_company)
+        self.assertEqual(stored.company_name, COMPANY)
+        self.assertNotIn(CODE, stored.encrypted_code)
         detail = self.authenticated_client(self.leader).get(reverse("vault:card_detail", args=[self.card.pk]))
-        self.assertNotContains(detail, COMPANY)
-        self.assertContains(detail, "Dato protegido")
+        self.assertContains(detail, COMPANY)
+        self.assertNotContains(detail, CODE)
+        self.assertContains(detail, "Código")
+        html = detail.content.decode()
+        self.assertLess(
+            html.index('data-protected-row="expiry"'),
+            html.index('data-protected-row="code"'),
+        )
         admin = self.authenticated_client(self.admin)
         export = admin.post(reverse("vault:export_report", args=["CARDS", "XLSX"]))
         workbook = load_workbook(BytesIO(export.content))
         text = " ".join(str(cell.value) for sheet in workbook for row in sheet for cell in row)
-        self.assertNotIn(COMPANY, text)
+        self.assertNotIn(CODE, text)
         self.assertNotIn(PAN, text)
 
-    def test_historical_card_without_company_is_supported(self):
-        historical = PaymentCard(client_name="Histórica", cardholder_name="Titular", brand="VISA", purpose="Histórica", created_by=self.leader)
+    def test_historical_card_without_code_is_supported(self):
+        historical = PaymentCard(company_name="Empresa Histórica", client_name="Histórica", cardholder_name="Titular", brand="VISA", purpose="Histórica", created_by=self.leader)
         historical.set_pan("4012888888881881")
         historical.set_expiry("11/30")
         historical.save()
-        self.assertEqual(historical.get_company(), "")
+        self.assertEqual(historical.get_code(), "")
         client = self.authenticated_client(self.leader)
         ReauthenticationGrant.objects.create(
             user=self.leader,
@@ -209,10 +224,17 @@ class IntegralVaultFlowTests(TestCase):
             expires_at=timezone.now() + timedelta(minutes=5),
         )
         response = client.get(reverse("vault:card_edit", args=[historical.pk]))
-        self.assertContains(response, "Emp.")
+        self.assertContains(response, "EMP.")
+        self.assertContains(response, "Empresa Histórica")
+        self.assertContains(response, "Código")
+        self.assertContains(response, "No configurado")
+        self.assertRegex(
+            response.content.decode(),
+            r'<input[^>]*name="code"[^>]*\brequired\b',
+        )
         self.assertContains(response, "•••• •••• ••••")
         self.assertContains(response, "••/••")
-        self.assertNotContains(response, COMPANY)
+        self.assertNotContains(response, CODE)
 
     def test_first_operation_creates_identity_window_and_card_context(self):
         client = self.authenticated_client(self.analyst)
@@ -229,7 +251,7 @@ class IntegralVaultFlowTests(TestCase):
     def test_three_fields_of_same_card_share_context_and_audit_individually(self):
         client = self.authenticated_client(self.analyst)
         window, context = self.authorize_operation(client, self.analyst)
-        for field, value in (("company", COMPANY), ("pan", PAN), ("expiry", "12/29")):
+        for field, value in (("pan", PAN), ("expiry", "12/29"), ("code", CODE)):
             response = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": field, "action": "reveal"})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.content.decode(), value)
@@ -285,7 +307,7 @@ class IntegralVaultFlowTests(TestCase):
 
     def test_identity_must_succeed_before_context_and_context_rejects_protected_values(self):
         client = self.authenticated_client(self.analyst)
-        start = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "company", "action": "reveal"})
+        start = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "code", "action": "reveal"})
         intent = start.json()["intent"]
         bad = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": "incorrecta"})
         self.assertEqual(bad.status_code, 422)
@@ -302,7 +324,7 @@ class IntegralVaultFlowTests(TestCase):
     def test_copy_tokens_are_one_use_and_bound_to_window_session_and_user(self):
         client = self.authenticated_client(self.analyst)
         _, context = self.authorize_operation(client, self.analyst, action="copy")
-        reveal = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "company", "action": "copy"})
+        reveal = client.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "code", "action": "copy"})
         token = reveal.headers["X-Vault-Copy-Token"]
         copy_url = reverse("vault:copy_event", args=[self.card.pk])
         self.assertEqual(client.post(copy_url, {"copy_token": token, "result": "success"}).status_code, 200)
@@ -333,7 +355,7 @@ class IntegralVaultFlowTests(TestCase):
         first = self.authenticated_client(self.analyst)
         window, context = self.authorize_operation(first, self.analyst)
         second = self.authenticated_client(self.analyst)
-        response = second.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "company", "action": "reveal"})
+        response = second.post(reverse("vault:reveal", args=[self.card.pk]), {"field": "code", "action": "reveal"})
         self.assertEqual(response.status_code, 428)
         self.assertEqual(response.json()["stage"], "identity")
         self.assertNotEqual(session_hash(second.session.session_key), window.session_hash)
@@ -350,11 +372,6 @@ class IntegralVaultFlowTests(TestCase):
         payload = {
             "name": "Administración",
             "email": "admin@example.invalid",
-            "alert_types": ["CRITICAL_ALERT", "EMAIL_FAILURE"],
-            "minimum_severity": "HIGH",
-            "delivery_mode": "IMMEDIATE",
-            "active": "on",
-            "is_primary": "on",
         }
         create = client.post(reverse("vault:recipients"), payload)
         self.assertRedirects(create, reverse("vault:recipients"), fetch_redirect_response=False)
@@ -367,8 +384,53 @@ class IntegralVaultFlowTests(TestCase):
         events = AuditEvent.objects.filter(action="POLICY_CHANGED", metadata__recipient_id=recipient.pk)
         self.assertEqual(events.count(), 2)
         self.assertFalse(any(event.reason == "" for event in events))
+        self.assertTrue(recipient.active)
+        toggle = client.post(reverse("vault:recipient_toggle", args=[recipient.pk]))
+        self.assertRedirects(toggle, reverse("vault:recipients"), fetch_redirect_response=False)
+        recipient.refresh_from_db()
+        self.assertFalse(recipient.active)
 
-    def test_leader_can_create_company_and_blank_edit_preserves_it(self):
+    def test_admin_configuration_pages_are_simplified_and_history_is_paginated(self):
+        client = self.authenticated_client(self.admin)
+        policy_page = client.get(reverse("vault:policy_settings"))
+        self.assertContains(policy_page, "<h1>Horarios</h1>", html=True)
+        for obsolete in (
+            "Operaciones que requieren reautenticación",
+            "Inactividad y adopción",
+            "Alertas y escalamiento",
+            "Configuración de Seguridad",
+        ):
+            self.assertNotContains(policy_page, obsolete)
+
+        holiday_page = client.get(reverse("vault:holidays"))
+        self.assertNotContains(
+            holiday_page,
+            "Los festivos nacionales funcionan sin conexión. Los cambios manuales exigen motivo y reautenticación.",
+        )
+
+        for index in range(27):
+            NotificationRecord.objects.create(
+                notification_type="EMAIL_TEST",
+                masked_recipient="a***@example.invalid",
+                recipient_hash=f"{index:064d}",
+                backend="console",
+                result=NotificationRecord.SENT,
+                idempotency_hash=f"{index + 100:064d}",
+            )
+        recipients_page = client.get(reverse("vault:recipients"))
+        self.assertEqual(len(recipients_page.context["notification_page"]), 25)
+        self.assertEqual(recipients_page.context["notification_page"].paginator.num_pages, 2)
+        for obsolete in (
+            "Backend activo", "Remitente", "Última prueba", "Escenario ficticio",
+            "Error seguro", "<th>Acción</th>", "Tipos de alerta", "Severidad mínima",
+        ):
+            self.assertNotContains(recipients_page, obsolete, html=False)
+        self.assertContains(recipients_page, "Nombre")
+        self.assertContains(recipients_page, "Correo electrónico")
+        second_page = client.get(reverse("vault:recipients"), {"page": 2})
+        self.assertEqual(len(second_page.context["notification_page"]), 2)
+
+    def test_leader_can_create_administrative_company_and_replace_code_securely(self):
         client = self.authenticated_client(self.leader)
         ReauthenticationGrant.objects.create(
             user=self.leader,
@@ -377,6 +439,7 @@ class IntegralVaultFlowTests(TestCase):
             expires_at=timezone.now() + timedelta(minutes=5),
         )
         create = client.post(reverse("vault:card_create"), {
+            "company_name": "Empresa Nueva S.A.S.",
             "client_name": "Cliente Nuevo",
             "cardholder_name": "Titular Nuevo",
             "brand": "VISA",
@@ -384,27 +447,46 @@ class IntegralVaultFlowTests(TestCase):
             "active": "on",
             "pan": "4012888888881881",
             "expiry": "10/30",
-            "company": "Empresa Nueva Protegida",
+            "code": "CODIGO-NUEVO-PROTEGIDO",
         })
         self.assertEqual(create.status_code, 302)
         created = PaymentCard.objects.get(client_name="Cliente Nuevo")
-        self.assertNotIn("Empresa Nueva Protegida", created.encrypted_company)
+        self.assertEqual(created.company_name, "Empresa Nueva S.A.S.")
+        self.assertEqual(created.get_code(), "CODIGO-NUEVO-PROTEGIDO")
+        self.assertNotIn("CODIGO-NUEVO-PROTEGIDO", created.encrypted_code)
         edit = client.post(reverse("vault:card_edit", args=[created.pk]), {
+            "company_name": "Empresa Nueva Editada S.A.S.",
             "client_name": "Cliente Nuevo Editado",
             "cardholder_name": "Titular Nuevo",
             "brand": "VISA",
             "purpose": "Renovación",
-            "company": "",
+            "code": "",
         })
         self.assertEqual(edit.status_code, 302)
         created.refresh_from_db()
-        self.assertEqual(created.get_company(), "Empresa Nueva Protegida")
-        self.assertFalse(AuditEvent.objects.filter(card=created, metadata__icontains="Empresa Nueva Protegida").exists())
+        self.assertEqual(created.company_name, "Empresa Nueva Editada S.A.S.")
+        self.assertEqual(created.get_code(), "CODIGO-NUEVO-PROTEGIDO")
+        self.assertFalse(AuditEvent.objects.filter(card=created, metadata__icontains="CODIGO-NUEVO-PROTEGIDO").exists())
+        replacement = "CODIGO-REEMPLAZADO-PROTEGIDO"
+        edit = client.post(reverse("vault:card_edit", args=[created.pk]), {
+            "company_name": "Empresa Nueva Editada S.A.S.",
+            "client_name": "Cliente Nuevo Editado",
+            "cardholder_name": "Titular Nuevo",
+            "brand": "VISA",
+            "purpose": "Renovación",
+            "code": replacement,
+        })
+        self.assertEqual(edit.status_code, 302)
+        created.refresh_from_db()
+        self.assertEqual(created.get_code(), replacement)
+        self.assertNotIn(replacement, created.encrypted_code)
+        self.assertFalse(AuditEvent.objects.filter(card=created, metadata__icontains=replacement).exists())
 
     def test_card_create_survives_reauthentication_once_with_encrypted_pending_payload(self):
         client = self.authenticated_client(self.leader)
         session_key_before = client.session.session_key
         payload = {
+            "company_name": "Empresa Pendiente S.A.S.",
             "client_name": "Cliente Pendiente",
             "cardholder_name": "Titular Pendiente",
             "brand": "VISA",
@@ -412,7 +494,7 @@ class IntegralVaultFlowTests(TestCase):
             "active": "on",
             "pan": "4012888888881881",
             "expiry": "10/30",
-            "company": "Empresa Pendiente Protegida",
+            "code": "CODIGO-PENDIENTE-PROTEGIDO",
         }
         start = client.post(reverse("vault:card_create"), payload)
         self.assertEqual(start.status_code, 302)
@@ -421,10 +503,11 @@ class IntegralVaultFlowTests(TestCase):
         self.assertEqual(query["purpose"], ["cards_manage"])
         self.assertNotIn(payload["pan"], start.url)
         self.assertNotIn(payload["expiry"], start.url)
+        self.assertNotIn(payload["code"], start.url)
         operation = PendingSensitiveOperation.objects.get(public_id=operation_id)
         self.assertNotIn(payload["pan"], operation.encrypted_payload)
         self.assertNotIn(payload["expiry"], operation.encrypted_payload)
-        self.assertNotIn(payload["company"], operation.encrypted_payload)
+        self.assertNotIn(payload["code"], operation.encrypted_payload)
         self.assertFalse(PaymentCard.objects.filter(client_name=payload["client_name"]).exists())
 
         reauth_page = client.get(start.url)
@@ -443,7 +526,8 @@ class IntegralVaultFlowTests(TestCase):
         self.assertRedirects(finish, reverse("vault:card_detail", args=[created.pk]), fetch_redirect_response=False)
         self.assertEqual(created.get_pan(), payload["pan"])
         self.assertEqual(created.get_expiry(), payload["expiry"])
-        self.assertEqual(created.get_company(), payload["company"])
+        self.assertEqual(created.company_name, payload["company_name"])
+        self.assertEqual(created.get_code(), payload["code"])
         operation.refresh_from_db()
         self.assertEqual(operation.status, PendingSensitiveOperation.COMPLETED)
         self.assertEqual(operation.encrypted_payload, "")
@@ -451,6 +535,8 @@ class IntegralVaultFlowTests(TestCase):
             AuditEvent.objects.filter(action="CREATE", metadata__operation_id=operation_id).count(),
             1,
         )
+        created_audit = AuditEvent.objects.get(action="CREATE", metadata__operation_id=operation_id)
+        self.assertNotIn(payload["code"], created_audit.reason + str(created_audit.metadata))
         self.assertEqual(client.session.session_key, session_key_before)
         self.assertFalse(
             AuditEvent.objects.filter(
@@ -492,16 +578,18 @@ class IntegralVaultFlowTests(TestCase):
         self.assertContains(edit_page, self.card.masked_pan)
         self.assertNotContains(edit_page, PAN)
         self.assertNotContains(edit_page, "12/29")
-        self.assertNotContains(edit_page, COMPANY)
+        self.assertContains(edit_page, COMPANY)
+        self.assertNotContains(edit_page, CODE)
         edit = client.post(
             reverse("vault:card_edit", args=[self.card.pk]),
             {
                 "operation_id": "17c16ef0-292b-4fba-9f5e-98cdbb179cb5",
+                "company_name": self.card.company_name,
                 "client_name": "Alias actualizado",
                 "cardholder_name": self.card.cardholder_name,
                 "brand": "VISA",
                 "purpose": self.card.purpose,
-                "company": "",
+                "code": "",
                 "pan": "4222222222222",
                 "expiry": "11/31",
             },
@@ -510,7 +598,7 @@ class IntegralVaultFlowTests(TestCase):
         self.card.refresh_from_db()
         self.assertEqual(self.card.get_pan(), "4222222222222")
         self.assertEqual(self.card.get_expiry(), "11/31")
-        self.assertEqual(self.card.get_company(), COMPANY)
+        self.assertEqual(self.card.get_code(), CODE)
 
         deactivate = client.post(
             reverse("vault:card_deactivate", args=[self.card.pk]),
@@ -546,6 +634,7 @@ class IntegralVaultFlowTests(TestCase):
             reverse("vault:card_create"),
             {
                 "operation_id": "64e121f0-a5a6-4c60-807e-41d24af57a91",
+                "company_name": "Empresa transversal S.A.S.",
                 "client_name": "Tarjeta ventana transversal",
                 "cardholder_name": "Titular transversal",
                 "brand": "VISA",
@@ -553,7 +642,7 @@ class IntegralVaultFlowTests(TestCase):
                 "active": "on",
                 "pan": "4000000000000002",
                 "expiry": "10/31",
-                "company": "Empresa transversal",
+                "code": "CODIGO-TRANSVERSAL",
             },
         )
         created = PaymentCard.objects.get(client_name="Tarjeta ventana transversal")
@@ -567,11 +656,12 @@ class IntegralVaultFlowTests(TestCase):
             reverse("vault:card_edit", args=[created.pk]),
             {
                 "operation_id": "f497ebc3-f094-4bc3-a843-910ea8c3dbcc",
+                "company_name": "Empresa transversal S.A.S.",
                 "client_name": "Tarjeta transversal editada",
                 "cardholder_name": "Titular transversal",
                 "brand": "VISA",
                 "purpose": "Operación transversal",
-                "company": "",
+                "code": "",
                 "pan": "4222222222222",
                 "expiry": "11/31",
             },
@@ -679,10 +769,11 @@ class IntegralVaultFlowTests(TestCase):
             reverse("vault:card_edit", args=[self.card.pk]),
             {
                 "client_name": self.card.client_name,
+                "company_name": self.card.company_name,
                 "cardholder_name": self.card.cardholder_name,
                 "brand": self.card.brand,
                 "purpose": self.card.purpose,
-                "company": "",
+                "code": "",
                 "pan": "",
                 "expiry": "",
             },
@@ -697,18 +788,19 @@ class IntegralVaultFlowTests(TestCase):
         response = client.get(reverse("vault:card_list"), {"q": "Operación autorizada"})
         self.assertContains(response, 'class="table vault-results-table"')
         self.assertContains(response, 'data-label="Emp."')
-        self.assertContains(response, "Configurada")
+        self.assertContains(response, COMPANY)
         self.assertContains(response, "Titular Autorizado")
         self.assertContains(response, "•••• 1111")
         self.assertNotContains(response, PAN)
-        self.assertNotContains(response, COMPANY)
-        self.assertContains(response, "No admite empresa, número completo ni vencimiento.")
+        self.assertNotContains(response, CODE)
+        self.assertContains(response, "No admite número completo, vencimiento ni código.")
 
     def test_invalid_card_form_does_not_echo_protected_values(self):
         client = self.authenticated_client(self.leader)
         response = client.post(
             reverse("vault:card_create"),
             {
+                "company_name": COMPANY,
                 "client_name": "Alias inválido",
                 "cardholder_name": "Titular",
                 "brand": "MC",
@@ -716,14 +808,66 @@ class IntegralVaultFlowTests(TestCase):
                 "active": "on",
                 "pan": "4012888888881881",
                 "expiry": "12/29",
-                "company": COMPANY,
+                "code": CODE,
             },
         )
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "4012888888881881")
         self.assertNotContains(response, "12/29")
-        self.assertNotContains(response, COMPANY)
+        self.assertContains(response, COMPANY)
+        self.assertNotContains(response, CODE)
         self.assertContains(response, "La franquicia no coincide")
+
+    def test_new_card_renders_administrative_company_and_required_code(self):
+        response = self.authenticated_client(self.leader).get(reverse("vault:card_create"))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        protected_section = html[html.index('id="card-protected-title"'):]
+        self.assertIn('name="pan"', protected_section)
+        self.assertIn('name="expiry"', protected_section)
+        self.assertIn('name="code"', protected_section)
+        self.assertIn(">Código", protected_section)
+        self.assertNotIn('name="company_name"', protected_section)
+        self.assertLess(protected_section.index('name="pan"'), protected_section.index('name="code"'))
+        self.assertLess(protected_section.index('name="expiry"'), protected_section.index('name="code"'))
+        self.assertRegex(
+            protected_section,
+            r'<input[^>]*name="code"[^>]*\brequired\b',
+        )
+        administrative_section = html[
+            html.index('id="card-general-title"'):html.index('id="card-protected-title"')
+        ]
+        self.assertIn('name="company_name"', administrative_section)
+        self.assertIn('placeholder="Razón social"', administrative_section)
+        self.assertIn(">EMP.", administrative_section)
+        self.assertNotIn("Empresa asociada", administrative_section)
+        self.assertIn('class="form-grid card-administrative-grid"', administrative_section)
+
+    def test_edit_card_renders_company_admin_and_code_masked_replacement(self):
+        response = self.authenticated_client(self.leader).get(
+            reverse("vault:card_edit", args=[self.card.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        administrative_section = html[
+            html.index('id="card-general-title"'):html.index('id="card-protected-title"')
+        ]
+        protected_section = html[html.index('id="card-protected-title"'):]
+        self.assertIn('name="company_name"', administrative_section)
+        self.assertIn(COMPANY, administrative_section)
+        self.assertNotIn(CODE, html)
+        self.assertNotIn("EMP.", protected_section)
+        self.assertIn('data-protected-edit-toggle="protected-code-edit"', protected_section)
+        self.assertIn('id="protected-code-edit"', protected_section)
+        self.assertIn('name="code"', protected_section)
+        self.assertLess(
+            protected_section.index('data-protected-edit-toggle="protected-pan-edit"'),
+            protected_section.index('data-protected-edit-toggle="protected-expiry-edit"'),
+        )
+        self.assertLess(
+            protected_section.index('data-protected-edit-toggle="protected-expiry-edit"'),
+            protected_section.index('data-protected-edit-toggle="protected-code-edit"'),
+        )
 
     def test_sensitive_window_is_shared_across_authorized_purposes(self):
         client = self.authenticated_client(self.leader)

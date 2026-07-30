@@ -4,8 +4,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}A&amp;S Vault{% endblock %}</title>
-  <meta name="application-name" content="A&S Vault">
+  <title>{% block title %}CardManager{% endblock %}</title>
+  <meta name="application-name" content="CardManager">
   <meta name="description" content="Custodia segura de información sensible">
   <meta name="theme-color" content="#152036">
   <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
@@ -24,8 +24,8 @@
         <span aria-hidden="true">☰</span>
       </button>
       <a class="mobile-brand" href="{% url 'vault:dashboard' %}">
-        <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Vault">
-        <span>A&amp;S Vault</span>
+        <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="CardManager">
+        <span>CardManager</span>
       </a>
     </header>
     <div class="sidebar-backdrop" data-sidebar-close hidden></div>
@@ -33,7 +33,7 @@
       <div class="sidebar-head">
         <a class="brand-block" href="{% url 'vault:dashboard' %}">
           <span class="brand-logo"><img class="brand-logo-image" src="{% static 'img/branding/logo-ays-blanco.png' %}" alt="A&S"></span>
-          <span class="brand-copy"><strong>A&amp;S Vault</strong><small>Custodia segura</small></span>
+          <span class="brand-copy"><strong>CardManager</strong><small>Custodia segura</small></span>
         </a>
         <button class="sidebar-close" type="button" data-sidebar-close aria-label="Cerrar menú principal">×</button>
       </div>
@@ -51,7 +51,7 @@
           <a href="{% url 'vault:sessions' %}" {% if current == 'sessions' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">S</span>Sesiones</a>
           <a href="{% url 'vault:devices' %}" {% if current == 'devices' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">D</span>Dispositivos</a>
           <span class="nav-label">Configuración</span>
-          <a href="{% url 'vault:policy_settings' %}" {% if current == 'policy_settings' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">P</span>Configuración de Seguridad</a>
+          <a href="{% url 'vault:policy_settings' %}" {% if current == 'policy_settings' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">H</span>Horarios</a>
           <a href="{% url 'vault:exceptions' %}" {% if current == 'exceptions' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">E</span>Excepciones</a>
           <a href="{% url 'vault:holidays' %}" {% if current == 'holidays' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">F</span>Festivos</a>
           <a href="{% url 'vault:recipients' %}" {% if current == 'recipients' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">@</span>Correo y destinatarios</a>

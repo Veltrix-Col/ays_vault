@@ -1,17 +1,17 @@
 {% extends 'base.html' %}
-{% block title %}Bóveda · A&amp;S Vault{% endblock %}
+{% block title %}Bóveda · CardManager{% endblock %}
 {% block content %}
-<div class="page-heading"><div><span class="section-kicker">A&amp;S Vault</span><h1>Tarjetas custodiadas</h1><p>Consulte únicamente la información necesaria para la operación autorizada.</p></div>{% if vault_profile.can_manage_cards %}<a class="btn primary" href="{% url 'vault:card_create' %}">Nueva tarjeta</a>{% endif %}</div>
+<div class="page-heading"><div><span class="section-kicker">CardManager</span><h1>Tarjetas custodiadas</h1><p>Consulte únicamente la información necesaria para la operación autorizada.</p></div>{% if vault_profile.can_manage_cards %}<a class="btn primary" href="{% url 'vault:card_create' %}">Nueva tarjeta</a>{% endif %}</div>
 <section class="panel vault-search-panel" aria-labelledby="vault-search-title">
   <div class="panel-head"><div><h2 id="vault-search-title">Buscar en la Bóveda</h2><p>La búsqueda se realiza en el servidor únicamente sobre campos no protegidos.</p></div></div>
   <form method="get" action="{% url 'vault:card_list' %}" class="vault-search" data-vault-search novalidate>
     <label class="sr-only" for="vault-search-input">Buscar tarjetas</label>
     <div class="vault-search-control">
-      <input id="vault-search-input" type="search" name="q" value="{{ query }}" maxlength="80" autocomplete="off" placeholder="Titular, referencia, alias, franquicia o últimos 4 dígitos" aria-describedby="vault-search-help vault-search-status">
+      <input id="vault-search-input" type="search" name="q" value="{{ query }}" maxlength="80" autocomplete="off" placeholder="Empresa, titular, referencia, alias, franquicia o últimos 4 dígitos" aria-describedby="vault-search-help vault-search-status">
       <button class="search-clear" type="button" data-search-clear aria-label="Limpiar búsqueda" {% if not query %}hidden{% endif %}>×</button>
       <span class="search-spinner" data-search-spinner hidden aria-hidden="true"></span>
     </div>
-    <span id="vault-search-help" class="field-help">Busca únicamente en titular, referencia, alias, franquicia y últimos cuatro dígitos. No admite empresa, número completo ni vencimiento.</span>
+    <span id="vault-search-help" class="field-help">Busca únicamente en Empresa, titular, referencia, alias, franquicia y últimos cuatro dígitos. No admite número completo, vencimiento ni código.</span>
     {% for error in search_form.q.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
   </form>
 </section>

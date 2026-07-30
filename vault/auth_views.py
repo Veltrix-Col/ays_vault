@@ -134,7 +134,7 @@ def mfa_enroll(request):
     user = _preauth_user(request)
     if not user or user.vault_profile.mfa_status not in {UserProfile.MFA_PENDING, UserProfile.MFA_NOT_CONFIGURED, UserProfile.MFA_RECOVERY}:
         return redirect("login")
-    device, created = TOTPDevice.objects.get_or_create(user=user, confirmed=False, defaults={"name": "A&S Vault"})
+    device, created = TOTPDevice.objects.get_or_create(user=user, confirmed=False, defaults={"name": "CardManager"})
     if created:
         audit(request, "MFA_ENROLL_START", user=user)
     form = MFAEnrollmentForm(request.POST or None)

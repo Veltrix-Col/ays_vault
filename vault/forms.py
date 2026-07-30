@@ -3,9 +3,11 @@ from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
+from django.utils.html import strip_tags
 from datetime import timedelta
 import ipaddress
 import re
+import uuid
 
 from .crypto import fingerprint
 from .models import (
@@ -70,12 +72,13 @@ def detected_brand(number):
 class CardForm(forms.ModelForm):
     pan = forms.CharField(label="Número de tarjeta", min_length=13, max_length=23, widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}))
     expiry = forms.CharField(label="Vencimiento (MM/AA)", max_length=5, widget=forms.TextInput(attrs={"placeholder": "MM/AA", "autocomplete": "off"}))
-    company = forms.CharField(label="Emp.", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Empresa asociada"}))
+    code = forms.CharField(label="Código", min_length=1, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Código"}))
+    company_name = forms.CharField(label="EMP.", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "organization", "placeholder": "Razón social"}))
 
     class Meta:
         model = PaymentCard
-        fields = ["client_name", "cardholder_name", "brand", "purpose", "active"]
-        labels = {"client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
+        fields = ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active"]
+        labels = {"company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
 
     def clean_pan(self):
         digits = "".join(character for character in self.cleaned_data["pan"] if character.isdigit())
@@ -103,7 +106,7 @@ class CardForm(forms.ModelForm):
         obj = super().save(False)
         obj.set_pan(self.cleaned_data["pan"])
         obj.set_expiry(self.cleaned_data["expiry"])
-        obj.set_company(self.cleaned_data["company"])
+        obj.set_code(self.cleaned_data["code"])
         if user:
             if not obj.pk:
                 obj.created_by = user
@@ -116,11 +119,21 @@ class CardForm(forms.ModelForm):
 class CardEditForm(forms.ModelForm):
     pan = forms.CharField(label="Número de tarjeta", required=False, min_length=13, max_length=23, widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric", "placeholder": "Ingrese el nuevo número"}), help_text="Déjelo vacío para conservar el número actual.")
     expiry = forms.CharField(label="Vencimiento", required=False, max_length=5, widget=forms.TextInput(attrs={"placeholder": "MM/AA", "autocomplete": "off"}), help_text="Déjelo vacío para conservar el vencimiento actual.")
-    company = forms.CharField(label="Emp.", required=False, min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Empresa asociada"}), help_text="Déjelo vacío para conservar la empresa actual.")
+    code = forms.CharField(label="Código", required=False, min_length=1, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "Código"}), help_text="Déjelo vacío para conservar el código actual.")
+    company_name = forms.CharField(label="EMP.", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "organization", "placeholder": "Razón social"}))
     class Meta:
         model = PaymentCard
-        fields = ["client_name", "cardholder_name", "brand", "purpose"]
-        labels = {"client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia"}
+        fields = ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active"]
+        labels = {"company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Las tarjetas históricas que aún no tienen Código deben completarlo
+        # en su siguiente edición; las demás pueden conservarlo sin exponerlo.
+        self.fields["code"].required = not self.instance.has_code
+        # El estado se presenta en el formulario, pero continúa gobernado por
+        # la operación sensible dedicada de desactivación.
+        self.fields["active"].disabled = True
 
     def clean_pan(self):
         value = self.cleaned_data.get("pan", "")
@@ -156,13 +169,13 @@ class CardEditForm(forms.ModelForm):
         obj = super().save(False)
         pan = self.cleaned_data.get("pan", "")
         expiry = self.cleaned_data.get("expiry", "")
-        company = self.cleaned_data.get("company", "").strip()
+        code = self.cleaned_data.get("code", "").strip()
         if pan:
             obj.set_pan(pan)
         if expiry:
             obj.set_expiry(expiry)
-        if company:
-            obj.set_company(company)
+        if code:
+            obj.set_code(code)
         if user:
             obj.updated_by = user
         if commit:
@@ -183,28 +196,19 @@ class CardSearchForm(forms.Form):
 
 
 class EmailTestForm(forms.Form):
-    SCENARIOS = [
-        ("LOGIN_OUTSIDE_HOURS", "Inicio de sesión fuera de horario"),
-        ("LOGIN_WEEKEND", "Inicio de sesión durante fin de semana"),
-        ("REVEAL_OUTSIDE_HOURS", "Revelado fuera de horario"),
-        ("REVEAL_WEEKEND", "Revelado durante fin de semana"),
-    ]
+    operation_id = forms.UUIDField(
+        required=False,
+        initial=uuid.uuid4,
+        widget=forms.HiddenInput,
+    )
     recipient = forms.EmailField(
-        label="Destinatario de la prueba",
+        label="Correo electrónico destino",
         max_length=254,
-        help_text="Use una dirección corporativa autorizada. La prueba no incluye datos operativos.",
         widget=forms.EmailInput(attrs={"autocomplete": "email", "placeholder": "administrador@ays.com.co"}),
     )
-    scenario = forms.ChoiceField(
-        label="Escenario ficticio",
-        choices=SCENARIOS,
-        initial="LOGIN_OUTSIDE_HOURS",
-        required=False,
-        help_text="Permite revisar los cuatro únicos tipos de aviso automático habilitados.",
-    )
 
 
-PROTECTED_FIELD_CHOICES = [("company", "Empresa"), ("pan", "Número de tarjeta"), ("expiry", "Vencimiento")]
+PROTECTED_FIELD_CHOICES = [("pan", "Número de tarjeta"), ("expiry", "Vencimiento"), ("code", "Código")]
 
 
 class ProtectedActionForm(forms.Form):
@@ -282,36 +286,37 @@ class ReasonForm(forms.Form):
 
 
 class PolicyConfigurationForm(forms.ModelForm):
-    new_session_policy = forms.ChoiceField(label="Comportamiento al iniciar sesión desde otro dispositivo", choices=[("REVOKE_PREVIOUS", "Revocar la sesión anterior"), ("BLOCK_NEW", "Bloquear la nueva sesión"), ("ALLOW_LIMIT", "Permitir según el límite configurado")])
-    outside_hours_behavior = forms.ChoiceField(label="Acceso fuera del horario laboral", choices=[("ALLOW", "Permitir"), ("ALLOW_ALERT", "Permitir y generar alerta"), ("REAUTH", "Exigir reautenticación"), ("BLOCK", "Bloquear")], help_text="Define qué debe hacer A&S Vault cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.")
-    reauthentication_operations = forms.MultipleChoiceField(
-        label="Operaciones que requieren reautenticación",
-        choices=REAUTHENTICATION_OPERATION_CHOICES,
-        required=False,
-        widget=forms.CheckboxSelectMultiple,
-        help_text="Seleccione las operaciones sensibles que deben solicitar una validación reciente.",
+    outside_hours_behavior = forms.ChoiceField(label="Acceso fuera del horario laboral", choices=[("ALLOW", "Permitir"), ("ALLOW_ALERT", "Permitir y generar alerta"), ("REAUTH", "Exigir reautenticación"), ("BLOCK", "Bloquear")], help_text="Define qué debe hacer CardManager cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.")
+    reason = forms.CharField(
+        min_length=5,
+        max_length=240,
+        label="Motivo del cambio",
+        help_text="Este motivo se conserva en la auditoría del cambio.",
     )
-    reason = forms.CharField(min_length=5, max_length=240, label="Motivo obligatorio")
 
     class Meta:
         model = PolicyConfiguration
-        exclude = ["singleton", "updated_by", "updated_at"]
+        fields = [
+            "timezone_name",
+            "weekday_start",
+            "weekday_end",
+            "saturday_enabled",
+            "saturday_start",
+            "saturday_end",
+            "sunday_enabled",
+            "outside_hours_behavior",
+            "reason",
+        ]
         labels = {
             "timezone_name": "Zona horaria", "weekday_start": "Inicio de jornada, lunes a viernes",
             "weekday_end": "Fin de jornada, lunes a viernes", "saturday_enabled": "Habilitar jornada los sábados",
             "saturday_start": "Inicio de jornada del sábado", "saturday_end": "Fin de jornada del sábado",
-            "sunday_enabled": "Permitir acceso los domingos", "session_inactivity_minutes": "Cerrar sesión por inactividad, minutos",
-            "maximum_sessions": "Sesiones simultáneas permitidas", "new_session_policy": "Comportamiento al iniciar sesión desde otro dispositivo",
-            "reauthentication_minutes": "Vigencia de la reautenticación, minutos", "outside_hours_behavior": "Acceso fuera del horario laboral",
-            "inactivity_login_days": "Días sin iniciar sesión", "inactivity_reveal_days": "Días sin consultar tarjetas",
-            "inactivity_copy_days": "Días sin copiar información", "inactivity_general_days": "Días sin actividad del sistema",
-            "inactive_user_days": "Días para considerar un usuario inactivo", "operational_user_days": "Días sin actividad de usuarios operativos",
-            "alert_review_hours": "Tiempo máximo para revisar una alerta, horas", "escalation_hours": "Escalar alerta después de, horas",
-            "enabled": "Activar esta política",
+            "sunday_enabled": "Permitir acceso los domingos",
+            "outside_hours_behavior": "Acceso fuera del horario laboral",
         }
         help_texts = {
             "timezone_name": "Todos los horarios del sistema se calculan con esta zona.",
-            "outside_hours_behavior": "Define qué debe hacer A&S Vault cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.",
+            "outside_hours_behavior": "Define qué debe hacer CardManager cuando un usuario intenta ingresar o realizar una operación por fuera del horario configurado.",
         }
         widgets = {
             "weekday_start": forms.TimeInput(attrs={"type": "time"}), "weekday_end": forms.TimeInput(attrs={"type": "time"}),
@@ -337,12 +342,33 @@ class AccessExceptionForm(forms.ModelForm):
 
 
 class NotificationRecipientForm(forms.ModelForm):
-    alert_types = forms.MultipleChoiceField(label="Tipos de alerta", choices=ALERT_TYPE_CHOICES, required=False, widget=forms.CheckboxSelectMultiple, help_text="Seleccione qué alertas debe recibir este destinatario.")
     class Meta:
         model = NotificationRecipient
-        exclude = ["updated_by", "updated_at"]
-        labels = {"name": "Nombre", "email": "Correo electrónico", "minimum_severity": "Severidad mínima", "send_start": "Hora inicial de envío", "send_end": "Hora final de envío", "delivery_mode": "Forma de entrega", "active": "Destinatario activo", "is_primary": "Correo principal", "is_leader": "Correo del líder", "is_alternate": "Correo alterno", "is_escalation": "Correo de escalamiento"}
-        widgets = {"send_start": forms.TimeInput(attrs={"type": "time"}), "send_end": forms.TimeInput(attrs={"type": "time"})}
+        fields = ["name", "email"]
+        labels = {"name": "Nombre", "email": "Correo electrónico"}
+        widgets = {
+            "name": forms.TextInput(attrs={"autocomplete": "name", "maxlength": 120}),
+            "email": forms.EmailInput(attrs={"autocomplete": "email", "maxlength": 254}),
+        }
+
+    def clean_name(self):
+        value = (self.cleaned_data.get("name") or "").strip()
+        if not value:
+            raise forms.ValidationError("Ingrese el nombre del destinatario.")
+        if strip_tags(value) != value or "<" in value or ">" in value:
+            raise forms.ValidationError("El nombre contiene contenido no permitido.")
+        return value
+
+    def clean_email(self):
+        value = (self.cleaned_data.get("email") or "").strip().lower()
+        if strip_tags(value) != value or "<" in value or ">" in value:
+            raise forms.ValidationError("El correo contiene contenido no permitido.")
+        duplicate = NotificationRecipient.objects.filter(active=True, email__iexact=value)
+        if self.instance.pk:
+            duplicate = duplicate.exclude(pk=self.instance.pk)
+        if (not self.instance.pk or self.instance.active) and duplicate.exists():
+            raise forms.ValidationError("Ya existe un destinatario activo con este correo.")
+        return value
 
 
 class HolidayForm(forms.ModelForm):

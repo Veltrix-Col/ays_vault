@@ -95,7 +95,7 @@ def _scrub_protected_form_values(form):
     """Never echo protected card values back into HTML after validation."""
     if form.is_bound:
         safe_data = form.data.copy()
-        for field_name in ("pan", "expiry", "company"):
+        for field_name in ("pan", "expiry", "code"):
             if field_name in safe_data:
                 safe_data[field_name] = ""
         form.data = safe_data
@@ -120,7 +120,7 @@ def card_list(request):
     if search_form.is_valid():
         query = search_form.cleaned_data["q"]
         if query:
-            filters = Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(purpose__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
+            filters = Q(company_name__icontains=query) | Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(purpose__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
             if query.isdigit():
                 filters |= Q(pk=int(query))
             if query.casefold() in {"activa", "activo"}:
@@ -219,7 +219,7 @@ def execute_pending_card_create(request, operation):
         card,
         reason=operation.reason,
         metadata={
-            "fields": ["client_name", "cardholder_name", "brand", "purpose", "pan", "expiry", "company"],
+            "fields": ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active", "pan", "expiry", "code"],
             "operation_id": str(operation.public_id),
         },
     )
@@ -349,7 +349,7 @@ def reveal(request, pk):
             stage = "identity"
         return JsonResponse({"ok": False, "authorization_required": True, "stage": stage, "intent": intent, "form_html": form_html}, status=428)
     try:
-        value = {"company": card.get_company, "pan": card.get_pan, "expiry": card.get_expiry}[field]()
+        value = {"pan": card.get_pan, "expiry": card.get_expiry, "code": card.get_code}[field]()
     except ValueError:
         audit(request, "REVEAL" if action == "reveal" else "COPY_ATTEMPT", card, field, result="FAILED", risk_level="HIGH", reason="No fue posible recuperar el dato protegido")
         return _protected_error(
@@ -357,11 +357,11 @@ def reveal(request, pk):
             "PROTECTED_VALUE_UNAVAILABLE",
             "No fue posible recuperar el dato protegido.",
         )
-    if field == "company" and not value:
+    if field == "code" and not value:
         return _protected_error(
             404,
-            "COMPANY_NOT_CONFIGURED",
-            "La empresa no está configurada para esta tarjeta.",
+            "CODE_NOT_CONFIGURED",
+            "El código no está configurado para esta tarjeta.",
         )
     token = create_reveal_grant(request, card, field, context)
     metadata = {
@@ -423,10 +423,10 @@ def protected_confirm(request):
             "La solicitud expiró. Inicie nuevamente la operación.",
         )
     form = OperationContextForm(request.POST)
-    if form.is_valid() and card.has_company:
-        company = card.get_company().strip().casefold()
+    if form.is_valid() and card.has_code:
+        code = card.get_code().strip().casefold()
         supplied = form.cleaned_data["zoho_reference"].casefold()
-        if company and company in supplied:
+        if code and code in supplied:
             form.add_error("zoho_reference", "No incluya datos protegidos en este campo.")
     if not form.is_valid():
         return HttpResponse(render_to_string("vault/security/_operation_context.html", {"form": form, "intent": intent_token}, request=request), status=422, content_type="text/html; charset=utf-8")

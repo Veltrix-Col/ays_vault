@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% load vault_ui %}
-{% block title %}Detalle de alerta · A&amp;S Vault{% endblock %}
+{% block title %}Detalle de alerta · CardManager{% endblock %}
 {% block content %}
 <div class="page-heading"><div><span class="section-kicker">{{ alert.get_severity_display }}</span><h1>{{ alert.alert_type|alert_type_label }}</h1><p>{{ alert.description }}</p></div><a class="btn ghost" href="{% url 'vault:alerts' %}">Volver a alertas</a></div>
 <div class="detail-grid"><section class="panel span-7"><h2>Información del caso</h2><dl class="status-list"><dt>Fecha</dt><dd>{{ alert.created_at }}</dd><dt>Usuario afectado</dt><dd>{{ alert.affected_user|default:'—' }}</dd><dt>Actor</dt><dd>{{ alert.actor|default:'Sistema' }}</dd><dt>IP</dt><dd>{{ alert.ip_address|default:'—' }}</dd><dt>Dispositivo</dt><dd>{{ alert.device.friendly_name|default:'—' }}</dd><dt>Política relacionada</dt><dd>{{ alert.policy_id|default:'—' }}</dd><dt>Excepción relacionada</dt><dd>{{ alert.access_exception_id|default:'—' }}</dd><dt>Estado</dt><dd><span class="badge {{ alert.status }}">{{ alert.get_status_display }}</span></dd><dt>Fecha límite de revisión</dt><dd>{{ alert.due_at|default:'—' }}</dd><dt>Recomendación</dt><dd>{{ alert.recommendation|default:'Revisar la evidencia y documentar la decisión.' }}</dd><dt>Comentario</dt><dd>{{ alert.review_note|default:'—' }}</dd></dl>

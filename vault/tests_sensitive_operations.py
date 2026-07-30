@@ -52,6 +52,7 @@ class PendingSensitiveOperationTests(TestCase):
             profile.save()
             TOTPDevice.objects.create(user=user, name="Prueba", confirmed=True)
         cls.card = PaymentCard(
+            company_name="Empresa de prueba",
             client_name="Cliente de prueba",
             cardholder_name="Titular de prueba",
             brand="MASTERCARD",
@@ -61,7 +62,7 @@ class PendingSensitiveOperationTests(TestCase):
         )
         cls.card.set_pan("5555555555554444")
         cls.card.set_expiry("12/29")
-        cls.card.set_company("Empresa de prueba")
+        cls.card.set_code("CODIGO-DE-PRUEBA")
         cls.card.save()
 
     def token(self, user):

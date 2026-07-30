@@ -12,6 +12,7 @@ db.sqlite3
 *.sqlite3
 staticfiles
 media
+tmp
 .pytest_cache
 .coverage
 htmlcov

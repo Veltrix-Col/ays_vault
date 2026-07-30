@@ -1,18 +1,24 @@
-{% load vault_ui %}A&S Vault — Centro de Control
+CardManager — Centro de Control
 
-Tipo de evento: {{ alert.alert_type|alert_type_label }}
-Severidad: {{ alert.get_severity_display }}
+{{ title }}
+
+{{ message }}
+
 Usuario: {{ alert.affected_user|default:"No identificado" }}
-Fecha y hora: {{ alert.created_at|date:"d/m/Y H:i:s" }}
+Rol: {% if alert.affected_user and alert.affected_user.vault_profile %}{{ alert.affected_user.vault_profile.get_role_display }}{% else %}No disponible{% endif %}
+Fecha: {{ alert.created_at|date:"d/m/Y" }}
+Hora de Colombia: {{ alert.created_at|date:"H:i:s" }}
+Motivo: {{ schedule_reason }}
+Navegador: {{ browser }}
+Sistema operativo: {{ operating_system }}
+Dispositivo: {% if alert.device %}{{ alert.device.friendly_name|default:alert.device.device_type }}{% else %}{{ device_type }}{% endif %}
 IP: {{ alert.ip_address|default:"No disponible" }}
-Dispositivo: {% if alert.device %}{{ alert.device.friendly_name|default:alert.device.device_type }}{% else %}No disponible{% endif %}
-{% if alert.event.action == "REVEAL" %}Tarjeta: ID interno #{{ alert.event.card_id }} · terminación •••• {{ alert.event.card.last4 }}
-Campo: {{ alert.event.metadata.field|default:"Dato protegido" }}
+{% if is_reveal_outside and alert.event.card_id %}Tarjeta: ID interno #{{ alert.event.card_id }}{% if alert.event.card %} · terminación •••• {{ alert.event.card.last4 }}{% endif %}
+Campo revelado: {{ alert.event.metadata.field|default:"Dato protegido" }}
 Número certificado recibo - Zoho: {{ alert.event.metadata.reference|default:"No disponible" }}
 {% endif %}
-Motivo: {{ alert.description }}
-Recomendación: {{ alert.recommendation|default:"Revisar el caso en el Centro de Control." }}
 
+Recomendación: {{ alert.recommendation|default:"Revise el evento y confirme que corresponda a una actividad autorizada." }}
 Detalle seguro: {{ detail_url }}
 
 Este mensaje excluye números de tarjeta, vencimientos, valores revelados, secretos, tokens y códigos MFA.

@@ -152,10 +152,27 @@ class AlertNotificationAndCommandTests(TestCase):
 
     def test_seed_demo_control_data_is_idempotent(self):
         call_command("seed_demo")
-        counts = (PolicyConfiguration.objects.count(), AccessException.objects.count(), SecurityAlert.objects.count())
+        counts = (
+            PolicyConfiguration.objects.count(),
+            AccessException.objects.count(),
+            SecurityAlert.objects.count(),
+            NotificationRecord.objects.count(),
+        )
         call_command("seed_demo")
-        self.assertEqual(counts, (PolicyConfiguration.objects.count(), AccessException.objects.count(), SecurityAlert.objects.count()))
-        self.assertTrue(Holiday.objects.exists()); self.assertTrue(NotificationRecord.objects.exists())
+        self.assertEqual(
+            counts,
+            (
+                PolicyConfiguration.objects.count(),
+                AccessException.objects.count(),
+                SecurityAlert.objects.count(),
+                NotificationRecord.objects.count(),
+            ),
+        )
+        self.assertTrue(Holiday.objects.exists())
+        record = NotificationRecord.objects.get(notification_type="DEMO_NOTIFICATION")
+        self.assertEqual(record.backend, "demo-console")
+        self.assertEqual(record.external_id, "demo-no-external-delivery")
+        self.assertEqual(record.masked_recipient, "a***********@example.invalid")
 
 
 @override_settings(**TEST_KEYS, PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])

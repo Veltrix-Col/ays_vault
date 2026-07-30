@@ -22,8 +22,8 @@ class SecurityAlertAdminForm(forms.ModelForm):
         return cleaned
 
 
-admin.site.site_header = "A&S Vault — Administración"
-admin.site.site_title = "A&S Vault"
+admin.site.site_header = "CardManager — Administración"
+admin.site.site_title = "CardManager"
 admin.site.index_title = "Administración restringida"
 
 if admin.site.is_registered(TOTPDevice):
@@ -37,7 +37,7 @@ admin.site.unregister(User)
 @admin.register(User)
 class VaultUserAdmin(UserAdmin):
     def user_change_password(self, request, id, form_url=""):
-        raise PermissionDenied("Use el flujo seguro de cambio de contraseña de A&S Vault.")
+        raise PermissionDenied("Use el flujo seguro de cambio de contraseña de CardManager.")
 
     def has_change_permission(self, request, obj=None):
         return super().has_change_permission(request, obj) and has_recent_reauth(request, "identity_admin")

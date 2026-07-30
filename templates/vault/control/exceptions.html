@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Excepciones · A&amp;S Vault{% endblock %}
+{% block title %}Excepciones · CardManager{% endblock %}
 {% block content %}
 <div class="page-heading"><div><span class="section-kicker">Horarios</span><h1>Excepciones administrativas</h1><p>Cree permisos o bloqueos temporales con vigencia definida y trazabilidad completa.</p></div></div>
 <form method="post" class="form-panel wide" novalidate>{% csrf_token %}{{ form.non_field_errors }}<section class="form-section"><div class="form-section-header"><h2>Nueva excepción</h2><p>Seleccione un usuario o un rol, nunca ambos. Toda excepción expira automáticamente.</p></div><div class="form-grid">

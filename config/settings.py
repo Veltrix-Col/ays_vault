@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import timedelta
-import os, secrets
+import os, secrets, sys
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 BASE_DIR=Path(__file__).resolve().parent.parent
@@ -31,6 +31,7 @@ DEBUG=env_bool('DEBUG',APP_ENV=='development')
 SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if DEBUG else '')
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
+CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
 INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
@@ -56,7 +57,11 @@ DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'; LOGIN_URL='login'; LOGIN_RED
 CSRF_COOKIE_HTTPONLY=True; SESSION_COOKIE_HTTPONLY=True; SESSION_COOKIE_SAMESITE='Lax'; CSRF_COOKIE_SAMESITE='Lax'; X_FRAME_OPTIONS='DENY'; SECURE_CONTENT_TYPE_NOSNIFF=True; SECURE_REFERRER_POLICY='same-origin'
 SESSION_COOKIE_AGE=600; SESSION_SAVE_EVERY_REQUEST=True; SESSION_EXPIRE_AT_BROWSER_CLOSE=True
 SESSION_INACTIVITY_SECONDS=int(os.getenv('SESSION_INACTIVITY_SECONDS','600')); SESSION_ACTIVITY_THROTTLE_SECONDS=int(os.getenv('SESSION_ACTIVITY_THROTTLE_SECONDS','60'))
-REAUTH_TTL_SECONDS=int(os.getenv('REAUTH_TTL_SECONDS','300')); MFA_FAILURE_LIMIT=int(os.getenv('MFA_FAILURE_LIMIT','5')); MFA_ISSUER=os.getenv('MFA_ISSUER','A&S Vault')
+REAUTH_TTL_SECONDS=int(os.getenv('REAUTH_TTL_SECONDS','300')); MFA_FAILURE_LIMIT=int(os.getenv('MFA_FAILURE_LIMIT','5'))
+_configured_mfa_issuer=os.getenv('MFA_ISSUER','CardManager').strip()
+# El valor histórico no es un identificador de seguridad: se normaliza al
+# nombre comercial actual sin alterar secretos ni dispositivos ya enrolados.
+MFA_ISSUER='CardManager' if _configured_mfa_issuer in {'','A&S Vault'} else _configured_mfa_issuer
 OTP_TOTP_ISSUER=MFA_ISSUER; OTP_TOTP_THROTTLE_FACTOR=1
 AXES_FAILURE_LIMIT=5; AXES_COOLOFF_TIME=timedelta(minutes=30); AXES_RESET_ON_SUCCESS=True; AXES_LOCKOUT_PARAMETERS=[['username','ip_address']]
 FIELD_ENCRYPTION_KEY=os.getenv('FIELD_ENCRYPTION_KEY','')
@@ -64,6 +69,12 @@ FIELD_FINGERPRINT_KEY=os.getenv('FIELD_FINGERPRINT_KEY','')
 OFFICE_START=os.getenv('OFFICE_START','07:00'); OFFICE_END=os.getenv('OFFICE_END','18:00')
 ALERT_EMAIL=os.getenv('ALERT_EMAIL',''); DEFAULT_FROM_EMAIL=os.getenv('DEFAULT_FROM_EMAIL','alertas@ays.local').strip(); EMAIL_BACKEND=os.getenv('EMAIL_BACKEND','django.core.mail.backends.console.EmailBackend').strip()
 ALERT_EMAIL_BACKEND=os.getenv('ALERT_EMAIL_BACKEND','console').strip().lower()
+RUNNING_TESTS=len(sys.argv)>1 and sys.argv[1]=='test'
+if RUNNING_TESTS:
+    # La suite nunca hereda SMTP o Graph del .env local/producción.
+    EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'
+    ALERT_EMAIL_BACKEND='console'
+    EMAIL_CONFIGURATION_ERRORS.clear()
 ALERT_EMAIL_FROM=os.getenv('ALERT_EMAIL_FROM',DEFAULT_FROM_EMAIL)
 ALERT_EMAIL_ADMIN=os.getenv('ALERT_EMAIL_ADMIN',ALERT_EMAIL)
 ALERT_EMAIL_LEADER=os.getenv('ALERT_EMAIL_LEADER','')
@@ -102,7 +113,7 @@ LOGGING = {
         'vault': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
-EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'}
+EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'} and not RUNNING_TESTS
 if EMAIL_PRODUCTION_ENV:
     if EMAIL_CONFIGURATION_ERRORS: raise ImproperlyConfigured('Configuracion de correo invalida')
     if ALERT_EMAIL_BACKEND not in {'smtp','graph','microsoft_graph'}: raise ImproperlyConfigured('Backend de correo no permitido en produccion')

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>{{ report.title }}</title>
 <style>
-  @page { size: A4 {{ orientation }}; margin: 18mm 12mm 18mm; @bottom-left { content: "A&S Vault · Uso interno y confidencial"; color: #152036; font-size: 8pt; } @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #152036; font-size: 8pt; } }
+  @page { size: A4 {{ orientation }}; margin: 18mm 12mm 18mm; @bottom-left { content: "CardManager · Uso interno y confidencial"; color: #152036; font-size: 8pt; } @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #152036; font-size: 8pt; } }
   * { box-sizing: border-box; } body { margin: 0; color: #152036; font: 9pt Arial, sans-serif; }
   header { border-bottom: 2px solid #00ccff; display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
   header img { width: 130px; max-height: 44px; object-fit: contain; } h1 { color: #152036; font-size: 18pt; margin: 14px 0 4px; } h2 { color: #152036; font-size: 11pt; margin: 14px 0 6px; }
@@ -10,7 +10,7 @@
   table { border-collapse: collapse; width: 100%; table-layout: fixed; } thead { display: table-header-group; } th { background: #152036; color: white; font-size: 7.5pt; padding: 5px; text-align: left; } td { border-bottom: 1px solid #dce4e9; font-size: 7.2pt; overflow-wrap: anywhere; padding: 5px; vertical-align: top; } tbody tr:nth-child(even) { background: #f6f9fb; }
   .warning { border-left: 4px solid #007cff; color: #152036; margin-top: 12px; padding: 7px 10px; background: #eef7ff; } .empty { padding: 18px; text-align: center; }
 </style></head><body>
-<header>{% if logo_uri %}<img src="{{ logo_uri }}" alt="A&amp;S Vault">{% else %}<strong>A&amp;S Vault</strong>{% endif %}<span>Informe seguro</span></header>
+<header>{% if logo_uri %}<img src="{{ logo_uri }}" alt="CardManager">{% else %}<strong>CardManager</strong>{% endif %}<span>Informe seguro</span></header>
 <h1>{{ report.title }}</h1>
 <div class="meta"><div><strong>Generado:</strong> {{ generated_at|date:'d/m/Y H:i' }}</div><div><strong>Generado por:</strong> {{ generated_by.get_full_name|default:generated_by.username }}</div><div><strong>Rol:</strong> {{ actor_role }}</div><div><strong>Total:</strong> {{ report.rows|length }} registros</div></div>
 <h2>Filtros utilizados</h2><div class="filters">{% for key,value in report.filters.items %}<span class="chip"><strong>{{ key }}:</strong> {{ value }}</span>{% empty %}<span>Sin filtros adicionales; se aplicó el alcance autorizado del rol.</span>{% endfor %}</div>

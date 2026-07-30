@@ -392,7 +392,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = await response.blob();
         const disposition = response.headers.get("Content-Disposition") || "";
         const match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-        const filename = match ? decodeURIComponent(match[1]) : `A&S Vault - Informe.${format === "PDF" ? "pdf" : "xlsx"}`;
+        const filename = match ? decodeURIComponent(match[1]) : `CardManager - Informe.${format === "PDF" ? "pdf" : "xlsx"}`;
         const downloadUrl = URL.createObjectURL(blob); const link = document.createElement("a");
         link.href = downloadUrl; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
         window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000); reportBusy = false; closeReportDialog();

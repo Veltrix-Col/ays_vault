@@ -1,12 +1,21 @@
 {% extends 'base.html' %}
-{% block title %}Configuración de Seguridad · A&amp;S Vault{% endblock %}
+{% block title %}Horarios · CardManager{% endblock %}
 {% block content %}
-<div class="page-heading"><div><span class="section-kicker">Centro de Control</span><h1>Configuración de Seguridad</h1><p>Administre horarios, sesiones y umbrales operativos desde un único lugar.</p></div></div>
-<form method="post" class="form-panel wide" novalidate>
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Administración</span>
+    <h1>Horarios</h1>
+    <p>Defina la jornada laboral utilizada para evaluar accesos y operaciones extraordinarias.</p>
+  </div>
+</div>
+<form method="post" class="form-panel wide schedule-form" novalidate data-single-submit>
   {% csrf_token %}
   {{ form.non_field_errors }}
   <section class="form-section" aria-labelledby="horarios-title">
-    <div class="form-section-header"><h2 id="horarios-title">1. Horarios de trabajo</h2><p>Defina las jornadas en la zona horaria oficial de la operación.</p></div>
+    <div class="form-section-header">
+      <h2 id="horarios-title">Jornada laboral</h2>
+      <p>Todos los horarios se interpretan con la zona horaria configurada.</p>
+    </div>
     <div class="form-grid">
       {% include 'includes/form_field.html' with field=form.timezone_name %}
       {% include 'includes/form_field.html' with field=form.outside_hours_behavior %}
@@ -16,43 +25,12 @@
       {% include 'includes/form_field.html' with field=form.sunday_enabled %}
       {% include 'includes/form_field.html' with field=form.saturday_start %}
       {% include 'includes/form_field.html' with field=form.saturday_end %}
-    </div>
-  </section>
-  <section class="form-section" aria-labelledby="sesiones-title">
-    <div class="form-section-header"><h2 id="sesiones-title">2. Sesiones y autenticación</h2><p>Controle la duración de las sesiones y la validación adicional de operaciones sensibles.</p></div>
-    <div class="form-grid">
-      {% include 'includes/form_field.html' with field=form.session_inactivity_minutes %}
-      {% include 'includes/form_field.html' with field=form.maximum_sessions %}
-      {% include 'includes/form_field.html' with field=form.new_session_policy %}
-      {% include 'includes/form_field.html' with field=form.reauthentication_minutes %}
-      <fieldset class="form-field full"><legend>{{ form.reauthentication_operations.label }}</legend><div class="choice-grid">{% for choice in form.reauthentication_operations %}<label class="choice-card">{{ choice.tag }} <span>{{ choice.choice_label }}</span></label>{% endfor %}</div>{% if form.reauthentication_operations.help_text %}<span class="field-help">{{ form.reauthentication_operations.help_text }}</span>{% endif %}{{ form.reauthentication_operations.errors }}</fieldset>
-    </div>
-  </section>
-  <section class="form-section" aria-labelledby="adopcion-title">
-    <div class="form-section-header"><h2 id="adopcion-title">3. Inactividad y adopción</h2><p>Si no se registra actividad durante estos periodos, el sistema generará una alerta para validar la adopción del proceso.</p></div>
-    <div class="form-grid">
-      {% include 'includes/form_field.html' with field=form.inactivity_login_days %}
-      {% include 'includes/form_field.html' with field=form.inactivity_reveal_days %}
-      {% include 'includes/form_field.html' with field=form.inactivity_copy_days %}
-      {% include 'includes/form_field.html' with field=form.inactivity_general_days %}
-      {% include 'includes/form_field.html' with field=form.inactive_user_days %}
-      {% include 'includes/form_field.html' with field=form.operational_user_days %}
-    </div>
-  </section>
-  <section class="form-section" aria-labelledby="alertas-title">
-    <div class="form-section-header"><h2 id="alertas-title">4. Alertas y escalamiento</h2><p>Establezca los tiempos de atención para que los casos no permanezcan sin seguimiento.</p></div>
-    <div class="form-grid">
-      {% include 'includes/form_field.html' with field=form.alert_review_hours %}
-      {% include 'includes/form_field.html' with field=form.escalation_hours %}
-    </div>
-  </section>
-  <section class="form-section" aria-labelledby="confirmacion-title">
-    <div class="form-section-header"><h2 id="confirmacion-title">5. Confirmación</h2><p>Describa el motivo del cambio. Esta información quedará registrada en la auditoría.</p></div>
-    <div class="form-grid">
-      {% include 'includes/form_field.html' with field=form.enabled %}
       {% include 'includes/form_field.html' with field=form.reason %}
     </div>
-    <div class="form-actions"><a class="btn ghost" href="{% url 'vault:control_center' %}">Cancelar</a><button class="btn primary" type="submit">Guardar configuración</button></div>
+    <div class="form-actions">
+      <a class="btn ghost" href="{% url 'vault:control_center' %}">Cancelar</a>
+      <button class="btn primary" type="submit">Guardar horarios</button>
+    </div>
   </section>
 </form>
 {% endblock %}

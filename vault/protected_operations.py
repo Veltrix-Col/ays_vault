@@ -20,7 +20,7 @@ INTENT_SESSION_KEY = "protected_operation_intent"
 INTENT_TTL_SECONDS = 300
 IDENTITY_TTL_SECONDS = 180
 WINDOW_TTL_MINUTES = 30
-PROTECTED_FIELDS = {"company", "pan", "expiry"}
+PROTECTED_FIELDS = {"pan", "expiry", "code"}
 PROTECTED_ACTIONS = {"reveal", "copy"}
 
 

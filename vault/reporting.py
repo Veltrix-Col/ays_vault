@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 import re
+import uuid
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -22,6 +23,7 @@ from .models import (
     NotificationRecord,
     PaymentCard,
     PolicyEvaluationRun,
+    ProtectedOperationContext,
     SecurityAlert,
     SecureSession,
     UserDevice,
@@ -58,7 +60,7 @@ ALERT_LABELS = {
 RESULT_LABELS = {"SUCCESS": "Exitoso", "FAILED": "Fallido", "DENIED": "Denegado", "BLOCKED": "Bloqueado"}
 SCHEDULE_LABELS = {"inside": "Dentro del horario", "outside": "Fuera del horario"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
-CONFIDENTIALITY = "Uso interno y confidencial. Este informe no contiene Empresa, números completos de tarjeta ni vencimientos."
+CONFIDENTIALITY = "Uso interno y confidencial. Este informe no contiene códigos protegidos, números completos de tarjeta ni vencimientos."
 
 
 class ReportValidationError(Exception):
@@ -216,14 +218,78 @@ def _local_parts(value):
 
 
 def _timeline_data(user, filters):
-    events = apply_timeline_filters(timeline_queryset(user), filters)
+    events = list(
+        apply_timeline_filters(timeline_queryset(user), filters)[
+            : filters.get("_row_limit", settings.REPORT_XLSX_MAX_ROWS) + 1
+        ]
+    )
+    context_ids = set()
+    for event in events:
+        raw_context_id = (
+            event.metadata.get("context_id")
+            if isinstance(event.metadata, dict)
+            else None
+        )
+        if not raw_context_id:
+            continue
+        try:
+            context_ids.add(uuid.UUID(str(raw_context_id)))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    contexts = {
+        str(context.public_id): context
+        for context in ProtectedOperationContext.objects.filter(
+            public_id__in=context_ids
+        ).only("public_id", "user_id", "card_id", "internal_reference")
+    }
     rows = []
-    for event in events[: filters.get("_row_limit", settings.REPORT_XLSX_MAX_ROWS) + 1]:
+    for event in events:
         day, hour = _local_parts(event.created_at)
         alert_id = getattr(getattr(event, "securityalert", None), "pk", None)
         safe_object = f"Tarjeta #{event.card_id} · **** {event.card.last4}" if event.card else "—"
-        rows.append([day, hour, event.user.get_full_name() or event.user.username if event.user else "Sistema", ROLE_LABELS.get(event.actor_role, "Sistema"), EVENT_LABELS.get(event.action, "Evento del sistema"), RESULT_LABELS.get(event.result, event.result), event.get_risk_level_display(), str(event.ip_address or "—"), safe_device(event.user_agent), "Fuera" if event.outside_office_hours else "Dentro", safe_object, f"Alerta #{alert_id}" if alert_id else "—", safe_reason(event.reason)])
-    return ReportData("Informe de Línea de Tiempo", ["Fecha", "Hora", "Usuario", "Rol", "Evento", "Resultado", "Severidad", "IP", "Dispositivo", "Horario", "Objeto seguro", "Alerta relacionada", "Motivo seguro"], rows, safe_filter_summary(filters))
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        context = contexts.get(str(metadata.get("context_id", "")))
+        if context and context.card_id == event.card_id and context.user_id == event.user_id:
+            zoho_reference = context.internal_reference
+        else:
+            zoho_reference = metadata.get("reference", "")
+        rows.append([
+            day,
+            hour,
+            event.user.get_full_name() or event.user.username if event.user else "Sistema",
+            ROLE_LABELS.get(event.actor_role, "Sistema"),
+            EVENT_LABELS.get(event.action, "Evento del sistema"),
+            RESULT_LABELS.get(event.result, event.result),
+            event.get_risk_level_display(),
+            str(event.ip_address or "—"),
+            safe_device(event.user_agent),
+            "Fuera" if event.outside_office_hours else "Dentro",
+            safe_object,
+            f"Alerta #{alert_id}" if alert_id else "—",
+            safe_reason(event.reason),
+            safe_reason(zoho_reference),
+        ])
+    return ReportData(
+        "Informe de Línea de Tiempo",
+        [
+            "Fecha",
+            "Hora",
+            "Usuario",
+            "Rol",
+            "Evento",
+            "Resultado",
+            "Severidad",
+            "IP",
+            "Dispositivo",
+            "Horario",
+            "Objeto seguro",
+            "Alerta relacionada",
+            "Referencia",
+            "Número certificado recibo - Zoho",
+        ],
+        rows,
+        safe_filter_summary(filters),
+    )
 
 
 def _scoped_alerts(user):
@@ -298,11 +364,50 @@ def _cards_data(user, filters):
     queryset = _date_filter(PaymentCard.objects.select_related("created_by"), filters).annotate(
         last_view_at=Subquery(AuditEvent.objects.filter(card_id=OuterRef("pk"), action="VIEW").order_by("-created_at").values("created_at")[:1]),
         last_copy_at=Subquery(AuditEvent.objects.filter(card_id=OuterRef("pk"), action="COPY", result="SUCCESS").order_by("-created_at").values("created_at")[:1]),
+        latest_zoho_reference=Subquery(
+            ProtectedOperationContext.objects.filter(card_id=OuterRef("pk"))
+            .order_by("-created_at", "-pk")
+            .values("internal_reference")[:1]
+        ),
     )
     rows = []
     for card in queryset.order_by("-created_at")[: filters.get("_row_limit", settings.REPORT_XLSX_MAX_ROWS) + 1]:
-        rows.append([card.pk, safe_reason(card.client_name), safe_reason(card.cardholder_name), card.get_brand_display(), card.last4, "Activa" if card.active else "Inactiva", timezone.localtime(card.created_at).strftime("%d/%m/%Y %H:%M"), str(card.created_by), timezone.localtime(card.last_view_at).strftime("%d/%m/%Y %H:%M") if card.last_view_at else "Nunca", timezone.localtime(card.last_copy_at).strftime("%d/%m/%Y %H:%M") if card.last_copy_at else "Nunca", "No incluido por seguridad", safe_reason(card.purpose)])
-    return ReportData("Informe Seguro de Tarjetas", ["ID interno", "Cliente", "Alias autorizado", "Franquicia", "Últimos cuatro", "Estado", "Fecha de creación", "Creada por", "Última consulta", "Última copia", "Próximo vencimiento", "Observación no sensible"], rows, safe_filter_summary(filters), observations="El PAN y el vencimiento se excluyen expresamente. El periodo de vencimiento no se exporta en esta fase.")
+        rows.append([
+            card.pk,
+            safe_reason(card.client_name),
+            safe_reason(card.cardholder_name),
+            card.get_brand_display(),
+            safe_reason(card.purpose),
+            safe_reason(card.latest_zoho_reference),
+            card.last4,
+            "Activa" if card.active else "Inactiva",
+            timezone.localtime(card.created_at).strftime("%d/%m/%Y %H:%M"),
+            str(card.created_by),
+            timezone.localtime(card.last_view_at).strftime("%d/%m/%Y %H:%M") if card.last_view_at else "Nunca",
+            timezone.localtime(card.last_copy_at).strftime("%d/%m/%Y %H:%M") if card.last_copy_at else "Nunca",
+            "No incluido por seguridad",
+        ])
+    return ReportData(
+        "Informe Seguro de Tarjetas",
+        [
+            "ID interno",
+            "Alias",
+            "Titular",
+            "Franquicia",
+            "Referencia",
+            "Número certificado recibo - Zoho",
+            "Últimos cuatro",
+            "Estado",
+            "Fecha de creación",
+            "Creada por",
+            "Última consulta",
+            "Última copia",
+            "Próximo vencimiento",
+        ],
+        rows,
+        safe_filter_summary(filters),
+        observations="El PAN y el vencimiento se excluyen expresamente. El periodo de vencimiento no se exporta en esta fase.",
+    )
 
 
 def _health_data(user, filters):
@@ -343,46 +448,24 @@ def excel_safe(value):
 def build_excel(data, generated_by, actor_role):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
-    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     workbook = Workbook()
-    summary = workbook.active
-    summary.title = "Resumen"
-    summary.sheet_view.showGridLines = False
-    summary["A1"] = "A&S Vault"
-    summary["A1"].font = Font(size=20, bold=True, color="123D6A")
-    summary["A3"] = data.title
-    summary["A3"].font = Font(size=16, bold=True, color="123D6A")
-    logo_path = finders.find("img/branding/logo-ays-azul.png")
-    if logo_path:
-        try:
-            from openpyxl.drawing.image import Image
-            logo = Image(logo_path)
-            logo.width, logo.height = 150, 48
-            summary.add_image(logo, "D1")
-        except (ImportError, OSError, ValueError):
-            pass
-    summary_rows = [
-        ("Fecha de generación", timezone.localtime().strftime("%d/%m/%Y %H:%M")),
-        ("Generado por", generated_by.get_full_name() or generated_by.username),
-        ("Rol", ROLE_LABELS.get(actor_role, actor_role)),
-        ("Total de registros", len(data.rows)),
-    ] + [(key, value) for key, value in data.filters.items()]
-    for index, (label, value) in enumerate(summary_rows, start=5):
-        summary.cell(index, 1, label).font = Font(bold=True, color="123D6A")
-        summary.cell(index, 2, excel_safe(value))
-    warning_row = 6 + len(summary_rows)
-    summary.cell(warning_row, 1, CONFIDENTIALITY)
-    summary.merge_cells(start_row=warning_row, start_column=1, end_row=warning_row, end_column=6)
-    summary.cell(warning_row, 1).fill = PatternFill("solid", fgColor="E8F4FA")
-    summary.cell(warning_row, 1).alignment = Alignment(wrap_text=True)
-    summary.column_dimensions["A"].width = 28
-    summary.column_dimensions["B"].width = 48
-
-    sheet = workbook.create_sheet("Datos")
+    sheet = workbook.active
+    sheet.title = "Datos"
     sheet.freeze_panes = "A2"
     sheet.sheet_view.showGridLines = False
-    for column, header in enumerate(data.columns, start=1):
+    normalized_headers = []
+    used_headers = set()
+    for index, raw_header in enumerate(data.columns, start=1):
+        base_header = str(raw_header).strip() or f"Columna {index}"
+        header = base_header
+        suffix = 2
+        while header.casefold() in used_headers:
+            header = f"{base_header} ({suffix})"
+            suffix += 1
+        used_headers.add(header.casefold())
+        normalized_headers.append(header)
+    for column, header in enumerate(normalized_headers, start=1):
         cell = sheet.cell(1, column, header)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="123D6A")
@@ -391,17 +474,15 @@ def build_excel(data, generated_by, actor_role):
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row_index, column, excel_safe(value))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    last_row = max(2, len(data.rows) + 1)
-    last_column = sheet.cell(1, len(data.columns)).column_letter
-    sheet.auto_filter.ref = f"A1:{last_column}{last_row}"
-    if data.rows:
-        table = Table(displayName="DatosInforme", ref=f"A1:{last_column}{last_row}")
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showFirstColumn=False, showLastColumn=False)
-        sheet.add_table(table)
-    for index, header in enumerate(data.columns, start=1):
+    last_row = len(data.rows) + 1
+    last_column = sheet.cell(1, len(normalized_headers)).column_letter
+    data_range = f"A1:{last_column}{last_row}"
+    sheet.auto_filter.ref = data_range
+    for index, header in enumerate(normalized_headers, start=1):
         maximum = max([len(str(header))] + [len(str(row[index - 1])) for row in data.rows[:500]])
         sheet.column_dimensions[sheet.cell(1, index).column_letter].width = min(max(maximum + 2, 12), 38)
     output = BytesIO()
+    workbook.active = 0
     workbook.save(output)
     return output.getvalue()
 
@@ -427,4 +508,4 @@ def report_filename(data, export_format):
     clean_title = re.sub(r"[^A-Za-zÁÉÍÓÚáéíóúÑñ0-9 _-]", "", data.title).strip()[:80]
     stamp = timezone.localdate().isoformat()
     prefix = "PDF - " if export_format == "PDF" else ""
-    return f"{prefix}A&S Vault - {clean_title} - {stamp}.{export_format.lower() if export_format == 'PDF' else 'xlsx'}"
+    return f"{prefix}CardManager - {clean_title} - {stamp}.{export_format.lower() if export_format == 'PDF' else 'xlsx'}"

@@ -1,6 +1,6 @@
 {
-  "name": "A&S Vault",
-  "short_name": "A&S Vault",
+  "name": "CardManager",
+  "short_name": "CardManager",
   "description": "Custodia segura de información sensible",
   "icons": [
     {"src": "/static/img/branding/web-app-manifest-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},

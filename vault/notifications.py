@@ -42,14 +42,35 @@ def _recipient_hash(value):
     return hashlib.sha256(f"{key}:email:{value.lower()}".encode()).hexdigest()
 
 
+def _user_agent_summary(value):
+    user_agent = value or ""
+    browser = "Microsoft Edge" if "Edg/" in user_agent else "Chrome" if "Chrome/" in user_agent else "Firefox" if "Firefox/" in user_agent else "Safari" if "Safari/" in user_agent else "No disponible"
+    operating_system = "Windows" if "Windows" in user_agent else "Android" if "Android" in user_agent else "iOS" if "iPhone" in user_agent or "iPad" in user_agent else "macOS" if "Mac OS" in user_agent else "Linux" if "Linux" in user_agent else "No disponible"
+    device_type = "Móvil" if any(marker in user_agent for marker in ("Mobile", "Android", "iPhone")) else "Escritorio"
+    return browser, operating_system, device_type
+
+
+def _outside_schedule_reason(alert):
+    from .models import Holiday
+    from .policies import get_policy
+
+    event = getattr(alert, "event", None)
+    event_time = timezone.localtime(event.created_at) if event else timezone.localtime()
+    holiday = Holiday.objects.filter(date=event_time.date(), working_day=False).first()
+    if holiday:
+        return f"Festivo configurado: {holiday.name}"
+    policy = get_policy()
+    if event_time.weekday() == 6 and not policy.sunday_enabled:
+        return "Día no laboral: domingo"
+    if event_time.weekday() == 5 and not policy.saturday_enabled:
+        return "Fin de semana: sábado no laborable"
+    return "Fuera de la jornada configurada"
+
+
 def configured_recipients(alert):
-    recipients = []
-    for recipient in NotificationRecipient.objects.filter(active=True, delivery_mode=NotificationRecipient.IMMEDIATE):
-        if recipient.alert_types and alert.alert_type not in recipient.alert_types:
-            continue
-        if SEVERITY_RANK[alert.severity] < SEVERITY_RANK[recipient.minimum_severity]:
-            continue
-        recipients.append(recipient.email)
+    recipients = list(
+        NotificationRecipient.objects.filter(active=True).values_list("email", flat=True)
+    )
     if not recipients:
         recipients = [value for value in (settings.ALERT_EMAIL_ADMIN, settings.ALERT_EMAIL_LEADER) if value]
     return sorted(set(recipients))
@@ -161,16 +182,23 @@ def get_backend():
 def _redact_email_content(value, alert=None):
     safe = value or ""
     safe = re.sub(r"(?<!\d)\d{13,19}(?!\d)", "[DATO PROTEGIDO OMITIDO]", safe)
-    safe = re.sub(r"\b(?:0[1-9]|1[0-2])/\d{2,4}\b", "[DATO PROTEGIDO OMITIDO]", safe)
+    # Un vencimiento aislado (MM/AA o MM/AAAA) se redacta, pero el mismo
+    # fragmento dentro de una fecha legítima DD/MM/AAAA no se considera un
+    # dato de tarjeta.
+    safe = re.sub(
+        r"(?<![\d/])(?:0[1-9]|1[0-2])/\d{2,4}(?![\d/])",
+        "[DATO PROTEGIDO OMITIDO]",
+        safe,
+    )
     safe = re.sub(r"(?<!\d)\d{6}(?!\d)", "[CÓDIGO OMITIDO]", safe)
     for secret in (getattr(settings, "EMAIL_HOST_PASSWORD", ""), getattr(settings, "MS_GRAPH_CLIENT_SECRET", "")):
         if secret:
             safe = safe.replace(secret, "[SECRETO OMITIDO]")
     card = getattr(getattr(alert, "event", None), "card", None) if alert else None
-    if card and card.has_company:
-        company = card.get_company()
-        if company:
-            safe = re.sub(re.escape(company), "[DATO PROTEGIDO OMITIDO]", safe, flags=re.IGNORECASE)
+    if card and card.has_code:
+        code = card.get_code()
+        if code:
+            safe = re.sub(re.escape(code), "[DATO PROTEGIDO OMITIDO]", safe, flags=re.IGNORECASE)
     return safe
 
 
@@ -197,7 +225,18 @@ def _audit_alert_delivery(record, alert):
     )
 
 
-def send_notification(*, notification_type, recipient, subject, text_body, html_body, idempotency_key, alert=None, force_retry=False):
+def send_notification(
+    *,
+    notification_type,
+    recipient,
+    subject,
+    text_body,
+    html_body,
+    idempotency_key,
+    alert=None,
+    force_retry=False,
+    require_external_delivery=False,
+):
     idempotency = hashlib.sha256(idempotency_key.encode()).hexdigest()
     record, created = NotificationRecord.objects.get_or_create(
         idempotency_hash=idempotency,
@@ -209,9 +248,18 @@ def send_notification(*, notification_type, recipient, subject, text_body, html_
             "backend": normalized_backend(),
         },
     )
-    if not created and record.result == NotificationRecord.SENT:
+    if (
+        not created
+        and record.result == NotificationRecord.SENT
+        and (not require_external_delivery or record.backend in {"smtp", "graph"})
+    ):
         return record
-    if not created and not force_retry and record.attempts >= settings.EMAIL_MAX_RETRIES:
+    if (
+        not created
+        and not force_retry
+        and record.attempts >= settings.EMAIL_MAX_RETRIES
+        and not (require_external_delivery and record.backend not in {"smtp", "graph"})
+    ):
         return record
 
     subject = _redact_email_content(subject, alert)
@@ -227,6 +275,34 @@ def send_notification(*, notification_type, recipient, subject, text_body, html_
         record.next_attempt_at = None
         record.save(update_fields=["attempts", "backend", "result", "safe_error_code", "next_attempt_at"])
         logger.warning("Fallo de correo id=%s backend=no-reconocido intento=%s codigo=%s", record.pk, record.attempts, exc.safe_code)
+        _audit_alert_delivery(record, alert)
+        return record
+    if require_external_delivery and backend.name not in {"smtp", "graph"}:
+        django_backend = str(getattr(settings, "EMAIL_BACKEND", "")).lower()
+        record.attempts += 1
+        record.backend = backend.name
+        record.result = NotificationRecord.FAILED
+        record.safe_error_code = (
+            "EMAIL_BACKEND_CONSOLE"
+            if "console" in django_backend
+            else "EMAIL_BACKEND_LOCAL"
+        )
+        record.next_attempt_at = None
+        record.save(
+            update_fields=[
+                "attempts",
+                "backend",
+                "result",
+                "safe_error_code",
+                "next_attempt_at",
+            ]
+        )
+        logger.warning(
+            "Prueba externa de correo rechazada id=%s backend=%s codigo=%s",
+            record.pk,
+            backend.name,
+            record.safe_error_code,
+        )
         _audit_alert_delivery(record, alert)
         return record
     remaining_attempts = 1 if force_retry else max(1, settings.EMAIL_MAX_RETRIES - record.attempts)
@@ -267,15 +343,45 @@ def send_notification(*, notification_type, recipient, subject, text_body, html_
 
 
 def send_alert_notification(alert, recipient, force_retry=False):
-    context = {"alert": alert, "detail_url": f"{settings.VAULT_BASE_URL}/security/alerts/{alert.pk}/"}
-    alert_label = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
     action = getattr(getattr(alert, "event", None), "action", "")
-    if action == "LOGIN":
-        subject = "A&S Vault | Inicio de sesión fuera del horario habitual"
-    elif action == "REVEAL":
-        subject = "A&S Vault | Revelado de tarjeta fuera del horario habitual"
+    event = getattr(alert, "event", None)
+    browser, operating_system, device_type = _user_agent_summary(getattr(event, "user_agent", ""))
+    is_login_outside = action == "LOGIN"
+    is_reveal_outside = action == "REVEAL"
+    if is_login_outside:
+        title = "Inicio de sesión fuera del horario permitido"
+        message = (
+            "Se detectó un inicio de sesión en CardManager fuera del horario laboral configurado. "
+            "Revise la información del acceso y confirme que corresponda a una actividad autorizada."
+        )
+    elif is_reveal_outside:
+        title = "Revelado de información protegida fuera del horario permitido"
+        message = (
+            "Se detectó el revelado de información protegida en CardManager fuera del horario laboral "
+            "configurado. Revise los detalles del evento y confirme que corresponda a una gestión autorizada."
+        )
     else:
-        subject = f"[A&S Vault] {alert.get_severity_display()}: {alert_label}"
+        title = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
+        message = alert.description
+    context = {
+        "alert": alert,
+        "detail_url": f"{settings.VAULT_BASE_URL}/security/alerts/{alert.pk}/",
+        "title": title,
+        "message": message,
+        "is_login_outside": is_login_outside,
+        "is_reveal_outside": is_reveal_outside,
+        "schedule_reason": _outside_schedule_reason(alert),
+        "browser": browser,
+        "operating_system": operating_system,
+        "device_type": device_type,
+    }
+    alert_label = dict(ALERT_TYPE_CHOICES).get(alert.alert_type, "Alerta de seguridad")
+    if action == "LOGIN":
+        subject = "CardManager | Inicio de sesión fuera del horario permitido"
+    elif action == "REVEAL":
+        subject = "CardManager | Revelado de información fuera del horario permitido"
+    else:
+        subject = f"[CardManager] {alert.get_severity_display()}: {alert_label}"
     return send_notification(
         notification_type=alert.alert_type,
         recipient=recipient,
@@ -293,7 +399,7 @@ def notify_alert(alert):
 
 
 def automatic_alert_email_allowed(alert):
-    """Correo automático solo para login/revelado fuera de horario o fin de semana."""
+    """Correo automático solo para login o revelado fuera del horario permitido."""
     event = getattr(alert, "event", None)
     return bool(
         event
@@ -320,6 +426,12 @@ def notify_alert_async(alert):
 
 
 def retry_notification(record):
+    if record.alert and not automatic_alert_email_allowed(record.alert):
+        record.result = NotificationRecord.FAILED
+        record.safe_error_code = "AUTOMATIC_EMAIL_NOT_ALLOWED"
+        record.next_attempt_at = None
+        record.save(update_fields=["result", "safe_error_code", "next_attempt_at"])
+        return record
     recipients = configured_recipients(record.alert) if record.alert else []
     matching = [address for address in recipients if _recipient_hash(address) == record.recipient_hash]
     if not matching:

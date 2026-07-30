@@ -12,6 +12,13 @@
 
 Se crea un `TOTPDevice` no confirmado. El QR se produce como data URI en memoria mediante Segno y la clave manual se muestra en esa respuesta. Se exige nuevamente la contraseña y un primer TOTP. Solo entonces el dispositivo queda confirmado, se generan diez códigos y se inicia sesión. El usuario debe confirmar que guardó los códigos antes de entrar a la bóveda.
 
+El issuer predeterminado de los enrolamientos nuevos es `CardManager`. Cambiar
+este texto no modifica el secreto TOTP ni invalida dispositivos existentes. Una
+cuenta ya registrada puede conservar la etiqueta histórica en Microsoft
+Authenticator; para cambiarla se puede renombrar manualmente en el cliente, si
+lo permite, o realizar posteriormente un reinicio y nuevo enrolamiento
+administrado. Esta actualización no ejecuta ese reinicio.
+
 ## Recuperación
 
 Los códigos se generan con entropía criptográfica, se almacenan con el hasher de Django y se consumen en transacción. La regeneración invalida todos los anteriores, exige reautenticación `mfa_manage`, se muestra una vez y genera auditoría/alerta. No hay descarga persistida en servidor.

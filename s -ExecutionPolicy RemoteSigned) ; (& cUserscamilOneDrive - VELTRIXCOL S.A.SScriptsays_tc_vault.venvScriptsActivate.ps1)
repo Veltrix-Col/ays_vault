@@ -1,0 +1,125 @@
+warning: in the working copy of '.env.example', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'config/settings.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/EMAIL_CONFIGURATION.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/MFA_AND_SESSION_SECURITY.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'portal/catalog.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'static/css/vault.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'static/img/branding/site.webmanifest', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'static/js/vault.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/base.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/includes/portal_return_link.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/portal/home.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/registration/login.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/registration/mfa_enroll.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/registration/mfa_verify.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/registration/recovery_codes.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/_card_results.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/access_denied.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/audit.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/card_detail.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/card_form.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/card_list.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/dashboard.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/exceptions.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/holidays.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/policies.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/recipients.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/control/timeline.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/dashboard.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/email/alert.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/email/alert.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/reports/center.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/reports/report_pdf.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/admin_mfa_reset.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/alert_detail.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/alerts.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/devices.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/identity_users.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/password_change.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/reauthenticate.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/vault/security/sessions.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/admin.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/auth_views.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/control_views.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/forms.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/management/commands/seed_demo.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/models.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/notifications.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/policy_evaluation.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/protected_operations.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/reporting.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_control_center.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_email_smtp.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_integral.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_public_home.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_reporting.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_sensitive_operations.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_tasks.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/tests_ui.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/urls.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vault/views.py', LF will be replaced by CRLF the next time Git touches it
+ .dockerignore                                 |   1 [32m+[m
+ .env.example                                  |   9 [32m+[m[31m-[m
+ config/settings.py                            |  19 [32m+[m[31m-[m
+ docs/EMAIL_CONFIGURATION.md                   | 156 [32m+++++[m[31m---[m
+ docs/MFA_AND_SESSION_SECURITY.md              |   7 [32m+[m
+ portal/catalog.py                             |   2 [32m+[m[31m-[m
+ static/css/vault.css                          |  91 [32m++++[m[31m-[m
+ static/img/branding/site.webmanifest          |   4 [32m+[m[31m-[m
+ static/js/vault.js                            |   2 [32m+[m[31m-[m
+ templates/base.html                           |  12 [32m+[m[31m-[m
+ templates/includes/portal_return_link.html    |   2 [32m+[m[31m-[m
+ templates/portal/home.html                    |   4 [32m+[m[31m-[m
+ templates/registration/login.html             |   4 [32m+[m[31m-[m
+ templates/registration/mfa_enroll.html        |   2 [32m+[m[31m-[m
+ templates/registration/mfa_verify.html        |   2 [32m+[m[31m-[m
+ templates/registration/recovery_codes.html    |   2 [32m+[m[31m-[m
+ templates/soat/upload.html                    |   2 [32m+[m[31m-[m
+ templates/vault/_card_results.html            |   2 [32m+[m[31m-[m
+ templates/vault/access_denied.html            |   4 [32m+[m[31m-[m
+ templates/vault/audit.html                    |   2 [32m+[m[31m-[m
+ templates/vault/card_detail.html              |   8 [32m+[m[31m-[m
+ templates/vault/card_form.html                |  27 [32m+[m[31m-[m
+ templates/vault/card_list.html                |   8 [32m+[m[31m-[m
+ templates/vault/control/dashboard.html        |   2 [32m+[m[31m-[m
+ templates/vault/control/exceptions.html       |   2 [32m+[m[31m-[m
+ templates/vault/control/holidays.html         |   4 [32m+[m[31m-[m
+ templates/vault/control/policies.html         |  56 [32m+[m[31m--[m
+ templates/vault/control/recipients.html       | 129 [32m++++++[m[31m-[m
+ templates/vault/control/timeline.html         |   2 [32m+[m[31m-[m
+ templates/vault/dashboard.html                |   4 [32m+[m[31m-[m
+ templates/vault/email/alert.html              |  38 [32m+[m[31m-[m
+ templates/vault/email/alert.txt               |  24 [32m+[m[31m-[m
+ templates/vault/reports/center.html           |   2 [32m+[m[31m-[m
+ templates/vault/reports/report_pdf.html       |   4 [32m+[m[31m-[m
+ templates/vault/security/admin_mfa_reset.html |   2 [32m+[m[31m-[m
+ templates/vault/security/alert_detail.html    |   2 [32m+[m[31m-[m
+ templates/vault/security/alerts.html          |   2 [32m+[m[31m-[m
+ templates/vault/security/devices.html         |   2 [32m+[m[31m-[m
+ templates/vault/security/identity_users.html  |   2 [32m+[m[31m-[m
+ templates/vault/security/password_change.html |   2 [32m+[m[31m-[m
+ templates/vault/security/reauthenticate.html  |   2 [32m+[m[31m-[m
+ templates/vault/security/sessions.html        |   2 [32m+[m[31m-[m
+ vault/admin.py                                |   6 [32m+[m[31m-[m
+ vault/auth_views.py                           |   2 [32m+[m[31m-[m
+ vault/control_views.py                        | 116 [32m++++[m[31m--[m
+ vault/forms.py                                | 124 [32m++++[m[31m---[m
+ vault/management/commands/seed_demo.py        | 490 [32m++++++++++++++++++++++[m[31m----[m
+ vault/models.py                               |  16 [32m+[m[31m-[m
+ vault/notifications.py                        | 154 [32m++++++[m[31m--[m
+ vault/policy_evaluation.py                    |   4 [32m+[m[31m-[m
+ vault/protected_operations.py                 |   2 [32m+[m[31m-[m
+ vault/reporting.py                            | 185 [32m+++++++[m[31m---[m
+ vault/tests.py                                |  38 [32m+[m[31m-[m
+ vault/tests_control_center.py                 |  23 [32m+[m[31m-[m
+ vault/tests_email_smtp.py                     | 257 [32m++++++++++++[m[31m--[m
+ vault/tests_integral.py                       | 232 [32m+++++++++[m[31m---[m
+ vault/tests_public_home.py                    |  11 [32m+[m[31m-[m
+ vault/tests_reporting.py                      | 132 [32m++++++[m[31m-[m
+ vault/tests_sensitive_operations.py           |   3 [32m+[m[31m-[m
+ vault/tests_tasks.py                          |  55 [32m++[m[31m-[m
+ vault/tests_ui.py                             |  64 [32m+++[m[31m-[m
+ vault/urls.py                                 |   2 [32m+[m[31m-[m
+ vault/views.py                                |  20 [32m+[m[31m-[m
+ 63 files changed, 2046 insertions(+), 545 deletions(-)

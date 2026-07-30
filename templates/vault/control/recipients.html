@@ -1,19 +1,116 @@
 {% extends 'base.html' %}{% load vault_ui %}
-{% block title %}Correo y destinatarios · A&amp;S Vault{% endblock %}
+{% block title %}Correo y destinatarios · CardManager{% endblock %}
 {% block content %}
-<div class="page-heading"><div><span class="section-kicker">Microsoft 365</span><h1>Correo y destinatarios</h1><p>Configure quién recibe cada notificación. Los secretos y tokens nunca se almacenan aquí.</p></div></div>
-<section class="panel"><div class="panel-head"><div><h2>Estado del servicio</h2><p>La configuración sensible se administra exclusivamente mediante variables de entorno.</p></div><span class="badge {% if email_status.configured %}success{% else %}warning{% endif %}">{% if email_status.configured %}Configurado{% else %}Incompleto{% endif %}</span></div>
-<div class="metric-grid"><article class="metric"><span>Backend activo</span><strong>{{ email_status.backend_label }}</strong></article><article class="metric"><span>Remitente</span><strong>{{ email_status.sender|default:'No configurado' }}</strong></article><article class="metric"><span>Última prueba</span><strong>{% if last_email_test %}{{ last_email_test.get_result_display }} · {{ last_email_test.created_at }}{% else %}Sin ejecutar{% endif %}</strong></article></div>
-<form method="post" action="{% url 'vault:email_test' %}" class="form-actions email-test-form" novalidate>{% csrf_token %}{% include 'includes/form_field.html' with field=email_test_form.recipient %}{% include 'includes/form_field.html' with field=email_test_form.scenario %}<button class="btn secondary" type="submit">Enviar correo de prueba</button></form>
-<p class="help-text">La prueba no contiene datos de tarjetas ni secretos. Un envío exitoso no se repetirá accidentalmente para el mismo destinatario durante el día.</p></section>
-<form method="post" class="form-panel wide" novalidate>{% csrf_token %}{{ form.non_field_errors }}
-<section class="form-section"><div class="form-section-header"><h2>Datos del destinatario</h2><p>Use una dirección corporativa vigente y defina su función dentro del esquema de avisos.</p></div><div class="form-grid">
-{% include 'includes/form_field.html' with field=form.name %}{% include 'includes/form_field.html' with field=form.email %}{% include 'includes/form_field.html' with field=form.minimum_severity %}{% include 'includes/form_field.html' with field=form.delivery_mode %}{% include 'includes/form_field.html' with field=form.send_start %}{% include 'includes/form_field.html' with field=form.send_end %}{% include 'includes/form_field.html' with field=form.active %}{% include 'includes/form_field.html' with field=form.is_primary %}{% include 'includes/form_field.html' with field=form.is_leader %}{% include 'includes/form_field.html' with field=form.is_alternate %}{% include 'includes/form_field.html' with field=form.is_escalation %}
-</div></section>
-<section class="form-section"><div class="form-section-header"><h2>Tipos de alerta</h2><p>Seleccione qué alertas debe recibir este destinatario.</p></div><fieldset class="form-field"><legend class="sr-only">Tipos de alerta</legend><div class="choice-grid">{% for choice in form.alert_types %}<label class="choice-card">{{ choice.tag }} <span>{{ choice.choice_label }}</span></label>{% endfor %}</div>{{ form.alert_types.errors }}</fieldset></section>
-<section class="form-section"><div class="form-actions"><a class="btn ghost" href="{% if editing_recipient %}{% url 'vault:recipients' %}{% else %}{% url 'vault:control_center' %}{% endif %}">Cancelar</a><button class="btn primary" type="submit">{% if editing_recipient %}Guardar cambios{% else %}Crear destinatario{% endif %}</button></div></section></form>
-<section class="panel table-panel"><div class="panel-head"><div><h2>Destinatarios configurados</h2><p>Direcciones autorizadas para recibir notificaciones.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Nombre</th><th>Correo electrónico</th><th>Severidad mínima</th><th>Entrega</th><th>Estado</th><th>Acción</th></tr></thead><tbody>{% for item in recipients %}<tr><td>{{ item.name }}</td><td>{{ item.email }}</td><td>{{ item.get_minimum_severity_display }}</td><td>{{ item.get_delivery_mode_display }}</td><td><span class="badge {% if item.active %}success{% endif %}">{{ item.active|yesno:'Activo,Inactivo' }}</span></td><td><a class="btn ghost" href="{% url 'vault:recipient_edit' item.pk %}">Editar</a></td></tr>{% empty %}<tr><td colspan="6">Se utilizará la configuración segura del entorno.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel table-panel"><div class="panel-head"><div><h2>Historial de notificaciones</h2><p>Seguimiento de envíos y reintentos sin contenido sensible.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Destinatario</th><th>Resultado</th><th>Intentos</th><th>Proveedor</th><th>Error seguro</th><th>Acción</th></tr></thead><tbody>
-{% for item in notifications %}<tr><td>{{ item.created_at }}</td><td>{% if item.notification_type == 'EMAIL_TEST' %}Prueba de correo{% else %}{{ item.notification_type|alert_type_label }}{% endif %}</td><td>{{ item.masked_recipient }}</td><td><span class="badge {{ item.result }}">{{ item.get_result_display }}</span></td><td>{{ item.attempts }}</td><td>{% if item.backend == 'console' %}Consola de desarrollo{% elif item.backend == 'smtp' %}SMTP Microsoft 365{% elif item.backend == 'graph' or item.backend == 'microsoft_graph' %}Microsoft Graph{% else %}No reconocido{% endif %}</td><td>{{ item.safe_error_code|default:'—' }}</td><td>{% if item.alert and item.result == 'FAILED' or item.alert and item.result == 'RETRY' %}<form class="table-actions" method="post" action="{% url 'vault:notification_retry' item.pk %}">{% csrf_token %}<label class="sr-only" for="retry-{{ item.pk }}">Motivo del reintento</label><input id="retry-{{ item.pk }}" name="reason" required minlength="5" placeholder="Motivo del reintento"><button class="btn secondary" type="submit">Reintentar</button></form>{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="8">No hay notificaciones registradas.</td></tr>{% endfor %}
-</tbody></table></div></section>
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Administración</span>
+    <h1>Correo y destinatarios</h1>
+    <p>Los destinatarios activos recibirán las alertas de acceso y revelado de información fuera del horario permitido.</p>
+  </div>
+</div>
+
+<form method="post" class="form-panel recipient-form" novalidate data-single-submit>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <section class="form-section" aria-labelledby="recipient-form-title">
+    <div class="form-section-header">
+      <h2 id="recipient-form-title">{% if editing_recipient %}Editar destinatario{% else %}Agregar destinatario{% endif %}</h2>
+      <p>Registre el nombre y la dirección corporativa que recibirá los avisos.</p>
+    </div>
+    <div class="form-grid">
+      {% include 'includes/form_field.html' with field=form.name %}
+      {% include 'includes/form_field.html' with field=form.email %}
+    </div>
+    <div class="form-actions">
+      <a class="btn ghost" href="{% if editing_recipient %}{% url 'vault:recipients' %}{% else %}{% url 'vault:control_center' %}{% endif %}">Cancelar</a>
+      <button class="btn primary" type="submit">{% if editing_recipient %}Guardar cambios{% else %}Agregar destinatario{% endif %}</button>
+    </div>
+  </section>
+</form>
+
+<section class="panel table-panel">
+  <div class="panel-head">
+    <div>
+      <h2>Destinatarios configurados</h2>
+      <p>Solo los destinatarios activos reciben los dos avisos automáticos habilitados.</p>
+    </div>
+  </div>
+  <div class="table-wrap recipient-table-wrap">
+    <table class="table recipient-table">
+      <thead><tr><th>Nombre</th><th>Correo electrónico</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody>
+      {% for item in recipients %}
+        <tr>
+          <td data-label="Nombre">{{ item.name }}</td>
+          <td data-label="Correo electrónico">{{ item.email }}</td>
+          <td data-label="Estado"><span class="badge {% if item.active %}success{% else %}neutral{% endif %}">{{ item.active|yesno:'Activo,Inactivo' }}</span></td>
+          <td data-label="Acciones">
+            <div class="table-actions compact-actions">
+              <a class="btn ghost" href="{% url 'vault:recipient_edit' item.pk %}">Editar</a>
+              <form method="post" action="{% url 'vault:recipient_toggle' item.pk %}" data-single-submit>
+                {% csrf_token %}
+                <button class="btn secondary" type="submit">{% if item.active %}Desactivar{% else %}Activar{% endif %}</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="empty-cell">No hay destinatarios configurados.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel table-panel">
+  <div class="panel-head">
+    <div>
+      <h2>Historial de envíos</h2>
+      <p>Registro de resultados sin contenido sensible.</p>
+    </div>
+  </div>
+  <div class="table-wrap notification-history-wrap">
+    <table class="table notification-history">
+      <thead><tr><th>Fecha y hora</th><th>Destinatario</th><th>Evento</th><th>Estado</th></tr></thead>
+      <tbody>
+      {% for item in notification_page %}
+        <tr>
+          <td data-label="Fecha y hora">{{ item.created_at|date:"d/m/Y H:i" }}</td>
+          <td data-label="Destinatario">{{ item.masked_recipient }}</td>
+          <td data-label="Evento">{% if item.notification_type == 'EMAIL_TEST' %}Prueba de correo{% else %}{{ item.notification_type|alert_type_label }}{% endif %}</td>
+          <td data-label="Estado"><span class="badge {{ item.result|lower }}">{{ item.get_result_display }}</span></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="empty-cell">No hay envíos registrados.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if notification_page.paginator.num_pages > 1 %}
+  <nav class="pagination" aria-label="Paginación del historial de envíos">
+    <div>
+      {% if notification_page.has_previous %}<a class="btn ghost" href="?page={{ notification_page.previous_page_number }}">Anterior</a>{% endif %}
+    </div>
+    <span>Página {{ notification_page.number }} de {{ notification_page.paginator.num_pages }}</span>
+    <div>
+      {% if notification_page.has_next %}<a class="btn ghost" href="?page={{ notification_page.next_page_number }}">Siguiente</a>{% endif %}
+    </div>
+  </nav>
+  {% endif %}
+</section>
+
+<section class="panel secondary-tool email-test-panel" aria-labelledby="email-test-title">
+  <div class="panel-head">
+    <div>
+      <h2 id="email-test-title">Enviar correo de prueba</h2>
+      <p>Compruebe la entrega con un mensaje genérico, sin información operativa.</p>
+    </div>
+  </div>
+  <form method="post" action="{% url 'vault:email_test' %}" class="compact-test-form" novalidate data-single-submit>
+    {% csrf_token %}
+    {{ email_test_form.operation_id }}
+    {% include 'includes/form_field.html' with field=email_test_form.recipient %}
+    <button class="btn secondary" type="submit">Enviar prueba</button>
+  </form>
+</section>
 {% endblock %}

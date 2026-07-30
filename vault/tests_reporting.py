@@ -1,6 +1,8 @@
 from io import BytesIO
 from datetime import timedelta
 from unittest.mock import patch
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
@@ -11,7 +13,17 @@ from openpyxl import load_workbook
 
 from .forms import TimelineFilterForm
 from .crypto import encrypt
-from .models import AuditEvent, PaymentCard, PolicyConfiguration, ReportExport, SecureSession, SecurityAlert, UserProfile
+from .models import (
+    AuditEvent,
+    PaymentCard,
+    PolicyConfiguration,
+    ProtectedOperationContext,
+    ReportExport,
+    SecureSession,
+    SecurityAlert,
+    SensitiveOperationWindow,
+    UserProfile,
+)
 from .reporting import excel_safe
 from .report_views import _technical_error_code
 from .security import audit, session_hash, verify_audit_chain
@@ -42,9 +54,10 @@ class ReportingTests(TestCase):
             profile.role, profile.active, profile.mfa_enabled, profile.mfa_status = role, True, True, UserProfile.MFA_ACTIVE
             profile.save()
             TOTPDevice.objects.create(user=user, confirmed=True)
-        cls.card = PaymentCard(client_name="=SUM(1,1)", cardholder_name="Alias seguro", brand="VISA", purpose="Uso interno", created_by=cls.leader)
+        cls.card = PaymentCard(company_name="Empresa de reportes", client_name="=SUM(1,1)", cardholder_name="Alias seguro", brand="VISA", purpose="Uso interno", created_by=cls.leader)
         cls.card.set_pan("4111111111111111")
         cls.card.set_expiry("12/29")
+        cls.card.set_code("CODIGO-NO-EXPORTABLE")
         cls.card.save()
 
     def setUp(self):
@@ -106,20 +119,129 @@ class ReportingTests(TestCase):
         self.assertFalse(ReportExport.objects.filter(user=self.analyst).exists())
 
     def test_excel_is_valid_styled_filtered_and_audited(self):
-        audit(None, "COPY", user=self.admin, reason="Motivo seguro")
+        audit(
+            None,
+            "COPY",
+            user=self.admin,
+            reason="Motivo seguro",
+            metadata={"context_id": "referencia-historica-no-uuid"},
+        )
         response = self.login(self.admin).post(reverse("vault:export_report", args=["TIMELINE", "XLSX"]), {"quick_event": "copies"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         workbook = load_workbook(BytesIO(response.content), data_only=False)
-        self.assertEqual(workbook.sheetnames, ["Resumen", "Datos"])
+        self.assertEqual(workbook.sheetnames, ["Datos"])
+        self.assertEqual(workbook.active.title, "Datos")
         self.assertEqual(workbook["Datos"].freeze_panes, "A2")
-        self.assertTrue(workbook["Datos"].auto_filter.ref)
+        self.assertEqual(workbook["Datos"].auto_filter.ref, workbook["Datos"].calculate_dimension())
+        self.assertFalse(workbook["Datos"].tables)
+        headers = [cell.value for cell in workbook["Datos"][1]]
+        self.assertTrue(all(headers))
+        self.assertEqual(len(headers), len({header.casefold() for header in headers}))
+        self.assertIn("Referencia", headers)
+        self.assertIn("Número certificado recibo - Zoho", headers)
+        self.assertNotIn("Motivo seguro", headers)
+        resaved = BytesIO()
+        workbook.save(resaved)
+        resaved.seek(0)
+        reopened = load_workbook(resaved, data_only=False)
+        self.assertEqual(reopened.sheetnames, ["Datos"])
+        self.assertEqual(reopened.active.title, "Datos")
+        self.assertEqual(reopened["Datos"].auto_filter.ref, reopened["Datos"].calculate_dimension())
+        self.assertFalse(reopened["Datos"].tables)
+        with ZipFile(BytesIO(response.content)) as archive:
+            self.assertIsNone(archive.testzip())
+            names = archive.namelist()
+            self.assertEqual(
+                [name for name in names if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")],
+                ["xl/worksheets/sheet1.xml"],
+            )
+            self.assertFalse(any(name.startswith("xl/tables/") for name in names))
+            self.assertNotIn(b"Resumen", archive.read("xl/workbook.xml"))
+            for name in names:
+                if name.endswith((".xml", ".rels")):
+                    ElementTree.fromstring(archive.read(name))
         content = " ".join(str(cell.value) for sheet in workbook for row in sheet for cell in row)
         self.assertNotIn("4111111111111111", content)
         self.assertNotIn("12/29", content)
+        self.assertNotIn("CODIGO-NO-EXPORTABLE", content)
         self.assertTrue(ReportExport.objects.filter(user=self.admin, result="SUCCESS", export_format="XLSX").exists())
         self.assertTrue(AuditEvent.objects.filter(user=self.admin, action="REPORT_EXPORT").exists())
         self.assertTrue(verify_audit_chain()[0])
+
+    def test_timeline_excel_uses_exact_protected_context_zoho_reference(self):
+        now = timezone.now()
+        window = SensitiveOperationWindow.objects.create(
+            user=self.admin,
+            session_hash="a" * 64,
+            expires_at=now + timedelta(minutes=15),
+        )
+        context = ProtectedOperationContext.objects.create(
+            identity_window=window,
+            user=self.admin,
+            session_hash="a" * 64,
+            card=self.card,
+            reason="Consulta operativa",
+            internal_reference="ZOHO-EVENTO-001",
+            expires_at=now + timedelta(minutes=5),
+        )
+        audit(
+            None,
+            "COPY",
+            user=self.admin,
+            card=self.card,
+            reason="Referencia administrativa",
+            metadata={"context_id": str(context.public_id), "reference": "ZOHO-HISTORICO"},
+        )
+        response = self.login(self.admin).post(
+            reverse("vault:export_report", args=["TIMELINE", "XLSX"]),
+            {"quick_event": "copies"},
+        )
+        workbook = load_workbook(BytesIO(response.content), data_only=True)
+        rows = list(workbook["Datos"].iter_rows(values_only=True))
+        headers = list(rows[0])
+        exported = dict(zip(headers, rows[1]))
+        self.assertEqual(exported["Referencia"], "Referencia administrativa")
+        self.assertEqual(exported["Número certificado recibo - Zoho"], "ZOHO-EVENTO-001")
+
+    def test_card_excel_uses_latest_context_for_each_card(self):
+        now = timezone.now()
+        window = SensitiveOperationWindow.objects.create(
+            user=self.leader,
+            session_hash="b" * 64,
+            expires_at=now + timedelta(minutes=15),
+        )
+        older = ProtectedOperationContext.objects.create(
+            identity_window=window,
+            user=self.leader,
+            session_hash="b" * 64,
+            card=self.card,
+            reason="Operación anterior",
+            internal_reference="ZOHO-ANTERIOR",
+            expires_at=now + timedelta(minutes=5),
+            closed_at=now,
+        )
+        ProtectedOperationContext.objects.filter(pk=older.pk).update(
+            created_at=now - timedelta(minutes=2)
+        )
+        ProtectedOperationContext.objects.create(
+            identity_window=window,
+            user=self.leader,
+            session_hash="b" * 64,
+            card=self.card,
+            reason="Operación reciente",
+            internal_reference="ZOHO-RECIENTE",
+            expires_at=now + timedelta(minutes=5),
+        )
+        response = self.login(self.admin).post(
+            reverse("vault:export_report", args=["CARDS", "XLSX"])
+        )
+        workbook = load_workbook(BytesIO(response.content), data_only=True)
+        rows = list(workbook["Datos"].iter_rows(values_only=True))
+        headers = list(rows[0])
+        exported = dict(zip(headers, rows[1]))
+        self.assertEqual(exported["Referencia"], "Uso interno")
+        self.assertEqual(exported["Número certificado recibo - Zoho"], "ZOHO-RECIENTE")
 
     def test_formula_injection_is_neutralized_in_card_report(self):
         response = self.login(self.admin).post(reverse("vault:export_report", args=["CARDS", "XLSX"]))

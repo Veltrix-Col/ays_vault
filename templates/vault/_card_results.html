@@ -24,7 +24,7 @@
         <tbody>
           {% for c in cards %}
             <tr>
-              <td data-label="Emp."><span class="cell-truncate" title="{% if c.has_company %}Empresa protegida configurada{% else %}Sin empresa configurada{% endif %}">{% if c.has_company %}Configurada{% else %}No configurada{% endif %}</span></td>
+              <td data-label="Emp."><span class="cell-truncate" title="{{ c.company_name|default:'Sin EMP. registrada' }}">{{ c.company_name|default:"—" }}</span></td>
               <td data-label="Titular"><span class="cell-truncate" title="{{ c.cardholder_name }}">{{ c.cardholder_name }}</span></td>
               <td data-label="Referencia"><span class="cell-truncate" title="{{ c.purpose }}">{{ c.purpose }}</span></td>
               <td data-label="Alias"><span class="cell-truncate" title="{{ c.client_name }}">{{ c.client_name }}</span></td>
