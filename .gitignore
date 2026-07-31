@@ -44,5 +44,7 @@ Thumbs.db
 
 # Referencias operativas privadas (nunca publicar ni versionar)
 private_assets/soat/*.xlsx
+artifacts/zoho/
+runtime/zoho_sdk/
 
 docker-compose.override.yml

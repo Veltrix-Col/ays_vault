@@ -32,7 +32,7 @@ SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if 
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
 CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','integrations.apps.IntegrationsConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
@@ -101,6 +101,53 @@ REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 REPORT_DEFAULT_MAX_DAYS=int(os.getenv('REPORT_DEFAULT_MAX_DAYS','90'))
 REPORT_LARGE_EXPORT_ALERT_THRESHOLD=int(os.getenv('REPORT_LARGE_EXPORT_ALERT_THRESHOLD','1000'))
+ZOHO_ENABLED=env_bool('ZOHO_ENABLED',False)
+ZOHO_PUBLIC_SETUP_ENABLED=env_bool('ZOHO_PUBLIC_SETUP_ENABLED',False)
+ZOHO_ACTIVE_PROFILE=os.getenv('ZOHO_ACTIVE_PROFILE','production').strip().lower()
+ZOHO_CLIENT_ID=os.getenv('ZOHO_CLIENT_ID','').strip()
+ZOHO_CLIENT_SECRET=os.getenv('ZOHO_CLIENT_SECRET','')
+ZOHO_REDIRECT_URI=os.getenv('ZOHO_REDIRECT_URI','http://localhost:8000/integrations/zoho/callback/').strip()
+ZOHO_ACCOUNTS_BASE_URL=os.getenv('ZOHO_ACCOUNTS_BASE_URL','https://accounts.zoho.com').strip()
+ZOHO_API_BASE_URL=os.getenv('ZOHO_API_BASE_URL','https://www.zohoapis.com').strip()
+ZOHO_OAUTH_SCOPES=os.getenv(
+    'ZOHO_OAUTH_SCOPES',
+    'ZohoCRM.org.READ,ZohoCRM.settings.modules.READ,'
+    'ZohoCRM.settings.fields.READ,ZohoCRM.modules.READ,ZohoCRM.coql.READ',
+).strip()
+ZOHO_REFRESH_TOKEN=os.getenv('ZOHO_REFRESH_TOKEN','')
+ZOHO_REQUEST_TIMEOUT_SECONDS=os.getenv('ZOHO_REQUEST_TIMEOUT_SECONDS','15').strip()
+ZOHO_MAX_RETRIES=os.getenv('ZOHO_MAX_RETRIES','2').strip()
+ZOHO_BACKEND=os.getenv('ZOHO_BACKEND','sdk').strip().lower()
+ZOHO_SDK_RESOURCE_PATH=os.getenv('ZOHO_SDK_RESOURCE_PATH','runtime/zoho_sdk').strip()
+ZOHO_SDK_LOG_LEVEL=os.getenv('ZOHO_SDK_LOG_LEVEL','INFO').strip().upper()
+ZOHO_PRODUCTION_ENABLED=env_bool('ZOHO_PRODUCTION_ENABLED',ZOHO_ENABLED)
+ZOHO_PRODUCTION_CLIENT_ID=os.getenv('ZOHO_PRODUCTION_CLIENT_ID','').strip()
+ZOHO_PRODUCTION_CLIENT_SECRET=os.getenv('ZOHO_PRODUCTION_CLIENT_SECRET','')
+ZOHO_PRODUCTION_REFRESH_TOKEN=os.getenv('ZOHO_PRODUCTION_REFRESH_TOKEN','')
+ZOHO_PRODUCTION_EXPECTED_ORG_ID=os.getenv('ZOHO_PRODUCTION_EXPECTED_ORG_ID','').strip()
+ZOHO_PRODUCTION_ENVIRONMENT=os.getenv('ZOHO_PRODUCTION_ENVIRONMENT','production').strip().lower()
+ZOHO_PRODUCTION_ACCOUNTS_BASE_URL=os.getenv('ZOHO_PRODUCTION_ACCOUNTS_BASE_URL','https://accounts.zoho.com').strip()
+ZOHO_PRODUCTION_API_BASE_URL=os.getenv('ZOHO_PRODUCTION_API_BASE_URL','https://www.zohoapis.com').strip()
+ZOHO_PRODUCTION_SDK_RESOURCE_PATH=os.getenv('ZOHO_PRODUCTION_SDK_RESOURCE_PATH','runtime/zoho_sdk/production').strip()
+ZOHO_SANDBOX_ENABLED=env_bool('ZOHO_SANDBOX_ENABLED',False)
+ZOHO_SANDBOX_CLIENT_ID=os.getenv('ZOHO_SANDBOX_CLIENT_ID','').strip()
+ZOHO_SANDBOX_CLIENT_SECRET=os.getenv('ZOHO_SANDBOX_CLIENT_SECRET','')
+ZOHO_SANDBOX_REFRESH_TOKEN=os.getenv('ZOHO_SANDBOX_REFRESH_TOKEN','')
+ZOHO_SANDBOX_EXPECTED_ORG_ID=os.getenv('ZOHO_SANDBOX_EXPECTED_ORG_ID','').strip()
+ZOHO_SANDBOX_ENVIRONMENT=os.getenv('ZOHO_SANDBOX_ENVIRONMENT','sandbox').strip().lower()
+ZOHO_SANDBOX_ACCOUNTS_BASE_URL=os.getenv('ZOHO_SANDBOX_ACCOUNTS_BASE_URL','https://accounts.zoho.com').strip()
+ZOHO_SANDBOX_API_BASE_URL=os.getenv('ZOHO_SANDBOX_API_BASE_URL','https://sandbox.zohoapis.com').strip()
+ZOHO_SANDBOX_SDK_RESOURCE_PATH=os.getenv('ZOHO_SANDBOX_SDK_RESOURCE_PATH','runtime/zoho_sdk/sandbox').strip()
+for _zoho_reserved_profile in ('QA','DEMO','FUTURE'):
+    globals()[f'ZOHO_{_zoho_reserved_profile}_ENABLED']=env_bool(f'ZOHO_{_zoho_reserved_profile}_ENABLED',False)
+    globals()[f'ZOHO_{_zoho_reserved_profile}_CLIENT_ID']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_CLIENT_ID','').strip()
+    globals()[f'ZOHO_{_zoho_reserved_profile}_CLIENT_SECRET']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_CLIENT_SECRET','')
+    globals()[f'ZOHO_{_zoho_reserved_profile}_REFRESH_TOKEN']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_REFRESH_TOKEN','')
+    globals()[f'ZOHO_{_zoho_reserved_profile}_EXPECTED_ORG_ID']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_EXPECTED_ORG_ID','').strip()
+    globals()[f'ZOHO_{_zoho_reserved_profile}_ENVIRONMENT']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_ENVIRONMENT',_zoho_reserved_profile.lower()).strip().lower()
+    globals()[f'ZOHO_{_zoho_reserved_profile}_ACCOUNTS_BASE_URL']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_ACCOUNTS_BASE_URL','').strip()
+    globals()[f'ZOHO_{_zoho_reserved_profile}_API_BASE_URL']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_API_BASE_URL','').strip()
+    globals()[f'ZOHO_{_zoho_reserved_profile}_SDK_RESOURCE_PATH']=os.getenv(f'ZOHO_{_zoho_reserved_profile}_SDK_RESOURCE_PATH',f'runtime/zoho_sdk/{_zoho_reserved_profile.lower()}').strip()
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -111,6 +158,7 @@ LOGGING = {
         'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
         'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
         'vault': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'integrations.zoho': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
 EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'} and not RUNNING_TESTS

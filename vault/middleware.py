@@ -12,6 +12,41 @@ from .models import SecureSession, UserDevice
 from .policies import get_policy
 
 
+BASE_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data:; "
+    "style-src 'self'; "
+    "script-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+ZOHO_OAUTH_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data:; "
+    "style-src 'self'; "
+    "script-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self' https://accounts.zoho.com"
+)
+ZOHO_OAUTH_PATHS = frozenset(
+    {
+        "/integrations/zoho/status/",
+        "/integrations/zoho/connect/",
+        "/integrations/zoho/callback/",
+    }
+)
+
+
+def _content_security_policy_for(request):
+    if request.path_info in ZOHO_OAUTH_PATHS:
+        return ZOHO_OAUTH_CONTENT_SECURITY_POLICY
+    return BASE_CONTENT_SECURITY_POLICY
+
+
 def _is_async_request(request):
     return (
         request.headers.get("X-Requested-With") == "XMLHttpRequest"
@@ -43,7 +78,10 @@ class SecurityHeadersMiddleware:
 
     def __call__(self, request):
         response = self.get_response(request)
-        response.setdefault("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+        response.setdefault(
+            "Content-Security-Policy",
+            _content_security_policy_for(request),
+        )
         response.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
         if request.path.startswith(("/vault/", "/control/", "/reports/", "/security/")):
             response.setdefault("Cache-Control", "no-store, no-cache, must-revalidate, private")
