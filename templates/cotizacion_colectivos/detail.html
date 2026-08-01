@@ -1,0 +1,60 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Ficha de {% if entity_kind == 'company' %}empresa{% else %}individuo{% endif %}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span>
+<a href="{% if entity_kind == 'company' %}{% url 'cotizacion_colectivos:company_search' %}{% else %}{% url 'cotizacion_colectivos:person_search' %}{% endif %}">{% if entity_kind == 'company' %}Empresas{% else %}Individuos{% endif %}</a><span>/</span><span>Ficha</span></nav>
+
+<header class="detail-hero"><span class="eyebrow">Ficha consolidada de {% if entity_kind == 'company' %}empresa{% else %}individuo{% endif %}</span>
+<h1>{% if entity_kind == 'company' %}{{ detail.display_name }}{% else %}{{ detail.full_name }}{% endif %}</h1><span class="state-chip">{{ detail.state }}</span></header>
+
+<nav class="detail-tabs" aria-label="Secciones de la ficha">
+  <a href="#resumen">Resumen</a><a href="#polizas">Pólizas</a><a href="#asegurados">Asegurados</a><a href="#riesgos">Riesgos</a><a href="#pendientes">Información pendiente</a>
+</nav>
+
+<section id="resumen" class="detail-section"><div class="section-heading"><h2>Resumen</h2></div>
+  <div class="detail-grid" aria-label="Identificación y contacto">
+    {% if entity_kind == 'company' %}<div><span>Nombre comercial</span><strong>{{ detail.display_name }}</strong></div><div><span>Razón social</span><strong>{{ detail.legal_name }}</strong></div>
+    {% else %}<div><span>Nombre completo</span><strong>{{ detail.full_name }}</strong></div><div><span>Nombres</span><strong>{{ detail.first_name|default:"Sin información" }}</strong></div><div><span>Apellidos</span><strong>{{ detail.last_name|default:"Sin información" }}</strong></div>{% endif %}
+    <div><span>Tipo de persona</span><strong>{{ detail.summary.person_type }}</strong></div><div><span>Tipo de documento</span><strong>{{ detail.id_type }}</strong></div><div><span>Documento</span><strong>{{ detail.masked_document }}</strong></div>
+    {% if detail.summary.email %}<div><span>Correo electrónico</span><strong>{{ detail.summary.email }}</strong></div>{% endif %}
+    {% if detail.summary.mobile %}<div><span>Móvil</span><strong>{{ detail.summary.mobile }}</strong></div>{% endif %}
+    {% if detail.summary.phone %}<div><span>Teléfono</span><strong>{{ detail.summary.phone }}</strong></div>{% endif %}
+    {% if detail.summary.city %}<div><span>Ciudad</span><strong>{{ detail.summary.city }}</strong></div>{% endif %}
+    {% if detail.summary.address %}<div><span>Dirección</span><strong>{{ detail.summary.address }}</strong></div>{% endif %}
+    {% if entity_kind == 'person' and detail.company_name %}<div><span>Empresa relacionada</span><strong>{{ detail.company_name }}</strong></div>{% endif %}
+  </div>
+</section>
+
+{% if detail.relations_truncated %}<div class="status-message">Se muestran las primeras 20 relaciones disponibles.</div>{% endif %}
+
+<section id="polizas" class="detail-section relation-card"><div class="section-heading"><h2>Pólizas vinculadas mediante asegurados</h2><span>{{ detail.policies|length }}</span></div>
+  {% for item in detail.policies %}<article class="relation-row"><div><strong>{{ item.masked_reference }}</strong>{% if item.layout_category == 'collective' %}<span class="relation-badge">Colectivos</span>{% elif item.layout_name %}<span class="relation-badge relation-badge--neutral">Otro diseño</span>{% else %}<span class="relation-badge relation-badge--neutral">Diseño desconocido</span>{% endif %}</div>
+  <span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span>{% if item.start_date or item.end_date %}<small>Vigencia: {{ item.start_date|default:"Sin inicio" }} – {{ item.end_date|default:"Sin fin" }}</small>{% endif %}</article>
+  {% empty %}<p class="muted">No se encontraron pólizas por la ruta confirmada Contacto → Asegurado → Póliza.</p>{% endfor %}
+</section>
+
+{% if detail.direct_policies %}<section class="detail-section relation-card relation-card--pending"><div class="section-heading"><h2>Pólizas como tomador</h2><span>{{ detail.direct_policies|length }}</span></div>
+  <p class="relation-note">Relación directa en validación: se presenta separada y no se mezcla con las pólizas confirmadas mediante asegurados.</p>
+  {% for item in detail.direct_policies %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span></article>{% endfor %}
+</section>{% endif %}
+
+<section id="asegurados" class="detail-section relation-card"><div class="section-heading"><h2>Asegurados</h2><span>{{ detail.insured|length }}</span></div>
+  {% for item in detail.insured %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span>
+  {% if item.entry_date or item.exit_date %}<small>Ingreso: {{ item.entry_date|default:"Sin información" }} · Retiro: {{ item.exit_date|default:"Sin información" }}</small>{% endif %}
+  {% if item.policy_reference %}<small>Póliza: {{ item.policy_reference }}</small>{% endif %}<small>Riesgo asociado: {% if item.has_risk %}Sí{% else %}No{% endif %}</small></article>
+  {% empty %}<p class="muted">No existen asegurados relacionados confirmados para este contacto.</p>{% endfor %}
+</section>
+
+<section id="riesgos" class="detail-section relation-card"><div class="section-heading"><h2>Riesgos</h2><span>{{ detail.risks|length }}</span></div>
+  {% for item in detail.risks %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.risk_type }}</span>{% if item.start_date or item.end_date %}<small>Vigencia: {{ item.start_date|default:"Sin inicio" }} – {{ item.end_date|default:"Sin fin" }}</small>{% endif %}</article>
+  {% empty %}<p class="muted">No existen riesgos vinculados mediante la relación confirmada de asegurados.</p>{% endfor %}
+</section>
+
+<section id="pendientes" class="detail-section relation-card relation-card--pending"><h2>Información pendiente</h2>
+  <p>Las relaciones directas Contacto → Pólizas y Contacto → Riesgos conservan estado de validación parcial. No se realizan uniones por nombre ni inferencias textuales.</p>
+  {% if entity_kind == 'person' and not detail.company_name %}<p>El lookup de empresa no está poblado para este registro; no se infiere una empresa relacionada.</p>{% endif %}
+  {% for message in detail.unavailable_relations %}<p class="status-inline">{{ message }}</p>{% endfor %}
+</section>
+
+<section class="future-actions"><h2>Próximas funciones</h2><div class="future-buttons"><button type="button" disabled>Preparar cotización · Próximamente</button><button type="button" disabled>Preparar renovación · Próximamente</button><button type="button" disabled>Preparar modificación · Próximamente</button><button type="button" disabled>Generar formato · Próximamente</button></div></section>
+{% endblock %}

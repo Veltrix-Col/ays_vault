@@ -1,0 +1,18 @@
+{% load static %}
+<!doctype html><html lang="es"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Cotización – Colectivos{% endblock %} | Banco de Herramientas</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/colectivos.css' %}">
+</head><body class="colectivos-page">
+<a class="skip-link" href="#main-content">Ir al contenido</a>
+<header class="colectivos-header">
+  <a href="{% url 'public_home' %}" class="colectivos-brand" aria-label="Volver al Banco de Herramientas">
+    <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en Seguros"><span>Banco de Herramientas</span>
+  </a>
+  <div class="environment-badge" title="Entorno de pruebas">Sandbox · Solo lectura</div>
+</header>
+<main id="main-content" class="colectivos-main" tabindex="-1">{% block content %}{% endblock %}</main>
+</body></html>

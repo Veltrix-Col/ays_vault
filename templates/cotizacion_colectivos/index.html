@@ -1,0 +1,22 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block content %}
+<header class="page-heading"><span class="eyebrow">Consulta operativa</span><h1>Cotización – Colectivos</h1>
+<p>Consulte empresas e individuos disponibles en Zoho CRM Sandbox. Este módulo no modifica información.</p></header>
+<div class="search-choice-grid">
+  <section class="tool-card" aria-labelledby="company-heading"><div class="tool-card__icon" aria-hidden="true">E</div>
+    <h2 id="company-heading">Buscar empresa</h2><p>Consulte por NIT completo, prefijo desde 3 dígitos, nombre comercial o razón social.</p>
+    <form method="post" action="{% url 'cotizacion_colectivos:company_search' %}" class="search-form">{% csrf_token %}
+      <label for="{{ company_form.query.id_for_label }}">{{ company_form.query.label }}</label>{{ company_form.query }}
+      <button type="submit">Buscar empresa</button></form>
+  </section>
+  <section class="tool-card" aria-labelledby="person-heading"><div class="tool-card__icon" aria-hidden="true">I</div>
+    <h2 id="person-heading">Buscar individuo</h2><p>Consulte por cédula completa, prefijo desde 3 dígitos, nombre o apellido.</p>
+    <form method="post" action="{% url 'cotizacion_colectivos:person_search' %}" class="search-form">{% csrf_token %}
+      <label for="{{ person_form.query.id_for_label }}">{{ person_form.query.label }}</label>{{ person_form.query }}
+      <button type="submit">Buscar individuo</button></form>
+  </section>
+</div>
+<section class="future-actions"><h2>Próximas funciones</h2><div class="future-buttons">
+  <button type="button" disabled>Preparar cotización · Próximamente</button><button type="button" disabled>Preparar renovación · Próximamente</button><button type="button" disabled>Preparar modificación · Próximamente</button><button type="button" disabled>Generar formato · Próximamente</button>
+</div><p>Estas acciones no están habilitadas en la fase actual de solo lectura.</p></section>
+{% endblock %}

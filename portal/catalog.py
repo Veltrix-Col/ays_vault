@@ -35,4 +35,14 @@ def application_catalog():
             "active": True,
             "external": bool(external_soat_url),
         },
+        {
+            "name": "Cotización – Colectivos",
+            "description": "Consulta segura de empresas, individuos y relaciones confirmadas en Zoho CRM Sandbox.",
+            "logo": "",
+            "logo_class": "",
+            "icon_path": "M4 5h16v14H4V5Zm4 4h8M8 13h5M6 9h.01M6 13h.01",
+            "url": reverse("cotizacion_colectivos:index"),
+            "active": True,
+            "external": False,
+        },
     ]

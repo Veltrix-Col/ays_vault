@@ -28,12 +28,13 @@ def email_env_int(name, default, minimum=1, maximum=None):
     return value
 APP_ENV=os.getenv('APP_ENV','development')
 DEBUG=env_bool('DEBUG',APP_ENV=='development')
+RUNNING_TESTS=len(sys.argv)>1 and sys.argv[1]=='test'
 SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if DEBUG else '')
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
 CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','integrations.apps.IntegrationsConfig']
-MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig']
+MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','config.middleware.TrustedIntranetAccessMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
 TEMPLATES=[{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[BASE_DIR/'templates'],'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','vault.context_processors.profile']}}]
@@ -54,6 +55,12 @@ AUTH_PASSWORD_VALIDATORS=[{'NAME':'django.contrib.auth.password_validation.Minim
 LANGUAGE_CODE='es-co'; TIME_ZONE='America/Bogota'; USE_I18N=True; USE_TZ=True
 STATIC_URL='/static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; STATICFILES_DIRS=[BASE_DIR/'static']
 DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'; LOGIN_URL='login'; LOGIN_REDIRECT_URL='vault:dashboard'; LOGOUT_REDIRECT_URL='login'
+TOOLS_ACCESS_MODE=os.getenv('TOOLS_ACCESS_MODE','local_public').strip().lower()
+if TOOLS_ACCESS_MODE not in {'local_public','trusted_intranet'}:
+    raise ImproperlyConfigured('TOOLS_ACCESS_MODE debe ser local_public o trusted_intranet')
+if TOOLS_ACCESS_MODE == 'local_public' and not DEBUG and not RUNNING_TESTS:
+    raise ImproperlyConfigured('TOOLS_ACCESS_MODE=local_public solo se permite con DEBUG=true')
+TOOLS_DELEGATED_ACCESS_VALIDATOR=os.getenv('TOOLS_DELEGATED_ACCESS_VALIDATOR','').strip()
 CSRF_COOKIE_HTTPONLY=True; SESSION_COOKIE_HTTPONLY=True; SESSION_COOKIE_SAMESITE='Lax'; CSRF_COOKIE_SAMESITE='Lax'; X_FRAME_OPTIONS='DENY'; SECURE_CONTENT_TYPE_NOSNIFF=True; SECURE_REFERRER_POLICY='same-origin'
 SESSION_COOKIE_AGE=600; SESSION_SAVE_EVERY_REQUEST=True; SESSION_EXPIRE_AT_BROWSER_CLOSE=True
 SESSION_INACTIVITY_SECONDS=int(os.getenv('SESSION_INACTIVITY_SECONDS','600')); SESSION_ACTIVITY_THROTTLE_SECONDS=int(os.getenv('SESSION_ACTIVITY_THROTTLE_SECONDS','60'))
@@ -69,7 +76,6 @@ FIELD_FINGERPRINT_KEY=os.getenv('FIELD_FINGERPRINT_KEY','')
 OFFICE_START=os.getenv('OFFICE_START','07:00'); OFFICE_END=os.getenv('OFFICE_END','18:00')
 ALERT_EMAIL=os.getenv('ALERT_EMAIL',''); DEFAULT_FROM_EMAIL=os.getenv('DEFAULT_FROM_EMAIL','alertas@ays.local').strip(); EMAIL_BACKEND=os.getenv('EMAIL_BACKEND','django.core.mail.backends.console.EmailBackend').strip()
 ALERT_EMAIL_BACKEND=os.getenv('ALERT_EMAIL_BACKEND','console').strip().lower()
-RUNNING_TESTS=len(sys.argv)>1 and sys.argv[1]=='test'
 if RUNNING_TESTS:
     # La suite nunca hereda SMTP o Graph del .env local/producción.
     EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'
@@ -159,6 +165,8 @@ LOGGING = {
         'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
         'vault': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
         'integrations.zoho': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'cotizacion_colectivos': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'application_access': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
 EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'} and not RUNNING_TESTS
