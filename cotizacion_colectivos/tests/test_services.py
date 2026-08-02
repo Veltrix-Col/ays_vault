@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from integrations.zoho.exceptions import ZohoTimeoutError
 from integrations.zoho.schemas import Page
@@ -12,7 +12,7 @@ from cotizacion_colectivos.services.common import (
     mask_document,
     sign_record_id,
     unsign_record_id,
-    sandbox_zoho,
+    colectivos_zoho,
 )
 from cotizacion_colectivos.services.entity_detail import EntityDetailService
 from cotizacion_colectivos.services.mappings import (
@@ -91,12 +91,12 @@ class FakeZoho:
 
 
 class SearchServiceTests(SimpleTestCase):
-    @patch("cotizacion_colectivos.services.common.get_zoho")
-    def test_sandbox_factory_never_allows_request_selected_profile(self, get_zoho):
+    @patch("cotizacion_colectivos.services.common.get_colectivos_zoho")
+    def test_service_factory_uses_central_profile_resolver(self, get_colectivos_zoho):
         sentinel = object()
-        get_zoho.return_value = sentinel
-        self.assertIs(sandbox_zoho(), sentinel)
-        get_zoho.assert_called_once_with(profile="sandbox")
+        get_colectivos_zoho.return_value = sentinel
+        self.assertIs(colectivos_zoho(), sentinel)
+        get_colectivos_zoho.assert_called_once_with()
 
     def test_company_by_nit_uses_fixed_filters_fields_and_masks_document(self):
         zoho = FakeZoho(search_pages=(Page((COMPANY,)), Page((COMPANY,))))
@@ -173,9 +173,9 @@ class SearchServiceTests(SimpleTestCase):
         with self.assertRaisesMessage(ColectivosServiceError, "respuesta inválida"):
             CompanySearchService(zoho).search("Empresa")
 
-    def test_service_always_builds_sandbox_facade(self):
+    def test_service_always_builds_configured_facade(self):
         facade = FakeZoho(search_pages=tuple(Page(()) for _ in range(6)))
-        with patch("cotizacion_colectivos.services.search.sandbox_zoho", return_value=facade) as factory:
+        with patch("cotizacion_colectivos.services.search.colectivos_zoho", return_value=facade) as factory:
             CompanySearchService().search("Empresa")
         factory.assert_called_once_with()
 
@@ -198,6 +198,16 @@ class SearchServiceTests(SimpleTestCase):
 
 
 class DetailServiceTests(SimpleTestCase):
+    @override_settings(ZOHO_ACTIVE_PROFILE="production")
+    @patch("cotizacion_colectivos.services.entity_detail.colectivos_zoho")
+    def test_detail_builds_the_same_configured_facade(self, colectivos_zoho):
+        selected = FakeZoho()
+        colectivos_zoho.return_value = selected
+        service = EntityDetailService()
+        self.assertIs(service.zoho, selected)
+        self.assertEqual(service.profile, "production")
+        colectivos_zoho.assert_called_once_with()
+
     def test_contact_detail_uses_closed_search_fallback_when_sdk_record_fails(self):
         zoho = FakeZoho(
             search_pages=(Page((COMPANY,)), Page(()), Page(())),

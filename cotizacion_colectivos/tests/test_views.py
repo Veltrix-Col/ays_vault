@@ -4,7 +4,7 @@ from unittest.mock import patch
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django_otp.plugins.otp_totp.models import TOTPDevice
@@ -15,6 +15,7 @@ from vault.models import SecureSession
 from vault.security import session_hash
 
 
+@override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
 class ColectivosViewTests(TestCase):
     def setUp(self):
         User = get_user_model()
@@ -74,6 +75,21 @@ class ColectivosViewTests(TestCase):
         self.assertContains(response, 'id="id_person_query"')
         self.assertContains(response, 'name="query"', count=2)
         self.assertContains(response, "disabled", count=4)
+        self.assertContains(response, "Sandbox · Solo lectura")
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="production")
+    def test_production_badge_is_derived_from_configuration(self):
+        response = self.client.get(reverse("cotizacion_colectivos:index"))
+        self.assertContains(response, "Producción · Solo lectura")
+        self.assertContains(response, "environment-badge--production")
+        self.assertNotContains(response, "Sandbox · Solo lectura")
+
+    def test_browser_cannot_select_the_profile(self):
+        response = self.client.get(
+            reverse("cotizacion_colectivos:index"), {"profile": "production"}
+        )
+        self.assertContains(response, "Sandbox · Solo lectura")
+        self.assertNotContains(response, "Producción · Solo lectura")
 
     def test_numeric_prefix_shorter_than_three_is_rejected(self):
         client = self.authenticated_client(self.admin)
@@ -101,6 +117,8 @@ class ColectivosViewTests(TestCase):
             client.post(reverse("cotizacion_colectivos:company_search"), {"query": "9001234567"})
         output = " ".join(captured.output)
         self.assertIn("entity=company", output)
+        self.assertIn("application=cotizacion_colectivos", output)
+        self.assertIn("operation=search", output)
         self.assertIn("profile=sandbox", output)
         self.assertNotIn("9001234567", output)
 
@@ -112,6 +130,19 @@ class ColectivosViewTests(TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertContains(response, "Sandbox no está disponible", status_code=503)
         self.assertNotContains(response, "secret", status_code=503)
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="production")
+    @patch("cotizacion_colectivos.views.CompanySearchService")
+    def test_production_error_and_log_are_sanitized(self, service):
+        service.return_value.search.side_effect = RuntimeError("private token detail")
+        with self.assertLogs("cotizacion_colectivos", level="INFO") as captured:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:company_search"), {"query": "Empresa"}
+            )
+        self.assertContains(response, "Producción no está disponible", status_code=503)
+        output = " ".join(captured.output)
+        self.assertIn("profile=production", output)
+        self.assertNotIn("private token", output)
 
     @patch("cotizacion_colectivos.views.CompanySearchService")
     def test_empty_short_and_zero_results(self, service):
@@ -129,12 +160,18 @@ class ColectivosViewTests(TestCase):
 
     def test_invalid_detail_token_returns_404_without_calling_zoho(self):
         client = self.authenticated_client(self.admin)
-        with patch("cotizacion_colectivos.views.EntityDetailService") as service:
+        with self.assertLogs("cotizacion_colectivos", level="INFO") as captured, patch(
+            "cotizacion_colectivos.views.EntityDetailService"
+        ) as service:
             from cotizacion_colectivos.services.common import ColectivosServiceError
 
             service.return_value.company.side_effect = ColectivosServiceError("invalid_record", "inválido")
             response = client.get(reverse("cotizacion_colectivos:company_detail", args=["bad-token"]))
         self.assertEqual(response.status_code, 404)
+        output = " ".join(captured.output)
+        self.assertIn("operation=detail", output)
+        self.assertIn("profile=sandbox", output)
+        self.assertNotIn("bad-token", output)
 
     def test_portal_contains_authorized_link_and_soat_remains(self):
         response = self.client.get(reverse("public_home"))

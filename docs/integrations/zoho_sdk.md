@@ -39,8 +39,11 @@ Los únicos perfiles válidos son:
 - `demo`;
 - `future`.
 
-`ZOHO_ACTIVE_PROFILE` decide qué perfil usa `get_zoho()`. El código interno
-autorizado puede seleccionar uno explícitamente con
+`ZOHO_ACTIVE_PROFILE` decide qué perfil usan `get_zoho()` y todas las
+aplicaciones funcionales. Su valor global solo puede ser `sandbox` o
+`production` y el predeterminado seguro es `sandbox`; no existen overrides por
+aplicación. Los comandos y el código administrativo interno autorizado pueden
+seleccionar un perfil explícitamente con
 `get_zoho(profile="sandbox")`. Un nombre inválido, un perfil deshabilitado o
 una configuración incompleta producen `ZohoConfigurationError`; nunca se
 cambia automáticamente a Producción.
@@ -79,7 +82,7 @@ entorno.
 Variables globales no identitarias:
 
 ```env
-ZOHO_ACTIVE_PROFILE=production
+ZOHO_ACTIVE_PROFILE=sandbox
 ZOHO_BACKEND=sdk
 ZOHO_OAUTH_SCOPES=ZohoCRM.org.READ,ZohoCRM.settings.modules.READ,ZohoCRM.settings.fields.READ,ZohoCRM.modules.READ,ZohoCRM.coql.READ
 ZOHO_REQUEST_TIMEOUT_SECONDS=15

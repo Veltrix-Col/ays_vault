@@ -5,6 +5,7 @@
 .colectivos-brand { display: flex; align-items: center; gap: 16px; color: #172137; text-decoration: none; font-weight: 700; }
 .colectivos-brand img { display: block; width: auto; height: 42px; }
 .environment-badge, .state-chip { display: inline-flex; align-items: center; border-radius: 999px; background: #e7f6ef; color: #176347; padding: 7px 12px; font-size: .82rem; font-weight: 700; }
+.environment-badge--production { background: #fff0df; color: #8a3f00; border: 1px solid #e7b57d; }
 .colectivos-main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: clamp(28px, 5vw, 64px) 0 72px; }
 .page-heading { max-width: 760px; margin-bottom: 32px; }
 .page-heading--compact { margin-bottom: 22px; }

@@ -16,7 +16,8 @@ from .common import (
     escape_criteria_value,
     mask_document,
     mask_reference,
-    sandbox_zoho,
+    colectivos_zoho,
+    get_colectivos_profile,
     translate_zoho_error,
     unsign_record_id,
 )
@@ -61,7 +62,11 @@ def _layout(value: object) -> tuple[str, str]:
 
 class EntityDetailService:
     def __init__(self, zoho=None):
-        self.zoho = zoho or sandbox_zoho()
+        self.profile = get_colectivos_profile()
+        try:
+            self.zoho = zoho or colectivos_zoho()
+        except ZohoError as exc:
+            raise translate_zoho_error(exc, self.profile) from exc
 
     def company(self, token: str) -> CompanyDetail:
         record = self._contact(token, COMPANY_TYPE, COMPANY_ID_TYPE)
@@ -138,7 +143,7 @@ class EntityDetailService:
                     limit=1,
                 )
             except ZohoError as exc:
-                raise translate_zoho_error(exc) from exc
+                raise translate_zoho_error(exc, self.profile) from exc
             if not page.records:
                 raise ColectivosServiceError("not_found", "El registro solicitado no existe.")
             record = page.records[0]

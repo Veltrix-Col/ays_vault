@@ -9,7 +9,8 @@ from .common import (
     ColectivosServiceError,
     escape_criteria_value,
     mask_document,
-    sandbox_zoho,
+    colectivos_zoho,
+    get_colectivos_profile,
     sign_record_id,
     translate_zoho_error,
 )
@@ -36,7 +37,11 @@ class _BaseSearchService:
     id_type = ""
 
     def __init__(self, zoho=None):
-        self.zoho = zoho or sandbox_zoho()
+        self.profile = get_colectivos_profile()
+        try:
+            self.zoho = zoho or colectivos_zoho()
+        except ZohoError as exc:
+            raise translate_zoho_error(exc, self.profile) from exc
 
     def _query(self, field_criteria: str) -> tuple[dict[str, object], ...]:
         page = self.zoho.search.by_criteria(
@@ -68,7 +73,7 @@ class _BaseSearchService:
         except ColectivosServiceError:
             raise
         except ZohoError as exc:
-            raise translate_zoho_error(exc) from exc
+            raise translate_zoho_error(exc, self.profile) from exc
         ordered = list(records.values())
         if ranker:
             ordered.sort(key=ranker)
@@ -102,10 +107,12 @@ class CompanySearchService(_BaseSearchService):
             ))
         return self._collect(queries, self._map)
 
-    @staticmethod
-    def _map(record) -> CompanySearchResult:
+    def _map(self, record) -> CompanySearchResult:
         if record.get("Tipo_de_persona") != COMPANY_TYPE or record.get("Tipo_ID") != COMPANY_ID_TYPE:
-            raise ColectivosServiceError("invalid_response", "Sandbox devolvió una respuesta inválida.")
+            raise ColectivosServiceError(
+                "invalid_response",
+                f"{'Producción' if self.profile == 'production' else 'Sandbox'} devolvió una respuesta inválida.",
+            )
         name = str(record.get("Nombre_comercial") or record.get("Raz_n_social") or "Empresa sin nombre")
         return CompanySearchResult(
             detail_token=sign_record_id(record.get("id")),
@@ -142,10 +149,12 @@ class PersonSearchService(_BaseSearchService):
             ))
         return self._collect(queries, self._map)
 
-    @staticmethod
-    def _map(record) -> PersonSearchResult:
+    def _map(self, record) -> PersonSearchResult:
         if record.get("Tipo_de_persona") != PERSON_TYPE or record.get("Tipo_ID") != PERSON_ID_TYPE:
-            raise ColectivosServiceError("invalid_response", "Sandbox devolvió una respuesta inválida.")
+            raise ColectivosServiceError(
+                "invalid_response",
+                f"{'Producción' if self.profile == 'production' else 'Sandbox'} devolvió una respuesta inválida.",
+            )
         return PersonSearchResult(
             detail_token=sign_record_id(record.get("id")),
             full_name=str(record.get("Full_Name") or "Persona sin nombre"),

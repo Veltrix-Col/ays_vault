@@ -30,7 +30,7 @@ def normalize_profile(value: object | None) -> str:
     profile = str(
         value
         if value is not None
-        else getattr(django_settings, "ZOHO_ACTIVE_PROFILE", "production")
+        else getattr(django_settings, "ZOHO_ACTIVE_PROFILE", "sandbox")
     ).strip().lower()
     if profile not in ALLOWED_PROFILES:
         raise ZohoConfigurationError("El perfil de Zoho solicitado no es válido.")

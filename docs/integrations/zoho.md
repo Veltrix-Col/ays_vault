@@ -14,7 +14,9 @@ upsert, eliminación, adjuntos, tareas ni ninguna otra escritura.
 ## Reglas operativas esenciales
 
 - Use `ZOHO_PRODUCTION_*` para Producción y `ZOHO_SANDBOX_*` para Sandbox.
-- `ZOHO_ACTIVE_PROFILE` selecciona el perfil predeterminado.
+- `ZOHO_ACTIVE_PROFILE` es el selector único de todas las aplicaciones
+  funcionales. Solo admite `sandbox` o `production`, usa `sandbox` de forma
+  predeterminada y no admite overrides por aplicación.
 - Las variables Zoho sin prefijo son compatibilidad temporal exclusiva de
   Producción.
 - Sandbox nunca hereda credenciales, tokens, URLs o caché de Producción.

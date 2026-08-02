@@ -3,7 +3,7 @@
 ## 1. Objetivo
 
 Definir el comportamiento implementado para consultar empresas, individuos y
-sus relaciones confirmadas en Zoho CRM Sandbox. La aplicación es de solo
+sus relaciones confirmadas en el perfil Zoho configurado. La aplicación es de solo
 lectura, no replica registros y no permite seleccionar perfiles desde el
 navegador.
 
@@ -14,8 +14,10 @@ incorporación posterior controlada al documento maestro.
 
 ## 2. Modelo utilizado
 
-- Perfil funcional fijo: `sandbox`.
-- Fachada única: `get_zoho(profile="sandbox")`.
+- Perfil funcional global: `ZOHO_ACTIVE_PROFILE`, con `sandbox` como valor
+  predeterminado y `production` como única alternativa permitida.
+- Fachada única resuelta internamente con `get_zoho(profile=perfil)`; el perfil
+  nunca procede del navegador ni de un override por aplicación.
 - Personas y empresas: módulo `Contacts`.
 - Empresas: `Tipo_de_persona = Persona jurídica` y `Tipo_ID = NIT`.
 - Individuos: `Tipo_de_persona = Persona natural` y `Tipo_ID = CC`.
@@ -139,7 +141,8 @@ No confirmadas y no inferidas:
   mientras no exista esa especificación.
 - CSRF en búsquedas POST.
 - Respuestas de detalle con `no-cache`.
-- Perfil fijo Sandbox.
+- Perfil explícito `sandbox` o `production`, sin fallback entre ambientes y con
+  validación de Organization API antes de la consulta funcional.
 - Módulos y campos constantes.
 - Sin COQL suministrado por el usuario.
 - Sin métodos de escritura.
@@ -161,7 +164,8 @@ indisponibilidad temporal sin revelar detalles técnicos.
 
 1. Iniciar el servidor con el entorno estable.
 2. En local, abrir directamente sin iniciar sesión en CardManager.
-3. Abrir `/cotizacion-colectivos/` y comprobar `Sandbox · Solo lectura`.
+3. Abrir `/cotizacion-colectivos/` y comprobar el badge correspondiente:
+   `Sandbox · Solo lectura` o `Producción · Solo lectura`.
 4. Buscar una empresa conocida por NIT exacto, prefijo de tres dígitos y nombre
    parcial, sin registrar los valores.
 5. Buscar un individuo conocido por CC exacta, prefijo y nombre parcial.
@@ -185,8 +189,10 @@ indisponibilidad temporal sin revelar detalles técnicos.
 - Los indicadores de relaciones no se calculan en la lista de búsqueda para
   evitar consultas N+1; aparecen en la ficha consolidada.
 
-## 12. Paso futuro a Producción
+## 12. Cambio de ambiente
 
-La transición requiere autorización separada, validación del modelo y permisos
-productivos, pruebas de privacidad y cambio explícito de perfil. Esta versión
-no contiene selección automática ni fallback a Producción.
+La transición a Producción requiere autorización operativa, configuración
+productiva completa, validación del modelo y pruebas de privacidad. Se realiza
+con `ZOHO_ACTIVE_PROFILE=production` y reinicio; el rollback usa
+`sandbox` y reinicio. No existe selección automática ni fallback. El detalle
+operativo está en `environment_profiles.md`.

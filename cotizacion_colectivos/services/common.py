@@ -4,7 +4,6 @@ import re
 
 from django.core import signing
 
-from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import (
     ZohoAuthenticationError,
     ZohoAuthorizationError,
@@ -15,9 +14,12 @@ from integrations.zoho.exceptions import (
     ZohoRateLimitError,
     ZohoTimeoutError,
 )
+from cotizacion_colectivos.zoho import (
+    get_colectivos_environment,
+    get_colectivos_profile,
+    get_colectivos_zoho,
+)
 
-
-PROFILE = "sandbox"
 DETAIL_SALT = "cotizacion_colectivos.detail.v1"
 ZOHO_ID = re.compile(r"^\d{10,30}$")
 
@@ -29,8 +31,8 @@ class ColectivosServiceError(Exception):
         self.message = message
 
 
-def sandbox_zoho():
-    return get_zoho(profile=PROFILE)
+def colectivos_zoho():
+    return get_colectivos_zoho()
 
 
 def escape_criteria_value(value: str) -> str:
@@ -76,17 +78,25 @@ def unsign_record_id(token: str) -> str:
     return value
 
 
-def translate_zoho_error(exc: ZohoError) -> ColectivosServiceError:
+def translate_zoho_error(
+    exc: ZohoError, profile: str | None = None
+) -> ColectivosServiceError:
+    environment = get_colectivos_environment() if profile is None else {
+        "label": "Producción" if profile == "production" else "Sandbox"
+    }
+    label = environment["label"]
     if isinstance(exc, ZohoConfigurationError):
-        return ColectivosServiceError("configuration", "La configuración de Sandbox está incompleta.")
+        return ColectivosServiceError(
+            "configuration", f"{label} no está disponible porque su configuración está incompleta."
+        )
     if isinstance(exc, (ZohoAuthenticationError, ZohoAuthorizationError)):
-        return ColectivosServiceError("permission", "Sandbox rechazó el acceso solicitado.")
+        return ColectivosServiceError("permission", f"{label} rechazó el acceso solicitado.")
     if isinstance(exc, ZohoNotFoundError):
         return ColectivosServiceError("not_found", "El registro solicitado no existe.")
     if isinstance(exc, ZohoTimeoutError):
-        return ColectivosServiceError("timeout", "Sandbox tardó demasiado en responder.")
+        return ColectivosServiceError("timeout", f"{label} tardó demasiado en responder.")
     if isinstance(exc, ZohoRateLimitError):
         return ColectivosServiceError("rate_limit", "Se alcanzó temporalmente el límite de consultas.")
     if isinstance(exc, ZohoInvalidResponseError):
-        return ColectivosServiceError("invalid_response", "Sandbox devolvió una respuesta inválida.")
-    return ColectivosServiceError("unavailable", "El servicio de Sandbox no está disponible temporalmente.")
+        return ColectivosServiceError("invalid_response", f"{label} devolvió una respuesta inválida.")
+    return ColectivosServiceError("unavailable", f"El servicio de {label} no está disponible temporalmente.")

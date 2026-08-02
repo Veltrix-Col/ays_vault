@@ -12,7 +12,7 @@
   <a href="{% url 'public_home' %}" class="colectivos-brand" aria-label="Volver al Banco de Herramientas">
     <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en Seguros"><span>Banco de Herramientas</span>
   </a>
-  <div class="environment-badge" title="Entorno de pruebas">Sandbox · Solo lectura</div>
+  <div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Ambiente Zoho activo">{{ zoho_environment.label }} · Solo lectura</div>
 </header>
 <main id="main-content" class="colectivos-main" tabindex="-1">{% block content %}{% endblock %}</main>
 </body></html>
