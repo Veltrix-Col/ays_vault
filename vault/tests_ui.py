@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from pathlib import Path
 
+from django.contrib.staticfiles import finders
 from django.template import Context, Template
 from django.template.loader import render_to_string
 from django.test import Client, RequestFactory, TestCase
@@ -124,7 +125,10 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
         )
         self.assertContains(
             response,
-            'alt="CardManager de A&amp;S Asesores en Seguros"',
+            'alt="CardManager"',
+        )
+        self.assertIsNotNone(
+            finders.find("img/branding/cardmanager/Logo-CardManager-CO-COLOR.png")
         )
 
     def test_cardholder_copy_javascript_is_local_and_scoped_to_visible_name(self):

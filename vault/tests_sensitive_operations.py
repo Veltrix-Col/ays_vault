@@ -104,6 +104,15 @@ class PendingSensitiveOperationTests(TestCase):
 
     def test_login_opens_fixed_30_minute_window_bound_to_same_session(self):
         self.login_user(self.leader)
+        recovery_page = self.client.get(reverse("recovery_codes_confirm"))
+        self.assertContains(
+            recovery_page,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png",
+        )
+        self.assertNotContains(
+            recovery_page,
+            "/static/img/branding/logo-ays-azul.png",
+        )
         session_key = self.client.session.session_key
         window = SensitiveOperationWindow.objects.get(
             user=self.leader,
@@ -121,6 +130,11 @@ class PendingSensitiveOperationTests(TestCase):
         )
         self.assertContains(page, 'name="password"', count=1)
         self.assertNotContains(page, 'name="token"')
+        self.assertContains(
+            page,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png",
+        )
+        self.assertNotContains(page, "/static/img/branding/logo-ays-azul.png")
         response = self.client.post(
             reverse("vault:reauthenticate"),
             {
