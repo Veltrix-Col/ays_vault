@@ -116,3 +116,21 @@ class PublicHomeTests(TestCase):
                 content = render_to_string(template_name, context)
                 self.assertIn('href="/"', content)
                 self.assertIn("Volver al Banco de Herramientas", content)
+
+    def test_cardmanager_authentication_templates_use_the_official_brand(self):
+        contexts = {
+            "registration/login.html": {"form": None},
+            "registration/mfa_verify.html": {"form": OTPVerificationForm()},
+            "registration/mfa_enroll.html": {
+                "form": MFAEnrollmentForm(),
+                "manual_key": "",
+                "qr_data_uri": "",
+            },
+        }
+        expected = "/static/img/branding/cardmanager/Logo-CardManager-CO-COLOR.png"
+        for template_name, context in contexts.items():
+            with self.subTest(template=template_name):
+                content = render_to_string(template_name, context)
+                self.assertIn(expected, content)
+                self.assertIn('alt="CardManager"', content)
+                self.assertNotIn("/static/img/branding/logo-ays-azul.png", content)
