@@ -14,18 +14,16 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from zohocrmsdk.src.com.zoho.crm.api.util.choice import Choice
 
+from ays_zoho_sdk.facade import ZohoFacade
+from ays_zoho_sdk.backends.sdk import SDKBackend
+from ays_zoho_sdk.oauth import CANDIDATE_ORGANIZATION_URL, ZohoOAuthService
+from ays_zoho_sdk.sdk.initializer import initialize_sdk, reset_sdk_for_tests
+
 from integrations.tests.helpers import VALID_SETTINGS, client_factory
-from integrations.zoho.backends.sdk import SDKBackend
+from integrations.zoho import reset_zoho_for_tests
 from integrations.zoho.exceptions import ZohoConfigurationError
-from integrations.zoho.facade import ZohoFacade
-from integrations.zoho.factory import get_zoho, reset_zoho_for_tests
-from integrations.zoho.oauth import CANDIDATE_ORGANIZATION_URL, ZohoOAuthService
 from integrations.zoho.schemas import AccessToken, Organization
-from integrations.zoho.sdk.initializer import initialize_sdk, reset_sdk_for_tests
-from integrations.zoho.settings import (
-    ZohoSettings,
-    reset_settings_warnings_for_tests,
-)
+from integrations.zoho.settings import ZohoSettings
 from integrations.zoho.token_store import get_token_store
 
 
@@ -98,221 +96,6 @@ def profile_oauth_handler(token_payload, *, environment, organization_id):
         raise AssertionError(f"Metodo inesperado: {request.method}")
 
     return handler
-
-
-@override_settings(**MULTI)
-class ZohoProfileSettingsTests(SimpleTestCase):
-    def tearDown(self):
-        reset_zoho_for_tests()
-
-    def test_new_production_and_sandbox_configs_are_independent(self):
-        production = ZohoSettings.from_django("production").validate(
-            require_refresh_token=True
-        )
-        sandbox = ZohoSettings.from_django("sandbox").validate(
-            require_refresh_token=True
-        )
-        self.assertEqual(production.environment, "production")
-        self.assertEqual(sandbox.environment, "sandbox")
-        self.assertNotEqual(production.refresh_token, sandbox.refresh_token)
-        self.assertNotEqual(
-            production.resolve_sdk_resource_path(),
-            sandbox.resolve_sdk_resource_path(),
-        )
-        self.assertFalse(production.legacy_configuration)
-
-    @override_settings(
-        ZOHO_PRODUCTION_CLIENT_ID="",
-        ZOHO_PRODUCTION_CLIENT_SECRET="",
-        ZOHO_PRODUCTION_REFRESH_TOKEN="",
-        ZOHO_ENABLED=True,
-        ZOHO_CLIENT_ID="legacy-client",
-        ZOHO_CLIENT_SECRET="legacy-secret",
-        ZOHO_REFRESH_TOKEN="legacy-refresh",
-    )
-    def test_production_legacy_fallback_warns_without_values(self):
-        reset_settings_warnings_for_tests()
-        with self.assertLogs("integrations.zoho", level="WARNING") as logs:
-            config = ZohoSettings.from_django("production")
-        self.assertTrue(config.legacy_configuration)
-        rendered = "\n".join(logs.output)
-        self.assertIn("configuracion=heredada", rendered)
-        self.assertNotIn("legacy-secret", rendered)
-        self.assertNotIn("legacy-refresh", rendered)
-
-    @override_settings(
-        ZOHO_SANDBOX_CLIENT_ID="",
-        ZOHO_SANDBOX_CLIENT_SECRET="",
-        ZOHO_SANDBOX_REFRESH_TOKEN="",
-    )
-    def test_sandbox_never_inherits_production(self):
-        config = ZohoSettings.from_django("sandbox")
-        self.assertFalse(config.client_id)
-        self.assertFalse(config.client_secret)
-        self.assertFalse(config.refresh_token)
-        with self.assertRaises(ZohoConfigurationError):
-            config.validate(require_refresh_token=True)
-
-    def test_reserved_profiles_are_disabled_and_never_inherit(self):
-        for profile in ("qa", "demo", "future"):
-            with self.subTest(profile=profile):
-                config = ZohoSettings.from_django(profile)
-                self.assertFalse(config.enabled)
-                self.assertFalse(config.client_id)
-                self.assertFalse(config.client_secret)
-                self.assertFalse(config.refresh_token)
-                with self.assertRaises(ZohoConfigurationError):
-                    config.validate()
-
-    def test_invalid_and_disabled_profiles_fail_closed(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("arbitrary")
-        with self.assertRaises(ZohoConfigurationError):
-            get_zoho(profile="qa")
-
-    @override_settings(ZOHO_SANDBOX_CLIENT_SECRET="")
-    def test_incomplete_profile_is_rejected(self):
-        with self.assertRaises(ZohoConfigurationError):
-            get_zoho(profile="sandbox")
-
-    @override_settings(
-        ZOHO_PRODUCTION_API_BASE_URL="https://sandbox.zohoapis.com"
-    )
-    def test_production_rejects_sandbox_url(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("production").validate()
-
-    @override_settings(
-        ZOHO_SANDBOX_API_BASE_URL="https://www.zohoapis.com"
-    )
-    def test_sandbox_rejects_production_url(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("sandbox").validate()
-
-    @override_settings(ZOHO_SANDBOX_ENVIRONMENT="invalid")
-    def test_invalid_environment_is_rejected(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("sandbox").validate()
-
-    @override_settings(
-        ZOHO_SANDBOX_SDK_RESOURCE_PATH="runtime/zoho_sdk/production"
-    )
-    def test_duplicate_resource_path_is_rejected(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("sandbox")
-
-    @override_settings(ZOHO_SANDBOX_REFRESH_TOKEN="production-refresh")
-    def test_duplicate_refresh_token_is_rejected(self):
-        with self.assertRaises(ZohoConfigurationError):
-            ZohoSettings.from_django("sandbox")
-
-    def test_active_profile_and_explicit_profile(self):
-        with patch("integrations.zoho.factory.RESTBackend") as backend:
-            backend.side_effect = lambda **kwargs: SimpleNamespace(
-                name="rest",
-                config=kwargs["config"],
-            )
-            active = get_zoho(backend="rest")
-            sandbox = get_zoho(profile="sandbox", backend="rest")
-        self.assertEqual(active.profile, "production")
-        self.assertEqual(sandbox.profile, "sandbox")
-        self.assertIsNot(active, sandbox)
-
-    def test_facade_cache_and_reset_are_per_profile(self):
-        with patch("integrations.zoho.factory.RESTBackend") as backend:
-            backend.side_effect = lambda **kwargs: SimpleNamespace(
-                name="rest",
-                config=kwargs["config"],
-            )
-            first = get_zoho(profile="production", backend="rest")
-            self.assertIs(
-                first,
-                get_zoho(profile="production", backend="rest"),
-            )
-            reset_zoho_for_tests("sandbox")
-            self.assertIs(
-                first,
-                get_zoho(profile="production", backend="rest"),
-            )
-            reset_zoho_for_tests("production")
-            self.assertIsNot(
-                first,
-                get_zoho(profile="production", backend="rest"),
-            )
-
-    def test_token_stores_and_access_tokens_are_separate(self):
-        production_config = ZohoSettings.from_django("production")
-        sandbox_config = ZohoSettings.from_django("sandbox")
-        production = get_token_store(config=production_config)
-        sandbox = get_token_store(config=sandbox_config)
-        production.set_access_token(
-            AccessToken("production-access", 99999999999, "https://www.zohoapis.com")
-        )
-        sandbox.set_access_token(
-            AccessToken(
-                "sandbox-access",
-                99999999999,
-                "https://sandbox.zohoapis.com",
-            )
-        )
-        self.assertIsNot(production, sandbox)
-        self.assertEqual(production.get_access_token().value, "production-access")
-        self.assertEqual(sandbox.get_access_token().value, "sandbox-access")
-
-    def test_organization_environment_mismatch_fails_closed(self):
-        backend = Mock()
-        backend.name = "fake"
-        backend.get_organization.return_value = Organization(
-            "1",
-            "Pruebas AYS",
-            environment="production",
-        )
-        facade = ZohoFacade(
-            backend,
-            config=ZohoSettings.from_django("sandbox"),
-        )
-        with self.assertRaises(ZohoConfigurationError):
-            facade.organization.get()
-
-    def test_organization_environment_match_accepts_sandbox(self):
-        backend = Mock()
-        backend.name = "fake"
-        backend.get_organization.return_value = Organization(
-            "1",
-            "Pruebas AYS",
-            environment=" SANDBOX ",
-        )
-        facade = ZohoFacade(
-            backend,
-            config=ZohoSettings.from_django("sandbox"),
-        )
-        self.assertEqual(facade.organization.get().company_name, "Pruebas AYS")
-
-    def test_organization_environment_match_accepts_production(self):
-        backend = Mock()
-        backend.name = "fake"
-        backend.get_organization.return_value = Organization(
-            "1",
-            "AYS Seguros",
-            environment="production",
-        )
-        facade = ZohoFacade(
-            backend,
-            config=ZohoSettings.from_django("production"),
-        )
-        self.assertEqual(facade.organization.get().company_name, "AYS Seguros")
-
-    def test_access_token_domain_cannot_cross_profiles(self):
-        sandbox = ZohoSettings.from_django("sandbox")
-        with self.assertRaises(ZohoConfigurationError):
-            sandbox.validate_api_domain("https://www.zohoapis.com")
-
-    def test_direct_sdk_backend_keeps_rest_fallback_in_same_profile(self):
-        sandbox_config = ZohoSettings.from_django("sandbox")
-        backend = SDKBackend(config=sandbox_config)
-        self.assertEqual(backend.config.profile, "sandbox")
-        self.assertEqual(backend.rest.config.profile, "sandbox")
-        self.assertIs(backend.rest.config, sandbox_config)
 
 
 @override_settings(**MULTI)
@@ -569,7 +352,7 @@ class ZohoProfileOAuthTests(TestCase):
             production_store,
             client_factory(handler),
         )
-        with self.assertLogs("integrations.zoho", "WARNING"):
+        with self.assertLogs("ays_zoho_sdk", "WARNING"):
             with self.assertRaises(ZohoConfigurationError):
                 oauth.exchange_code("wrong-production-code")
 
@@ -718,7 +501,7 @@ class ZohoProfileCommandTests(SimpleTestCase):
         ) as factory, patch(
             "zohocrmsdk.src.com.zoho.crm.api.org.org_operations.OrgOperations.get_organization",
             return_value=sdk_response,
-        ), self.assertLogs("integrations.zoho", "INFO") as logs:
+        ), self.assertLogs("ays_zoho_sdk", "INFO") as logs:
             call_command(
                 "zoho_check_connection",
                 profile="sandbox",

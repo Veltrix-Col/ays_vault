@@ -14,6 +14,7 @@ from django.urls import reverse
 from integrations.tests.helpers import VALID_SETTINGS
 from integrations.zoho.exceptions import ZohoAuthenticationError
 from integrations.zoho.schemas import AccessToken
+from integrations.zoho.settings import ZohoSettings
 from integrations.zoho.token_store import EnvironmentTokenStore
 from vault.models import UserProfile
 
@@ -32,7 +33,7 @@ class RefreshTokenDeliveryTests(TestCase):
     authorization_code = "one-time-authorization-code"
 
     def setUp(self):
-        self.store = EnvironmentTokenStore()
+        self.store = EnvironmentTokenStore(ZohoSettings.from_django())
 
     def _prepare_state(self, client: Client, *, user_id=None):
         session = client.session
