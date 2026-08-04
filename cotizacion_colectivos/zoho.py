@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from integrations.zoho import get_zoho
-from integrations.zoho.exceptions import ZohoConfigurationError
+from integrations.zoho.exceptions import ZohoConfigurationError, ZohoError
 
 
 ALLOWED_PROFILES = frozenset({"sandbox", "production"})
@@ -12,6 +15,7 @@ PROFILE_UI = {
     "sandbox": {"label": "Sandbox", "css_class": "sandbox"},
     "production": {"label": "Producción", "css_class": "production"},
 }
+logger = logging.getLogger("cotizacion_colectivos")
 
 
 def normalize_colectivos_profile(value: object) -> str:
@@ -41,7 +45,24 @@ def get_colectivos_zoho():
         raise ZohoConfigurationError(
             "El perfil Zoho resuelto no coincide con Cotización – Colectivos."
         )
-    organization = facade.organization.get()
+    started = time.monotonic()
+    try:
+        organization = facade.organization.get()
+    except ZohoError as exc:
+        logger.warning(
+            "colectivos_organization application=cotizacion_colectivos "
+            "operation=organization duration_ms=%d error=%s profile=%s",
+            round((time.monotonic() - started) * 1000),
+            getattr(exc, "category", "unknown"),
+            profile,
+        )
+        raise
+    logger.info(
+        "colectivos_organization application=cotizacion_colectivos "
+        "operation=organization duration_ms=%d error=none profile=%s",
+        round((time.monotonic() - started) * 1000),
+        profile,
+    )
     if organization.environment != profile:
         raise ZohoConfigurationError(
             "El entorno reportado por Zoho no coincide con Cotización – Colectivos."

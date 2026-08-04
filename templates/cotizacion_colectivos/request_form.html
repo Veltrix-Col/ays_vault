@@ -1,0 +1,8 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Crear expediente{% endblock %}
+{% block content %}
+<nav class="breadcrumbs"><a href="{% url 'cotizacion_colectivos:policy_detail' policy.detail_token %}">Póliza</a><span>/</span><span>Crear expediente</span></nav>
+<header class="page-heading page-heading--compact"><span class="eyebrow">Base interna</span><h1>Crear expediente</h1><p>{{ policy.branch_name }} · {{ policy.masked_reference }} · {{ policy.insured|length }} registros relacionados.</p></header>
+{% for warning in policy.warnings %}<div class="status-message">{{ warning }}</div>{% endfor %}{% if error %}<div class="status-message status-message--error">{{ error }}</div>{% endif %}
+<section class="search-panel"><form method="post" class="request-form">{% csrf_token %}{{ form.as_p }}<button type="submit">Crear expediente en borrador</button></form></section>
+{% endblock %}

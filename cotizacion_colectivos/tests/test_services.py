@@ -99,7 +99,7 @@ class SearchServiceTests(SimpleTestCase):
         get_colectivos_zoho.assert_called_once_with()
 
     def test_company_by_nit_uses_fixed_filters_fields_and_masks_document(self):
-        zoho = FakeZoho(search_pages=(Page((COMPANY,)), Page((COMPANY,))))
+        zoho = FakeZoho(search_pages=(Page((COMPANY,)),))
         results = CompanySearchService(zoho).search("9001234567")
         self.assertEqual(results[0].display_name, "Empresa de Prueba")
         self.assertNotIn("9001234567", results[0].masked_document)
@@ -108,28 +108,38 @@ class SearchServiceTests(SimpleTestCase):
         self.assertEqual(call["fields"], CONTACT_SEARCH_FIELDS)
         self.assertEqual(call["limit"], 20)
         self.assertIn("Tipo_de_persona:equals:Persona jurídica", call["criteria"])
-        self.assertIn("Tipo_ID:equals:NIT", call["criteria"])
+        self.assertNotIn("Tipo_ID:equals:NIT", call["criteria"])
         self.assertIn("N_mero_de_ID:equals:9001234567", call["criteria"])
-        self.assertIn("N_mero_de_ID:starts_with:9001234567", zoho.search.calls[1]["criteria"])
+        self.assertEqual(len(zoho.search.calls), 1)
         self.assertEqual(len(results), 1)
 
     def test_company_numeric_prefix_uses_starts_with_and_deduplicates(self):
         other = {**COMPANY, "id": "1334567890123456789", "N_mero_de_ID": "9009999999"}
-        zoho = FakeZoho(search_pages=(Page((COMPANY,)), Page((COMPANY, other))))
+        zoho = FakeZoho(search_pages=(Page(()), Page((COMPANY, other))))
         results = CompanySearchService(zoho).search("900")
         self.assertEqual(len(results), 2)
         self.assertIn("N_mero_de_ID:starts_with:900", zoho.search.calls[1]["criteria"])
+        self.assertNotIn("Tipo_ID:equals:NIT", zoho.search.calls[1]["criteria"])
 
     def test_company_by_name_uses_only_confirmed_name_fields(self):
         zoho = FakeZoho(search_pages=(Page((COMPANY,)), Page((COMPANY,)), Page(()), Page(()), Page(()), Page(())))
         CompanySearchService(zoho).search("Empresa")
         exact = zoho.search.calls[0]["criteria"]
+        self.assertIn("Tipo_de_persona:equals:Persona jurídica", exact)
+        self.assertNotIn("Tipo_ID:equals:NIT", exact)
         self.assertIn("Nombre_comercial:equals:Empresa", exact)
         self.assertIn("Nombre_comercial:starts_with:Empresa", zoho.search.calls[1]["criteria"])
         self.assertIn("Raz_n_social:equals:Empresa", zoho.search.calls[2]["criteria"])
         self.assertIn("Raz_n_social:starts_with:Empresa", zoho.search.calls[3]["criteria"])
         self.assertIn("Full_Name:equals:Empresa", zoho.search.calls[4]["criteria"])
         self.assertIn("Full_Name:starts_with:Empresa", zoho.search.calls[5]["criteria"])
+        self.assertTrue(
+            all(
+                "Tipo_de_persona:equals:Persona jurídica" in call["criteria"]
+                and "Tipo_ID:equals:NIT" not in call["criteria"]
+                for call in zoho.search.calls
+            )
+        )
         self.assertEqual(zoho.coql.calls, [])
 
     def test_company_name_falls_back_to_legal_name(self):
@@ -168,10 +178,32 @@ class SearchServiceTests(SimpleTestCase):
         self.assertEqual(CompanySearchService(zoho).search("Nada"), ())
         self.assertEqual(len(CompanySearchService(zoho).search("Empresa")), 20)
 
-    def test_unexpected_segment_is_rejected(self):
+    def test_unexpected_segment_is_discarded(self):
         zoho = FakeZoho(search_pages=(Page((PERSON,)), Page(()), Page(()), Page(()), Page(()), Page(())))
-        with self.assertRaisesMessage(ColectivosServiceError, "respuesta inválida"):
-            CompanySearchService(zoho).search("Empresa")
+        self.assertEqual(CompanySearchService(zoho).search("Empresa"), ())
+
+    def test_company_rejects_populated_non_nit_id_type_locally(self):
+        record = {**COMPANY, "Tipo_ID": "CC"}
+        zoho = FakeZoho(search_pages=(Page((record,)), Page(())))
+        self.assertEqual(CompanySearchService(zoho).search("9001234567"), ())
+        self.assertNotIn("Tipo_ID:equals:NIT", zoho.search.calls[0]["criteria"])
+
+    def test_company_accepts_empty_id_type_after_legal_person_validation(self):
+        record = {**COMPANY, "Tipo_ID": ""}
+        zoho = FakeZoho(search_pages=(Page((record,)),))
+        results = CompanySearchService(zoho).search("9001234567")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(zoho.search.calls), 1)
+
+    def test_company_search_logs_metrics_without_document_or_name(self):
+        zoho = FakeZoho(search_pages=(Page((COMPANY,)),))
+        with self.assertLogs("cotizacion_colectivos", level="INFO") as captured:
+            CompanySearchService(zoho).search("9001234567")
+        output = " ".join(captured.output)
+        self.assertIn("operation=search_api", output)
+        self.assertIn("duration_ms=", output)
+        self.assertNotIn("9001234567", output)
+        self.assertNotIn("Empresa de Prueba", output)
 
     def test_service_always_builds_configured_facade(self):
         facade = FakeZoho(search_pages=tuple(Page(()) for _ in range(6)))
@@ -307,6 +339,27 @@ class DetailServiceTests(SimpleTestCase):
         self.assertEqual(zoho.search.calls[0]["criteria"], f"(Asegurado:equals:{PERSON['id']})")
         self.assertEqual(zoho.search.calls[1]["criteria"], f"(Tomador_principal1:equals:{PERSON['id']})")
         self.assertNotIn(PERSON["Full_Name"], str(zoho.search.calls))
+
+    def test_multiple_policy_and_risk_relations_are_fetched_in_fixed_batches(self):
+        relations = tuple({
+            "id": str(3234567890123456789 + index),
+            "P_liza": {"id": str(4234567890123456789 + index), "name": "Referencia"},
+            "Asegurado": {"id": COMPANY["id"], "name": "No usar"},
+            "Riesgo": {"id": str(5234567890123456789 + index), "name": "Riesgo"},
+            "Ramo": "Salud colectivo", "Estado": "Activo",
+        } for index in range(2))
+        policies = tuple({"id": item["P_liza"]["id"], "Name": "POL", "Ramo": "Salud colectivo"} for item in relations)
+        risks = tuple({"id": item["Riesgo"]["id"], "Name": "RIESGO", "Tipo_de_riesgo": "Persona"} for item in relations)
+        zoho = FakeZoho(
+            search_pages=(Page(relations), Page(())),
+            coql_pages=(Page(policies), Page(risks)),
+            record={"Contacts": COMPANY},
+        )
+        detail = EntityDetailService(zoho).company(sign_record_id(COMPANY["id"], "company"))
+        self.assertEqual(len(detail.policies), 2)
+        self.assertEqual(len(detail.risks), 2)
+        self.assertEqual(len(zoho.coql.calls), 2)
+        self.assertEqual([call["module"] for call in zoho.records.calls], ["Contacts"])
 
     def test_no_public_write_methods_exist(self):
         for service in (CompanySearchService, PersonSearchService, EntityDetailService):

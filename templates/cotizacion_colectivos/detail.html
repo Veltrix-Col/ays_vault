@@ -25,6 +25,14 @@
   </div>
 </section>
 
+{% if detail.branches %}<section class="detail-section"><div class="section-heading"><h2>Ramos relacionados</h2><span>{{ detail.branches|length }}</span></div><div class="branch-grid">
+{% for branch in detail.branches %}<article class="branch-card"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{{ branch.name }}</h3></div>
+<div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.insured_count }} relación{{ branch.insured_count|pluralize:"es" }}</span><span>{{ branch.active_count }} activa{{ branch.active_count|pluralize:"s" }}</span></div>
+{% if branch.roles %}<p class="muted">Roles: {{ branch.roles|join:", " }}</p>{% endif %}
+{% for policy in branch.policies %}<a class="branch-policy" href="{% url 'cotizacion_colectivos:policy_detail' policy.detail_token %}?source={{ entity_kind }}">{{ policy.masked_reference }} · {{ policy.state }}</a>{% empty %}<p class="muted">No hay una póliza resoluble para este ramo.</p>{% endfor %}
+{% for warning in branch.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}</article>{% endfor %}
+</div></section>{% endif %}
+
 {% if detail.relations_truncated %}<div class="status-message">Se muestran las primeras 20 relaciones disponibles.</div>{% endif %}
 
 <section id="polizas" class="detail-section relation-card"><div class="section-heading"><h2>Pólizas vinculadas mediante asegurados</h2><span>{{ detail.policies|length }}</span></div>

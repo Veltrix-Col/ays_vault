@@ -20,7 +20,7 @@ from cotizacion_colectivos.zoho import (
     get_colectivos_zoho,
 )
 
-DETAIL_SALT = "cotizacion_colectivos.detail.v1"
+DETAIL_SALT = "cotizacion_colectivos.detail.v2"
 ZOHO_ID = re.compile(r"^\d{10,30}$")
 
 
@@ -61,21 +61,47 @@ def mask_reference(value: object) -> str:
     return f"Referencia terminada en {text[-visible:]}"
 
 
-def sign_record_id(record_id: object) -> str:
+def sign_record_id(record_id: object, entity_type: str = "contact", context: dict[str, str] | None = None) -> str:
     value = str(record_id or "").strip()
     if not ZOHO_ID.fullmatch(value):
         raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
-    return signing.dumps(value, salt=DETAIL_SALT, compress=True)
+    if entity_type not in {"company", "person", "policy", "contact"}:
+        raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
+    payload = {"id": value, "type": entity_type}
+    if context:
+        source_id = str(context.get("source_id") or "")
+        source_kind = context.get("source_kind")
+        if not ZOHO_ID.fullmatch(source_id) or source_kind not in {"company", "person"}:
+            raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
+        payload["source_id"] = source_id
+        payload["source_kind"] = source_kind
+    return signing.dumps(payload, salt=DETAIL_SALT, compress=True)
 
 
-def unsign_record_id(token: str) -> str:
+def unsign_record_context(token: str, expected_type: str | None = None) -> dict[str, str]:
     try:
-        value = signing.loads(token, salt=DETAIL_SALT, max_age=900)
+        payload = signing.loads(token, salt=DETAIL_SALT, max_age=900)
     except signing.BadSignature as exc:
         raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.") from exc
-    if not isinstance(value, str) or not ZOHO_ID.fullmatch(value):
+    if not isinstance(payload, dict):
         raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
-    return value
+    value = payload.get("id")
+    entity_type = payload.get("type")
+    if (
+        not isinstance(value, str)
+        or not ZOHO_ID.fullmatch(value)
+        or entity_type not in {"company", "person", "policy", "contact"}
+        or (
+            expected_type is not None
+            and entity_type not in {expected_type, "contact"}
+        )
+    ):
+        raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
+    return payload
+
+
+def unsign_record_id(token: str, expected_type: str | None = None) -> str:
+    return unsign_record_context(token, expected_type)["id"]
 
 
 def translate_zoho_error(

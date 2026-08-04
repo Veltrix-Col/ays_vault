@@ -1,0 +1,5 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Notificaciones{% endblock %}
+{% block content %}<header class="page-heading page-heading--compact"><h1>Notificaciones</h1></header>
+<form method="post" action="{% url 'cotizacion_colectivos:notifications_read_all' %}" class="policy-actions">{% csrf_token %}<button type="submit">Marcar todas como leídas</button></form>
+<section class="relation-card">{% for item in page %}<article class="relation-row"><strong>{{ item.title }}{% if not item.is_read %} · Nueva{% endif %}</strong><span>{{ item.message }}</span><form method="post" action="{% url 'cotizacion_colectivos:notification_read' item.pk %}">{% csrf_token %}<button type="submit">Abrir solicitud</button></form></article>{% empty %}<p>No hay notificaciones.</p>{% endfor %}</section>{% endblock %}

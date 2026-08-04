@@ -37,7 +37,7 @@ INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.con
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','config.middleware.TrustedIntranetAccessMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
-TEMPLATES=[{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[BASE_DIR/'templates'],'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','vault.context_processors.profile']}}]
+TEMPLATES=[{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[BASE_DIR/'templates'],'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','vault.context_processors.profile','cotizacion_colectivos.context_processors.colectivos_navigation']}}]
 WSGI_APPLICATION='config.wsgi.application'
 DB_ENGINE=os.getenv('DB_ENGINE','sqlite').lower()
 if DB_ENGINE in {'postgres','postgresql'}:
@@ -105,6 +105,24 @@ SOAT_MAX_ROWS=int(os.getenv('SOAT_MAX_ROWS','100000'))
 SOAT_MAX_COLUMNS=int(os.getenv('SOAT_MAX_COLUMNS','200'))
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
+COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION=os.getenv('COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION','otp_email').strip().lower()
+if COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION not in {'otp_email','token_only'}: raise ImproperlyConfigured('COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION debe ser otp_email o token_only')
+if COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION == 'token_only' and not DEBUG and not RUNNING_TESTS: raise ImproperlyConfigured('token_only solo se permite en desarrollo local')
+COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS',86400,300,604800)
+COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS',604800,3600,2592000)
+COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS',600,60,1800)
+COLECTIVOS_EXTERNAL_OTP_MAX_ATTEMPTS=email_env_int('COLECTIVOS_EXTERNAL_OTP_MAX_ATTEMPTS',5,1,10)
+COLECTIVOS_EXTERNAL_SESSION_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_SESSION_TTL_SECONDS',1800,300,7200)
+COLECTIVOS_EXCEL_PREVIEW_TTL_SECONDS=email_env_int('COLECTIVOS_EXCEL_PREVIEW_TTL_SECONDS',1800,300,7200)
+COLECTIVOS_DEADLINES_ENABLED=email_env_bool('COLECTIVOS_DEADLINES_ENABLED',True)
+COLECTIVOS_DEADLINE_REMINDER_DAYS=email_env_int('COLECTIVOS_DEADLINE_REMINDER_DAYS',3,1,30)
+COLECTIVOS_DEADLINE_BATCH_LIMIT=email_env_int('COLECTIVOS_DEADLINE_BATCH_LIMIT',200,1,5000)
+COLECTIVOS_DEADLINE_EMAIL_ENABLED=email_env_bool('COLECTIVOS_DEADLINE_EMAIL_ENABLED',True)
+COLECTIVOS_DEADLINE_INTERNAL_EMAIL=os.getenv('COLECTIVOS_DEADLINE_INTERNAL_EMAIL','').strip()
+COLECTIVOS_ATTACHMENT_MAX_BYTES=email_env_int('COLECTIVOS_ATTACHMENT_MAX_BYTES',10*1024*1024,1024,25*1024*1024)
+COLECTIVOS_ATTACHMENT_TOTAL_BYTES=email_env_int('COLECTIVOS_ATTACHMENT_TOTAL_BYTES',25*1024*1024,1024,100*1024*1024)
+COLECTIVOS_PRIVATE_ROOT=BASE_DIR/'private_assets'/'colectivos'
+COLECTIVOS_EXTERNAL_BASE_URL=os.getenv('COLECTIVOS_EXTERNAL_BASE_URL',VAULT_BASE_URL).rstrip('/')
 REPORT_DEFAULT_MAX_DAYS=int(os.getenv('REPORT_DEFAULT_MAX_DAYS','90'))
 REPORT_LARGE_EXPORT_ALERT_THRESHOLD=int(os.getenv('REPORT_LARGE_EXPORT_ALERT_THRESHOLD','1000'))
 ZOHO_ENABLED=env_bool('ZOHO_ENABLED',False)

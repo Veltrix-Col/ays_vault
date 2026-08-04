@@ -1,0 +1,25 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Detalle de póliza{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span><span>Detalle de póliza</span></nav>
+<header class="detail-hero"><span class="eyebrow">Póliza colectiva</span><h1>{{ detail.masked_reference }}</h1><span class="state-chip">{{ detail.state }}</span></header>
+{% for warning in detail.warnings %}<div class="status-message" role="status">{{ warning }}</div>{% endfor %}
+<section class="detail-section"><div class="detail-grid">
+  <div><span>Ramo</span><strong>{{ detail.branch_name }}</strong></div><div><span>Código</span><strong>{{ detail.branch_code|default:"Pendiente" }}</strong></div>
+  <div><span>Aseguradora</span><strong>{{ detail.insurer }}</strong></div><div><span>Tomador</span><strong>{{ detail.holder }}</strong></div>
+  <div><span>Vigencia</span><strong>{{ detail.start_date|default:"Sin inicio" }} – {{ detail.end_date|default:"Sin fin" }}</strong></div>
+  <div><span>Renovable</span><strong>{{ detail.renewable }}</strong></div><div><span>Modo de pago</span><strong>{{ detail.payment_mode }}</strong></div>
+  <div><span>Frecuencia</span><strong>{{ detail.frequency }}</strong></div><div><span>Número de cuotas</span><strong>{{ detail.installments }}</strong></div>
+  <div><span>Asegurados relacionados</span><strong>{{ detail.insured|length }}</strong></div><div><span>Riesgos</span><strong>{{ detail.risks|length }}</strong></div>
+</div></section>
+<section class="detail-section relation-card"><div class="section-heading"><h2>Información económica</h2></div>
+<p class="muted">Prima, pago total, pago según forma de pago y pago empleado sin IVA son conceptos distintos y no se consolidan automáticamente.</p>
+{% if detail.payment_calendar %}<div class="compact-grid">{% for label, value in detail.payment_calendar %}<div><span>{{ label }}</span><strong>{{ value }}</strong></div>{% endfor %}</div>{% endif %}
+</section>
+<section class="policy-actions">
+  <a class="primary-link" href="{% url 'cotizacion_colectivos:policy_group' detail.detail_token %}">Ver grupo actual</a>
+  {% if can_export %}<form method="post" action="{% url 'cotizacion_colectivos:policy_excel' detail.detail_token %}">{% csrf_token %}<button type="submit">Descargar Excel actual</button></form>{% endif %}
+</section>
+<section class="future-actions"><h2>Acciones internas</h2><div class="future-buttons"><button disabled>Crear solicitud de actualización · Próximamente</button><button disabled>Crear solicitud de renovación · Próximamente</button></div></section>
+{% if can_create and detail.classification == 'confirmed' %}<section class="policy-actions"><a href="{% url 'cotizacion_colectivos:request_create' detail.detail_token %}?source={{ source_kind }}">Crear expediente interno</a></section>{% endif %}
+{% endblock %}

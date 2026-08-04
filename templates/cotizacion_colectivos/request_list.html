@@ -1,0 +1,10 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Bandeja de solicitudes{% endblock %}
+{% block content %}
+<header class="page-heading page-heading--compact"><span class="eyebrow">Operación interna</span><h1>Bandeja de solicitudes</h1><p>Expedientes locales; ninguna acción escribe en Zoho.</p></header>
+<section class="search-panel"><form method="get" class="filter-grid">{{ form.as_p }}<button type="submit">Filtrar</button></form></section>
+<section class="relation-card group-table-wrap"><table class="group-table"><thead><tr><th>Identificador</th><th>Cliente</th><th>Ramo</th><th>Póliza</th><th>Tipo</th><th>Estado</th><th>Responsable</th><th>Fecha límite</th><th>Registros</th></tr></thead><tbody>
+{% for item in page %}<tr><td><a href="{% url 'cotizacion_colectivos:request_detail' item.public_id %}">{{ item.public_id }}</a></td><td>{{ item.client_label }}</td><td>{{ item.branch_name }}</td><td>{{ item.masked_policy_reference }}</td><td>{{ item.get_request_type_display }}</td><td><span class="state-chip">{{ item.get_status_display }}</span></td><td>{{ item.assigned_to }}</td><td>{{ item.deadline }}</td><td>{{ item.record_count }}</td></tr>{% empty %}<tr><td colspan="9">No hay solicitudes para los filtros seleccionados.</td></tr>{% endfor %}
+</tbody></table></section>
+{% if page.has_other_pages %}<nav class="pagination">{% if page.has_previous %}<a href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.previous_page_number }}">Anterior</a>{% endif %}<span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.next_page_number }}">Siguiente</a>{% endif %}</nav>{% endif %}
+{% endblock %}

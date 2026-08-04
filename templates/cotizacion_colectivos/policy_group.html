@@ -1,0 +1,10 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Grupo actual{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span><a href="{% url 'cotizacion_colectivos:policy_detail' detail.detail_token %}">Póliza</a><span>/</span><span>Grupo actual</span></nav>
+<header class="page-heading page-heading--compact"><span class="eyebrow">{{ detail.branch_name }}</span><h1>Grupo actual</h1><p>{{ members|length }} elementos consultados en modo solo lectura.</p></header>
+{% if detail.truncated %}<div class="status-message">Resultado parcial: se alcanzó el límite defensivo.</div>{% endif %}
+<section class="relation-card group-table-wrap"><table class="group-table"><thead><tr><th>Rol</th><th>Persona o elemento</th><th>Documento</th><th>Estado</th><th>Plan</th><th>Ingreso</th><th>Retiro</th><th>Riesgo</th></tr></thead><tbody>
+{% for item in members %}<tr><td>{{ item.role }}</td><td>{{ item.display_name }}</td><td>{{ item.id_type }} {{ item.masked_document }}</td><td>{{ item.state }}</td><td>{{ item.plan|default:"—" }}</td><td>{{ item.entry_date|default:"—" }}</td><td>{{ item.exit_date|default:"—" }}</td><td>{{ item.risk_summary|default:"—" }}</td></tr>{% empty %}<tr><td colspan="8">No existen registros relacionados.</td></tr>{% endfor %}
+</tbody></table></section>
+{% endblock %}

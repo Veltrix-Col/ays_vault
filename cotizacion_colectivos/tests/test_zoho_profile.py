@@ -40,6 +40,7 @@ def facade(profile, reported_environment=None):
 
 
 class ColectivosProfileConfigurationTests(SimpleTestCase):
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
     def test_default_is_sandbox(self):
         self.assertEqual(settings.ZOHO_ACTIVE_PROFILE, "sandbox")
         self.assertEqual(get_colectivos_profile(), "sandbox")
@@ -82,9 +83,14 @@ class ColectivosProfileResolutionTests(SimpleTestCase):
     def test_production_calls_only_production(self, get_zoho):
         selected = facade("production")
         get_zoho.return_value = selected
-        with override_settings(ZOHO_ACTIVE_PROFILE="production"):
-            self.assertIs(get_colectivos_zoho(), selected)
+        with self.assertLogs("cotizacion_colectivos", level="INFO") as captured:
+            with override_settings(ZOHO_ACTIVE_PROFILE="production"):
+                self.assertIs(get_colectivos_zoho(), selected)
         get_zoho.assert_called_once_with(profile="production")
+        output = " ".join(captured.output)
+        self.assertIn("operation=organization", output)
+        self.assertIn("duration_ms=", output)
+        self.assertNotIn("safe-org", output)
 
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_mismatched_reported_environment_is_blocked_without_fallback(self, get_zoho):

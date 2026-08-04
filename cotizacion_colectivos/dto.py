@@ -34,6 +34,7 @@ class ContactSummary:
 
 @dataclass(frozen=True)
 class RelatedPolicy:
+    detail_token: str
     masked_reference: str
     state: str
     branch: str
@@ -58,6 +59,9 @@ class RelatedInsured:
     has_risk: bool = False
     relationship_source: str = "insured_contact"
     relationship_confidence: str = "confirmed"
+    role: str = "Asegurado"
+    plan: str = ""
+    relationship_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,63 @@ class RelatedRisk:
     end_date: str = ""
     relationship_source: str = "insured_risk"
     relationship_confidence: str = "confirmed"
+    attributes: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class BranchSummary:
+    code: str
+    slug: str
+    name: str
+    classification: str
+    policies: tuple[RelatedPolicy, ...]
+    insured_count: int
+    risk_count: int
+    active_count: int
+    excluded_count: int
+    roles: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PolicyDetail:
+    detail_token: str
+    masked_reference: str
+    branch_code: str
+    branch_name: str
+    classification: str
+    insurer: str
+    state: str
+    holder: str
+    start_date: str
+    end_date: str
+    renewable: str
+    payment_mode: str
+    frequency: str
+    installments: str
+    first_installment_date: str
+    payment_calendar: tuple[tuple[str, str], ...]
+    insured: tuple[RelatedInsured, ...]
+    risks: tuple[RelatedRisk, ...]
+    active_count: int
+    excluded_count: int
+    warnings: tuple[str, ...] = ()
+    truncated: bool = False
+
+
+@dataclass(frozen=True)
+class GroupMember:
+    role: str
+    display_name: str
+    id_type: str
+    masked_document: str
+    state: str
+    entry_date: str
+    exit_date: str
+    plan: str
+    relationship: str
+    risk_summary: str
+    economic_values: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +146,7 @@ class CompanyDetail:
     risks: tuple[RelatedRisk, ...]
     unavailable_relations: tuple[str, ...] = ()
     relations_truncated: bool = False
+    branches: tuple[BranchSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,3 +165,4 @@ class PersonDetail:
     risks: tuple[RelatedRisk, ...]
     unavailable_relations: tuple[str, ...] = ()
     relations_truncated: bool = False
+    branches: tuple[BranchSummary, ...] = ()

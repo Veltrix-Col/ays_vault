@@ -31,8 +31,20 @@ incorporación posterior controlada al documento maestro.
 El campo visible es **NIT o nombre de empresa**.
 
 Para una entrada numérica de al menos tres dígitos se ejecuta primero una
-comparación exacta sobre `N_mero_de_ID` y después una consulta cerrada
-`starts_with`. En ambas se aplican los filtros de persona jurídica y NIT.
+comparación exacta sobre `N_mero_de_ID`. Si esa consulta devuelve un resultado
+válido, no se ejecuta el prefijo; en caso contrario se consulta `starts_with`.
+Los criterios remotos conservan obligatoriamente
+`Tipo_de_persona = Persona jurídica`, pero no incluyen `Tipo_ID = NIT`: el
+diagnóstico de Producción confirmó que Search API descartaba registros válidos
+al combinar ese picklist, aunque el registro devuelto por documento contenía
+`Tipo_ID = NIT`.
+
+Después de cada respuesta se aplica una validación local defensiva. Se rechaza
+cualquier registro que no sea `Persona jurídica` y cualquier `Tipo_ID`
+poblado distinto de `NIT`. Un `Tipo_ID` vacío no se descarta automáticamente:
+se admite únicamente si el tipo de persona confirma que es jurídica, para no
+ocultar registros con clasificación documental incompleta. Esta decisión no
+amplía resultados a personas naturales.
 
 Para texto de al menos tres caracteres se consulta primero `equals` y después
 `starts_with` sobre `Nombre_comercial`, `Raz_n_social` y `Full_Name`. El QA real
@@ -152,6 +164,12 @@ No confirmadas y no inferidas:
 
 Los logs contienen solo entidad, duración, cantidad de resultados, categoría
 de error, ID interno del usuario, perfil y correlación aleatoria.
+
+La duración de la validación de Organization y la de cada llamada Search API se
+registran por separado. Queda pendiente evaluar una caché breve y acotada para
+la validación del ambiente; no se implementó en esta intervención para evitar
+alterar el modelo de seguridad o introducir estado compartido sin diseño
+específico.
 
 ## 9. Manejo de errores
 
