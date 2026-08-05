@@ -1,5 +1,9 @@
 # Miniportal externo y Excel de ida y vuelta
 
+> Documento histórico. El flujo funcional vigente es el enlace directo sin
+> OTP descrito en `direct_external_flow.md`; las referencias a OTP se conservan
+> únicamente para explicar datos y componentes heredados.
+
 ## Alcance
 
 El miniportal amplía el expediente local `SolicitudColectivo`; no crea otro sistema de solicitudes y no escribe en Zoho. El cliente opera contra el snapshot cifrado. La ruta pública queda aislada bajo `/solicitudes/colectivos/externa/` y no crea un `User`, una sesión de Vault ni una autenticación MFA interna.

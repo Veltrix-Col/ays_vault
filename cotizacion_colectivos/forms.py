@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from .models import SolicitudColectivo
+from .adjustments import allowed_adjustments
 
 
 SAFE_NAME = re.compile(r"^[^\W_][^\W_\s.&'’-]*(?:[\s.&'’-]+[^\W_\s.&'’-]+)*$", re.UNICODE)
@@ -84,14 +85,80 @@ class RequestCreateForm(forms.Form):
     confirm_snapshot = forms.BooleanField(label="Confirmo la creación del snapshot de solo lectura")
 
     def __init__(self, *args, **kwargs):
+        public_access = kwargs.pop("public_access", False)
         super().__init__(*args, **kwargs)
-        self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
+        if public_access:
+            self.fields.pop("assigned_to")
+        else:
+            self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
 
     def clean_deadline(self):
         value = self.cleaned_data["deadline"]
         if value < timezone.localdate():
             raise forms.ValidationError("La fecha límite no puede estar en el pasado.")
         return value
+
+
+class MultiPolicyRequestForm(forms.Form):
+    request_type = forms.ChoiceField(
+        label="Objetivo general",
+        choices=(
+            (SolicitudColectivo.RequestType.UPDATE, "Actualización"),
+            (SolicitudColectivo.RequestType.RENEWAL, "Renovación"),
+        ),
+    )
+    deadline = forms.DateField(label="Fecha límite", widget=forms.DateInput(attrs={"type": "date"}))
+    internal_notes = forms.CharField(
+        label="Observaciones o instrucciones",
+        required=False,
+        max_length=2000,
+        widget=forms.Textarea(attrs={"rows": 3}),
+    )
+    is_test = forms.BooleanField(label="Expediente de prueba", required=False, initial=True)
+    confirm_snapshot = forms.BooleanField(label="Confirmo la selección y la creación de snapshots de solo lectura")
+
+    def __init__(self, *args, policies=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.policy_options = []
+        for index, policy in enumerate(policies):
+            adjustments = allowed_adjustments(policy.branch_code)
+            policy_field = f"policy_{index}"
+            adjustment_field = f"adjustments_{index}"
+            self.fields[policy_field] = forms.BooleanField(required=False)
+            self.fields[adjustment_field] = forms.MultipleChoiceField(
+                required=False,
+                choices=tuple((item.code, item.label) for item in adjustments),
+                initial=tuple(item.code for item in adjustments),
+                widget=forms.CheckboxSelectMultiple,
+            )
+            self.policy_options.append({
+                "index": index,
+                "policy": policy,
+                "policy_field": policy_field,
+                "adjustment_field": adjustment_field,
+                "adjustments": adjustments,
+            })
+
+    def clean_deadline(self):
+        value = self.cleaned_data["deadline"]
+        if value < timezone.localdate():
+            raise forms.ValidationError("La fecha límite no puede estar en el pasado.")
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        selected = []
+        for option in self.policy_options:
+            if not cleaned.get(option["policy_field"]):
+                continue
+            adjustments = cleaned.get(option["adjustment_field"]) or []
+            if not adjustments:
+                self.add_error(option["adjustment_field"], "Seleccione al menos un ajuste para esta póliza.")
+            selected.append({"token": option["policy"].detail_token, "adjustments": adjustments})
+        if not selected:
+            raise forms.ValidationError("Seleccione al menos una póliza colectiva.")
+        cleaned["selections"] = selected
+        return cleaned
 
 
 class RequestFilterForm(forms.Form):
@@ -109,8 +176,13 @@ class RequestFilterForm(forms.Form):
     warning = forms.BooleanField(label="Con advertencias", required=False)
 
     def __init__(self, *args, **kwargs):
+        public_access = kwargs.pop("public_access", False)
         super().__init__(*args, **kwargs)
-        self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
+        if public_access:
+            self.fields.pop("assigned_to")
+            self.fields.pop("assigned_to_me")
+        else:
+            self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
 
 
 REQUEST_TRANSITION_CHOICES = tuple(
@@ -135,8 +207,12 @@ class RequestEditForm(forms.Form):
     internal_notes = forms.CharField(label="Notas internas", required=False, max_length=2000, widget=forms.Textarea(attrs={"rows": 4}))
 
     def __init__(self, *args, **kwargs):
+        public_access = kwargs.pop("public_access", False)
         super().__init__(*args, **kwargs)
-        self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
+        if public_access:
+            self.fields.pop("assigned_to")
+        else:
+            self.fields["assigned_to"].queryset = get_user_model().objects.filter(is_active=True).order_by("username")
 
     def clean_deadline(self):
         value = self.cleaned_data["deadline"]
@@ -160,6 +236,7 @@ class ExternalAccessPrepareForm(forms.Form):
     confirm_economic = forms.BooleanField(label="Confirmo la información económica mostrada")
     confirm_snapshot = forms.BooleanField(label="Confirmo que el snapshot está disponible")
     confirm_privacy = forms.BooleanField(label="Confirmo el tratamiento de datos")
+    send_now = forms.BooleanField(label="Enviar invitación por correo ahora", required=False, initial=True)
 
     def clean_deadline(self):
         value = self.cleaned_data["deadline"]
@@ -168,12 +245,22 @@ class ExternalAccessPrepareForm(forms.Form):
         return value
 
 
+class OptionalAccessEmailForm(forms.Form):
+    recipient = forms.EmailField(
+        label="Correo opcional para enviar el enlace",
+        max_length=254,
+        required=True,
+    )
+
+
 class ExternalOTPForm(forms.Form):
     code = forms.RegexField(label="Código de verificación", regex=r"^\d{6}$", max_length=6, min_length=6, widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
 
 
 class ExternalSubmitForm(forms.Form):
-    declaration = forms.BooleanField(label="Declaro que la información suministrada es veraz")
+    declaration = forms.BooleanField(
+        label="Confirmo que revisé la información y deseo enviar mi respuesta."
+    )
 
 
 class AttachmentUploadForm(forms.Form):

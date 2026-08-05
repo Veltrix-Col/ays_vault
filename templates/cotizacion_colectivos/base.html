@@ -12,7 +12,8 @@
   <a href="{% url 'public_home' %}" class="colectivos-brand" aria-label="Volver al Banco de Herramientas">
     <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en Seguros"><span>Banco de Herramientas</span>
   </a>
-  <div class="header-actions">{% if request.user.is_authenticated %}<a href="{% url 'cotizacion_colectivos:request_list' %}">Bandeja</a><a class="notification-link" href="{% url 'cotizacion_colectivos:notification_list' %}" aria-label="Notificaciones">🔔<span>{{ colectivos_unread_notifications|default:0 }}</span></a>{% endif %}<div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Ambiente Zoho activo">{{ zoho_environment.label }} · Solo lectura</div></div>
+  <nav class="header-actions" aria-label="Navegación de Colectivos"><a href="{% url 'cotizacion_colectivos:index' %}">Buscar</a><a class="notification-link" href="{% url 'cotizacion_colectivos:notification_list' %}" aria-label="Respuestas de clientes">Respuestas<span>{{ colectivos_unread_notifications|default:0 }}</span></a><div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Ambiente Zoho activo">{{ zoho_environment.label }} · Solo lectura</div></nav>
 </header>
 <main id="main-content" class="colectivos-main" tabindex="-1">{% block content %}{% endblock %}</main>
+<script src="{% static 'js/colectivos-loading.js' %}" defer></script>
 </body></html>

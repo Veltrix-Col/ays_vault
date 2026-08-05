@@ -4,7 +4,7 @@
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span><span>{% if entity_kind == 'company' %}Empresas{% else %}Individuos{% endif %}</span></nav>
 <header class="page-heading page-heading--compact"><h1>{% if entity_kind == 'company' %}Buscar empresa{% else %}Buscar individuo{% endif %}</h1>
 <p>{% if entity_kind == 'company' %}NIT completo o prefijo desde 3 dígitos; nombre comercial o razón social desde 3 caracteres.{% else %}Cédula completa o prefijo desde 3 dígitos; nombre o apellido desde 3 caracteres.{% endif %}</p></header>
-<section class="search-panel"><form method="post" class="search-form search-form--inline">{% csrf_token %}<div>
+<section class="search-panel"><form method="post" class="search-form search-form--inline" data-remote-zoho>{% csrf_token %}<div>
   <label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}
   {% for item in form.query.errors %}<p class="field-error">{{ item }}</p>{% endfor %}</div><button type="submit">Buscar</button></form></section>
 {% if error %}<div class="status-message status-message--error" role="alert">{{ error }}</div>

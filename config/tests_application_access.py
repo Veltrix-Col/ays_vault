@@ -28,8 +28,8 @@ def reject_wrong_audience(*, request, application):
     return DelegatedAccessResult(False, "wrong_audience")
 
 
-LOCAL = {"DEBUG": True, "TOOLS_ACCESS_MODE": "local_public"}
-TRUSTED = {"DEBUG": False, "TOOLS_ACCESS_MODE": "trusted_intranet"}
+LOCAL = {"DEBUG": True, "TOOLS_ACCESS_MODE": "local_public", "COLECTIVOS_INTERNAL_PUBLIC_ACCESS": True}
+TRUSTED = {"DEBUG": False, "TOOLS_ACCESS_MODE": "trusted_intranet", "COLECTIVOS_INTERNAL_PUBLIC_ACCESS": False}
 
 
 @override_settings(**LOCAL)

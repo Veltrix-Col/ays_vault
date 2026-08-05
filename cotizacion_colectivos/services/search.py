@@ -44,6 +44,10 @@ def _fixed_criteria(
     return f"({'and'.join(criteria)})"
 
 
+def _any_field_criteria(fields: tuple[str, ...], operator: str, value: str) -> str:
+    return f"({'or'.join(f'({field}:{operator}:{value})' for field in fields)})"
+
+
 class _BaseSearchService:
     person_type = ""
     id_type = ""
@@ -52,8 +56,18 @@ class _BaseSearchService:
 
     def __init__(self, zoho=None):
         self.profile = get_colectivos_profile()
+        self.timings = {
+            "facade_ms": 0,
+            "organization_ms": 0,
+            "metadata_ms": 0,
+            "search_ms": 0,
+            "coql_ms": 0,
+            "mapper_ms": 0,
+            "dedup_ms": 0,
+            "dto_ms": 0,
+        }
         try:
-            self.zoho = zoho or colectivos_zoho()
+            self.zoho = zoho or colectivos_zoho(timings=self.timings)
         except ZohoError as exc:
             raise translate_zoho_error(exc, self.profile) from exc
 
@@ -92,6 +106,7 @@ class _BaseSearchService:
             min(len(page.records), SEARCH_LIMIT),
             self.profile,
         )
+        self.timings["search_ms"] += round((time.monotonic() - started) * 1000)
         return tuple(page.records[:SEARCH_LIMIT])
 
     def _accept_record(self, record: dict[str, object]) -> bool:
@@ -105,6 +120,7 @@ class _BaseSearchService:
         stop_after_first_nonempty: bool = False,
     ) -> tuple[object, ...]:
         records: dict[str, dict[str, object]] = {}
+        dedup_started = time.monotonic()
         try:
             for query in queries:
                 for record in query():
@@ -123,10 +139,16 @@ class _BaseSearchService:
             raise
         except ZohoError as exc:
             raise translate_zoho_error(exc, self.profile) from exc
+        self.timings["dedup_ms"] += round((time.monotonic() - dedup_started) * 1000)
         ordered = list(records.values())
         if ranker:
             ordered.sort(key=ranker)
-        return tuple(mapper(record) for record in ordered[:SEARCH_LIMIT])
+        mapper_started = time.monotonic()
+        mapped = tuple(mapper(record) for record in ordered[:SEARCH_LIMIT])
+        mapper_ms = round((time.monotonic() - mapper_started) * 1000)
+        self.timings["mapper_ms"] += mapper_ms
+        self.timings["dto_ms"] += mapper_ms
+        return mapped
 
 
 class CompanySearchService(_BaseSearchService):
@@ -144,16 +166,16 @@ class CompanySearchService(_BaseSearchService):
             )
         else:
             clean = _validated_name(query)
-            queries = (
-                lambda: self._query(f"(Nombre_comercial:equals:{value})"),
-                lambda: self._query(f"(Nombre_comercial:starts_with:{value})"),
-                lambda: self._query(f"(Raz_n_social:equals:{value})"),
-                lambda: self._query(f"(Raz_n_social:starts_with:{value})"),
-                lambda: self._query(f"(Full_Name:equals:{value})"),
-                lambda: self._query(f"(Full_Name:starts_with:{value})"),
-            )
+            name_fields = ("Nombre_comercial", "Raz_n_social", "Full_Name")
+            exact_queries = (lambda: self._query(_any_field_criteria(name_fields, "equals", value)),)
+            prefix_queries = (lambda: self._query(_any_field_criteria(name_fields, "starts_with", value)),)
             folded = clean.casefold()
-            return self._collect(queries, self._map, lambda record: _name_rank(
+            exact = self._collect(exact_queries, self._map, lambda record: _name_rank(
+                record, folded, ("Nombre_comercial", "Raz_n_social", "Full_Name")
+            ))
+            if exact:
+                return exact
+            return self._collect(prefix_queries, self._map, lambda record: _name_rank(
                 record, folded, ("Nombre_comercial", "Raz_n_social", "Full_Name")
             ))
         return self._collect(
@@ -201,19 +223,19 @@ class PersonSearchService(_BaseSearchService):
             )
         else:
             clean = _validated_name(query)
-            queries = (
-                lambda: self._query(f"(Full_Name:equals:{value})"),
-                lambda: self._query(f"(Full_Name:starts_with:{value})"),
-                lambda: self._query(f"(First_Name:equals:{value})"),
-                lambda: self._query(f"(First_Name:starts_with:{value})"),
-                lambda: self._query(f"(Last_Name:equals:{value})"),
-                lambda: self._query(f"(Last_Name:starts_with:{value})"),
-            )
+            name_fields = ("Full_Name", "First_Name", "Last_Name")
+            exact_queries = (lambda: self._query(_any_field_criteria(name_fields, "equals", value)),)
+            prefix_queries = (lambda: self._query(_any_field_criteria(name_fields, "starts_with", value)),)
             folded = clean.casefold()
-            return self._collect(queries, self._map, lambda record: _name_rank(
+            exact = self._collect(exact_queries, self._map, lambda record: _name_rank(
                 record, folded, ("Full_Name", "First_Name", "Last_Name")
             ))
-        return self._collect(queries, self._map)
+            if exact:
+                return exact
+            return self._collect(prefix_queries, self._map, lambda record: _name_rank(
+                record, folded, ("Full_Name", "First_Name", "Last_Name")
+            ))
+        return self._collect(queries, self._map, stop_after_first_nonempty=True)
 
     def _map(self, record) -> PersonSearchResult:
         if record.get("Tipo_de_persona") != PERSON_TYPE or record.get("Tipo_ID") != PERSON_ID_TYPE:

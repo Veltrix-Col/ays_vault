@@ -33,6 +33,29 @@ class TrustedIntranetAccessMiddleware:
         request.inherited_tool_application = application
         correlation = uuid.uuid4().hex
         mode = getattr(settings, "TOOLS_ACCESS_MODE", "")
+        if application == "cotizacion_colectivos":
+            if getattr(settings, "COLECTIVOS_INTERNAL_PUBLIC_ACCESS", False):
+                request.colectivos_internal_public_access = True
+                logger.info(
+                    "tools_access result=accepted application=%s category=internal_public "
+                    "correlation=%s",
+                    application,
+                    correlation,
+                )
+                return self._secured_response(request, application)
+            if mode == LOCAL_PUBLIC:
+                if (
+                    request.user.is_authenticated
+                    and (settings.DEBUG or getattr(settings, "RUNNING_TESTS", False))
+                ):
+                    return self._secured_response(request, application)
+                logger.warning(
+                    "tools_access result=rejected application=%s "
+                    "category=internal_public_disabled correlation=%s",
+                    application,
+                    correlation,
+                )
+                return self._forbidden()
         if mode == LOCAL_PUBLIC and (
             settings.DEBUG or getattr(settings, "RUNNING_TESTS", False)
         ):

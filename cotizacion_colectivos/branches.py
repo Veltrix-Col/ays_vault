@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+import unicodedata
 
 
 class BranchConfigurationError(ValueError):
@@ -28,7 +30,7 @@ COLLECTIVE_BRANCH_CONFIG: dict[str, CollectiveBranch] = {
     "91": CollectiveBranch("91", "salud-colectivo", "Salud colectivo", "Colectivos", ("Salud colectivo",), "people_group", "person"),
     "86": CollectiveBranch("86", "exequial-colectivo", "Exequial colectivo", "Colectivos", ("Exequial colectivo",), "family_group", "person", special_rules=("El codigo 86 tambien existe para Exequial individual; exigir valor Zoho exacto.",)),
     "28": CollectiveBranch("28", "hogar-colectivo", "Hogar colectivo", "Colectivos", ("Hogar colectivo",), "property", "property"),
-    "83": CollectiveBranch("83", "vida-grupo-deudores", "Vida grupo deudores", "Colectivos", ("Vida grupo deudores",), "debtor_group", "obligation", special_rules=("Obligacion, saldo y entidad acreedora siguen pendientes de API name confirmado.",)),
+    "83": CollectiveBranch("83", "vida-grupo-deudores", "Vida grupo deudores", "Colectivos", ("VG deudores", "Vida grupo deudores"), "debtor_group", "obligation", special_rules=("Zoho usa actualmente el valor de picklist VG deudores.", "Obligacion, saldo y entidad acreedora siguen pendientes de API name confirmado.")),
     "40": CollectiveBranch("40", "movilidad-colectivo", "Movilidad colectivo", "Colectivos", ("Movilidad colectivo",), "vehicle_group", "vehicle", special_rules=("Tratar pagos negativos y estados especiales como advertencias, no como errores.",)),
 }
 
@@ -45,20 +47,28 @@ def validate_branch_config(config: dict[str, CollectiveBranch] = COLLECTIVE_BRAN
         codes.add(branch.code)
         slugs.add(branch.slug)
         for value in branch.zoho_values:
-            normalized = value.strip().casefold()
+            normalized = _normalize_branch_value(value)
             if not normalized or normalized in values:
                 raise BranchConfigurationError("La parametrizacion contiene valores Zoho ambiguos.")
             values.add(normalized)
 
 
 def classify_branch(value: object) -> CollectiveBranch | None:
-    normalized = str(value or "").strip().casefold()
+    normalized = _normalize_branch_value(value)
     if not normalized:
         return None
     for branch in COLLECTIVE_BRANCH_CONFIG.values():
-        if normalized in {item.casefold() for item in branch.zoho_values}:
+        if normalized in {_normalize_branch_value(item) for item in branch.zoho_values}:
             return branch
     return None
+
+
+def _normalize_branch_value(value: object) -> str:
+    """Normaliza variaciones tipográficas sin ampliar la allowlist funcional."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = re.sub(r"[\u2010-\u2015]", "-", text)
+    return " ".join(text.strip().casefold().split())
 
 
 validate_branch_config()

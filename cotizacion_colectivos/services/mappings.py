@@ -38,7 +38,7 @@ INSURED_RELATION_FIELDS = (
     "Name",
     "P_liza",
     "Asegurado",
-    "Afiliado",
+    "Contacto_facturaci_n_dividida_colectivas",
     "Beneficiario",
     "Riesgo",
     "Estado",
@@ -48,12 +48,32 @@ INSURED_RELATION_FIELDS = (
     "Fecha_salida_riesgo",
     "Plan",
     "Parentesco",
+    "Email",
+    "Correo_electr_nico_afiliado",
     "Prima",
     "Pago_total",
     "Pago_total_Seg_n_la_forma_de_pago_Valor_asegura",
     "Pago_EMPLEADO_Sin_IVA",
     "Valor_asegurado",
+    "Observaciones",
 )
+
+# Lookups de rol confirmados por metadata y por el perfilado real agregado.
+INSURED_CONTACT_ROLES = (
+    ("Asegurado", "Asegurado"),
+    ("Contacto_facturaci_n_dividida_colectivas", "Afiliado"),
+    ("Beneficiario", "Beneficiario"),
+)
+
+# Catálogos cerrados tomados de fields.json. Plan permanece libre porque es text.
+CONTACT_ID_TYPE_CHOICES = ("CC", "CE", "RC", "TI", "PP", "PEP", "EX", "NUIP", "PPT", "NIT")
+RELATIONSHIP_CHOICES = (
+    "Afiliado", "Abuelo", "Cónyuge", "Compañero permanente", "Cuñado",
+    "Exesposo", "Hermano", "Hijo", "Nieto", "Novio", "Primo",
+    "Progenitor", "Sobrino", "Suegro", "Tio", "Yerno/Nuera", "Otro",
+)
+RELATION_ROLE_CHOICES = tuple(label for _field, label in INSURED_CONTACT_ROLES)
+INSURED_STATE_CHOICES = ("Activo", "Excluido", "Cancelado", "Congelado")
 
 POLICY_DETAIL_FIELDS = (
     "id",
@@ -68,6 +88,8 @@ POLICY_DETAIL_FIELDS = (
     "Renovable",
     "Modo_de_pago",
     "Frecuencia",
+    "Periodicidad_de_pago",
+    "Medio_de_pago",
     "N_mero_de_cuotas",
     "Fecha_primera_cuota",
     "Pago_1",
@@ -82,6 +104,11 @@ POLICY_DETAIL_FIELDS = (
     "Pago_10",
     "Pago_11",
     "Pago_12",
+    "Valor_prima",
+    "Pago_total",
+    "Valor_asegurado",
+    "Referencia_Plan",
+    "Plan",
 )
 
 RISK_DETAIL_FIELDS = (

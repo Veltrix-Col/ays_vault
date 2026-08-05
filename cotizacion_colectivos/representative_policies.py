@@ -12,6 +12,7 @@ from integrations.zoho.exceptions import ZohoError
 from integrations.zoho.schemas import FieldMetadata
 
 from .discovery import atomic_text, write_json
+from .zoho import cached_metadata_fields
 
 
 PRODUCTION_PROFILE = "production"
@@ -259,7 +260,7 @@ def _search_records(zoho, module: str, criteria: str, metadata: tuple[FieldMetad
 
 
 def _metadata_map(zoho) -> dict[str, tuple[FieldMetadata, ...]]:
-    return {module: zoho.metadata.list_fields(module) for module in (POLICY_MODULE, INSURED_MODULE, RISK_MODULE, CONTACT_MODULE)}
+    return {module: cached_metadata_fields(zoho, module) for module in (POLICY_MODULE, INSURED_MODULE, RISK_MODULE, CONTACT_MODULE)}
 
 
 def _payment_candidates(module: str, fields: list[dict[str, object]]) -> list[dict[str, object]]:

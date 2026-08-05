@@ -31,6 +31,7 @@ from .mappings import (
     CONTACT_DETAIL_FIELDS,
     CONTACTS_MODULE,
     INSURED_MODULE,
+    INSURED_CONTACT_ROLES,
     INSURED_RELATION_FIELDS,
     PERSON_ID_TYPE,
     PERSON_TYPE,
@@ -57,7 +58,14 @@ def _lookup_id(value: object) -> str:
 
 
 def _layout(value: object) -> tuple[str, str]:
-    name = _text(value)
+    if isinstance(value, dict):
+        name = _text(value)
+    elif isinstance(value, (str, int, float, bool)) or value is None:
+        name = _text(value)
+    else:
+        getter = getattr(value, "get_name", None)
+        candidate = getter() if callable(getter) else getattr(value, "name", "")
+        name = _text(candidate) if isinstance(candidate, (str, int, float, bool)) else ""
     folded = name.casefold()
     category = "collective" if "colectiv" in folded else ("other" if name else "unknown")
     return name, category
@@ -159,18 +167,41 @@ class EntityDetailService:
     def _confirmed_relations(self, contact_id: object, source_kind: str):
         if "Riesgos1.Asegurado->Contacts" not in CONFIRMED_RELATIONS:
             return (), (), (), (), False
-        try:
-            page = self.zoho.search.by_criteria(
-                module=INSURED_MODULE,
-                criteria=f"(Asegurado:equals:{escape_criteria_value(str(contact_id))})",
-                fields=INSURED_RELATION_FIELDS,
-                page=1,
-                limit=RELATION_LIMIT,
-            )
-        except ZohoError:
-            return (), (), (), ("Asegurados, pólizas y riesgos no están disponibles temporalmente.",), False
+        relation_fields = INSURED_CONTACT_ROLES if source_kind == "person" else INSURED_CONTACT_ROLES[:1]
+        relation_records: list[dict[str, object]] = []
+        seen_relations: set[str] = set()
+        unavailable: list[str] = []
+        truncated = False
+        for relation_field, _role in relation_fields:
+            try:
+                page = self.zoho.search.by_criteria(
+                    module=INSURED_MODULE,
+                    criteria=f"({relation_field}:equals:{escape_criteria_value(str(contact_id))})",
+                    fields=INSURED_RELATION_FIELDS,
+                    page=1,
+                    limit=RELATION_LIMIT,
+                )
+            except ZohoError:
+                unavailable.append("Parte de los roles, pólizas y riesgos no está disponible temporalmente.")
+                continue
+            truncated = truncated or bool(page.more_records)
+            for item in page.records:
+                relation = dict(item)
+                relation_id = str(relation.get("id") or "")
+                if not ZOHO_ID.fullmatch(relation_id) or relation_id in seen_relations:
+                    continue
+                if _lookup_id(relation.get(relation_field)) != str(contact_id):
+                    continue
+                seen_relations.add(relation_id)
+                relation_records.append(relation)
+                if len(relation_records) >= RELATION_LIMIT:
+                    truncated = True
+                    break
+            if len(relation_records) >= RELATION_LIMIT:
+                break
 
-        relation_records = [dict(item) for item in page.records[:RELATION_LIMIT]]
+        if not relation_records and unavailable:
+            return (), (), (), tuple(dict.fromkeys(unavailable)), truncated
         policy_candidates = {_lookup_id(item.get("P_liza")) for item in relation_records}
         risk_candidates = {_lookup_id(item.get("Riesgo")) for item in relation_records}
         policy_candidates.discard("")
@@ -183,14 +214,10 @@ class EntityDetailService:
         risks: list[RelatedRisk] = []
         policy_ids: set[str] = set()
         risk_ids: set[str] = set()
-        unavailable: list[str] = []
         for relation in relation_records:
             roles = [
-                label for field, label in (
-                    ("Asegurado", "Asegurado"),
-                    ("Afiliado", "Afiliado"),
-                    ("Beneficiario", "Beneficiario"),
-                ) if _lookup_id(relation.get(field)) == str(contact_id)
+                label for field, label in INSURED_CONTACT_ROLES
+                if _lookup_id(relation.get(field)) == str(contact_id)
             ]
             relation["_relationship_role"] = " / ".join(roles) or "Asegurado"
             policy_lookup = relation.get("P_liza")
@@ -214,7 +241,7 @@ class EntityDetailService:
                     unavailable.append("Parte del detalle de riesgos no está disponible temporalmente.")
 
         policies.sort(key=lambda item: (item.layout_category != "collective", item.masked_reference))
-        return tuple(insured), tuple(policies), tuple(risks), tuple(dict.fromkeys(unavailable)), bool(page.more_records)
+        return tuple(insured), tuple(policies), tuple(risks), tuple(dict.fromkeys(unavailable)), truncated
 
     @staticmethod
     def _insured(record, policy_lookup, risk_lookup) -> RelatedInsured:
@@ -254,6 +281,7 @@ class EntityDetailService:
             end_date=_text(record.get("P_liza_Fecha_fin_de_la_vigencia")),
             layout_name=layout_name,
             layout_category=layout_category,
+            renewable=_text(record.get("Renovable")),
         ), failed
 
     def _risk_by_id(self, risk_id: str, relation, prefetched=None) -> tuple[RelatedRisk, bool]:
@@ -307,6 +335,7 @@ class EntityDetailService:
                 layout_category=layout_category,
                 relationship_source="direct_tomador",
                 relationship_confidence="partial",
+                renewable=_text(record.get("Renovable")),
             ))
         policies.sort(key=lambda item: (item.layout_category != "collective", item.masked_reference))
         return tuple(policies), (), bool(page.more_records)
@@ -338,7 +367,7 @@ class EntityDetailService:
             })
             item["policies"].append(policy)
             if branch is None:
-                item["warnings"].add("Ramo pendiente de clasificación; las solicitudes permanecen deshabilitadas.")
+                item["warnings"].add("Ramo pendiente de clasificación funcional.")
         for relation in insured:
             branch = classify_branch(relation.branch)
             key = branch.code if branch else f"unknown:{relation.branch.casefold()}"

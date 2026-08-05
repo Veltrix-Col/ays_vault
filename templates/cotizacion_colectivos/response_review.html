@@ -8,8 +8,9 @@
   {% csrf_token %}
   <section class="relation-card group-table-wrap">
     <table class="group-table">
-      <thead><tr><th>Registro</th><th>Campo</th><th>Acción</th><th>Decisión</th><th>Valor aprobado</th><th>Observación interna</th><th>Observación cliente</th></tr></thead>
+      <thead><tr><th>Póliza</th><th>Registro</th><th>Campo</th><th>Acción</th><th>Decisión</th><th>Valor aprobado</th><th>Observación interna</th><th>Observación cliente</th></tr></thead>
       <tbody>{% for change in response.changes.all %}<tr>
+        <td>{% if change.policy %}<strong>{{ change.policy.branch_name }}</strong><br><small>{{ change.policy.masked_policy_reference }}</small>{% else %}Póliza histórica{% endif %}</td>
         <td>{% if change.original_record %}Registro {{ change.original_record.original_position }}{% else %}Inclusión{% endif %}</td>
         <td>{{ change.functional_field }}</td><td>{{ change.get_action_display }}</td>
         <td><select name="decision_{{ change.pk }}"><option value="">Pendiente</option><option value="APROBAR">Aprobar</option><option value="RECHAZAR">Rechazar</option><option value="REQUIERE_CORRECCION">Requiere corrección</option><option value="APROBAR_CON_AJUSTE">Aprobar con ajuste</option></select></td>

@@ -20,6 +20,21 @@ class PersonSearchResult:
 
 
 @dataclass(frozen=True)
+class RequestPolicyOption:
+    detail_token: str
+    masked_reference: str
+    branch_code: str
+    branch_name: str
+    insurer: str
+    state: str
+    start_date: str = ""
+    end_date: str = ""
+    related_count: int = 0
+    warnings: tuple[str, ...] = ()
+    renewable: str = ""
+
+
+@dataclass(frozen=True)
 class ContactSummary:
     person_type: str
     id_type: str
@@ -45,6 +60,7 @@ class RelatedPolicy:
     layout_category: str = "unknown"
     relationship_source: str = "insured"
     relationship_confidence: str = "confirmed"
+    renewable: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,8 +129,21 @@ class PolicyDetail:
     risks: tuple[RelatedRisk, ...]
     active_count: int
     excluded_count: int
+    retired_count: int = 0
+    affiliate_count: int = 0
+    beneficiary_count: int = 0
+    plan_values: tuple[str, ...] = ()
+    economic_values: tuple[tuple[str, str], ...] = ()
     warnings: tuple[str, ...] = ()
     truncated: bool = False
+    full_reference: str = ""
+    layout_name: str = ""
+    layout_category: str = "unknown"
+    source_kind: str = ""
+    source_name: str = ""
+    source_summary: ContactSummary | None = None
+    payment_method: str = ""
+    payment_periodicity: str = ""
 
 
 @dataclass(frozen=True)
@@ -129,7 +158,28 @@ class GroupMember:
     plan: str
     relationship: str
     risk_summary: str
+    risk_attributes: tuple[tuple[str, str], ...] = ()
+    document: str = ""
+    email: str = ""
+    phone: str = ""
+    mobile: str = ""
     economic_values: tuple[tuple[str, str], ...] = ()
+    associate_name: str = ""
+    associate_id_type: str = ""
+    associate_document: str = ""
+    associate_masked_document: str = ""
+    insured_name: str = ""
+    insured_id_type: str = ""
+    insured_document: str = ""
+    insured_masked_document: str = ""
+    beneficiary_name: str = ""
+    beneficiary_id_type: str = ""
+    beneficiary_document: str = ""
+    beneficiary_masked_document: str = ""
+    associate_key: str = ""
+    insured_key: str = ""
+    beneficiary_key: str = ""
+    risk_key: str = ""
 
 
 @dataclass(frozen=True)

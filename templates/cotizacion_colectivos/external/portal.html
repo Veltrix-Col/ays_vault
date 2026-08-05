@@ -1,14 +1,73 @@
 {% extends 'cotizacion_colectivos/external/base.html' %}
-{% block title %}{{ item.public_id }}{% endblock %}
+{% load static %}
+{% block title %}Mi póliza{% endblock %}
 {% block content %}
-<header class="external-hero"><p class="eyebrow">Solicitud {{ item.public_id }}</p><h1>{{ item.branch_name }}</h1><div class="summary"><span>{{ item.client_label }}</span><span>Póliza {{ item.masked_policy_reference }}</span><span>Fecha límite {{ item.deadline }}</span><span>{{ item.get_request_type_display }}</span></div></header>
-<section class="external-card"><h2>Información de la solicitud</h2><p>Revise la información precargada y registre únicamente las novedades necesarias. Los valores económicos actuales son informativos.</p>{% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}</section>
-{% if health_enabled %}
-<form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card">{% csrf_token %}<h2>Grupo actual</h2><div class="responsive-table"><table><thead><tr><th>Rol</th><th>Estado</th><th>Plan</th><th>Acción</th><th>Plan solicitado</th><th>Parentesco</th><th>Fecha efectiva</th><th>Motivo</th><th>Observaciones</th></tr></thead><tbody>{% for row in records %}<tr><td>{{ row.role }}</td><td>{{ row.initial_status }}</td><td>{{ row.plan|default:'Sin información' }}</td><td><select name="action_{{ row.public_key }}"><option value="SIN_CAMBIOS">Sin cambios</option><option value="MODIFICAR">Modificar</option><option value="RETIRAR">Retirar</option></select></td><td><input name="plan_{{ row.public_key }}" maxlength="120"></td><td><input name="parentesco_{{ row.public_key }}" maxlength="80"></td><td><input type="date" name="fecha_efectiva_{{ row.public_key }}"></td><td><input name="motivo_{{ row.public_key }}" maxlength="200"></td><td><input name="observaciones_{{ row.public_key }}" maxlength="500"></td></tr>{% endfor %}</tbody></table></div><details><summary>Incluir un nuevo asegurado o beneficiario</summary><input type="hidden" name="include_action" value="INCLUIR"><label>Rol<select name="include_rol"><option>Asegurado</option><option>Beneficiario</option></select></label><label>Tipo de identificación<select name="include_tipo_id"><option>CC</option><option>CE</option><option>TI</option><option>RC</option><option>PP</option><option>PEP</option><option>PPT</option><option>NIT</option></select></label><label>Documento<input name="include_documento" inputmode="numeric" maxlength="30"></label><label>Nombre<input name="include_nombre" maxlength="180"></label><label>Plan<input name="include_plan" maxlength="120"></label><label>Parentesco<input name="include_parentesco" maxlength="80"></label><label>Fecha efectiva<input type="date" name="include_fecha_efectiva"></label><label>Motivo<input name="include_motivo" maxlength="200"></label><label>Observaciones<input name="include_observaciones" maxlength="500"></label></details><label>Observaciones generales<textarea name="client_observations" maxlength="2000"></textarea></label><button type="submit">Guardar borrador</button>{% if latest %}<p>Último borrador: versión {{ latest.version }} · {{ latest.updated_at }}</p>{% endif %}</form>
-{% else %}<section class="external-card"><h2>Información actual</h2><p>Este ramo se muestra en modo conservador. La edición específica se habilitará cuando su parametrización quede confirmada.</p></section>{% endif %}
-<section class="external-card"><h2>Excel de novedades</h2><p>La validación genera una vista previa temporal. Ningún borrador cambia hasta que confirme expresamente la importación.</p><form method="post" action="{% url 'colectivos_external:download_template' %}">{% csrf_token %}<button type="submit">Descargar plantilla</button></form><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_excel' %}">{% csrf_token %}<label>Archivo XLSX<input type="file" name="workbook" accept=".xlsx" required></label><button type="submit">Validar y previsualizar</button></form></section>
-{% if latest %}
-<section class="external-card"><h2>Adjuntos</h2><p>PDF, JPG o PNG. Los archivos quedan pendientes de revisión antivirus; no se afirma que exista un motor automático.</p><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_attachment' %}">{% csrf_token %}{{ attachment_form.as_p }}<button type="submit">Cargar soporte</button></form></section>
-<section class="external-card"><h2>Enviar respuesta</h2><form method="post" action="{% url 'colectivos_external:submit' %}">{% csrf_token %}{{ submit_form.as_p }}<button type="submit">Enviar definitivamente</button></form></section>
-{% endif %}
+<header class="external-hero">
+  <p class="eyebrow">Portal seguro de A&amp;S</p>
+  <h1>Mi póliza</h1>
+  <p>Revise su grupo y cuéntenos únicamente qué necesita cambiar.</p>
+  <div class="summary">
+    <span>{{ policy_sections|length }} póliza{{ policy_sections|length|pluralize }}</span>
+    <span>Fecha límite {{ item.deadline }}</span>
+    <span>{{ item.get_request_type_display }}</span>
+  </div>
+</header>
+<section class="external-card external-card--notice" aria-labelledby="important-notice">
+  <h2 id="important-notice">Información importante</h2>
+  <p>Este enlace fue generado para revisar la información de las pólizas indicadas. Si no reconoce el enlace o la información no le corresponde, no realice cambios y comuníquese con A&amp;S.</p>
+  <p>Enviar la respuesta no modifica automáticamente Zoho ni la póliza.</p>
+  <p>Si tiene dudas, {{ contact_channel }}</p>
+</section>
+<section class="external-card external-card--steps">
+  <h2>¿Qué debo hacer?</h2>
+  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Abra solamente la tarjeta que necesite actualizar.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
+  {% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
+</section>
+<form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card" data-external-response>
+  {% csrf_token %}
+  <div class="external-section-heading"><div><p class="eyebrow">Su información</p><h2>Mis pólizas y mi grupo</h2></div><span class="external-save-state">Guardado manual</span></div>
+  <nav class="external-policy-nav" aria-label="Pólizas disponibles">
+    {% for section in policy_sections %}<a href="#policy-{{ forloop.counter }}">Póliza {{ forloop.counter }} · {% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</a>{% endfor %}
+  </nav>
+  <div class="external-response-tools">
+    <label>Buscar dentro de mi información<input type="search" data-row-filter placeholder="Persona, rol, estado, plan o bien" autocomplete="off"></label>
+    <p aria-live="polite"><strong data-progress-count>0</strong> cambios seleccionados · <strong data-visible-count>0</strong> elementos visibles</p>
+  </div>
+  {% for section in policy_sections %}
+  <section class="external-policy" id="policy-{{ forloop.counter }}">
+    <header><div><p class="eyebrow">Mi póliza {{ forloop.counter }}</p><h3>{% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</h3>
+      <p>{% if section.policy %}{{ section.policy.masked_reference }} · {{ section.policy.insurer|default:"Aseguradora sin información" }}{% else %}{{ item.masked_policy_reference }}{% endif %}</p>
+    </div><span class="external-policy-status">Solo lectura hasta guardar cambios</span></header>
+    {% if section.allowed_actions %}
+  <div class="functional-groups">
+    {% for group in section.functional_groups %}<article class="functional-group-card"><header><div><p class="eyebrow">Titular o principal</p><h4>{{ group.principal.display_name }}</h4><p>{% for role in group.principal.roles %}<span class="external-role">{{ role }}</span>{% endfor %}</p></div><span>{{ group.related_count }} relacionado{{ group.related_count|pluralize }}</span></header><p>{{ group.principal.state }}{% if group.principal.plan %} · Plan {{ group.principal.plan }}{% endif %}</p><details><summary>Ver familia, beneficiarios y coberturas</summary><div class="functional-drawer">{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section %}{% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section %}{% endfor %}{% for risk in group.risks %}<article class="functional-risk"><strong>{{ risk.summary }}</strong>{% for label, value in risk.attributes.items %}<span>{{ value }}</span>{% endfor %}</article>{% endfor %}</div></details></article>{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
+  </div>
+  {% if section.allows_include or not section.policy %}<details class="external-add-card"><summary>Agregar una persona, beneficiario o bien</summary>
+    <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero agregar esta información a mi póliza</label>
+    <label>Rol<select name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}"><option value="">Seleccione</option>{% for choice in relation_roles %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    <label>Tipo de identificación<select name="{% if section.policy %}include_{{ section.policy.pk }}_tipo_id{% else %}include_tipo_id{% endif %}"><option value="">Seleccione</option>{% for choice in contact_id_types %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    <label>Documento<input name="{% if section.policy %}include_{{ section.policy.pk }}_documento{% else %}include_documento{% endif %}" inputmode="numeric" maxlength="30"></label>
+    <label>Nombre o descripción<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombre{% else %}include_nombre{% endif %}" maxlength="180"></label>
+    <label>Estado<select name="{% if section.policy %}include_{{ section.policy.pk }}_estado{% else %}include_estado{% endif %}"><option value="">Seleccione</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    {% if section.policy.branch_code == '91' or section.policy.branch_code == '86' or not section.policy %}<label>Plan<input name="{% if section.policy %}include_{{ section.policy.pk }}_plan{% else %}include_plan{% endif %}" maxlength="120"></label><label>Parentesco<select name="{% if section.policy %}include_{{ section.policy.pk }}_parentesco{% else %}include_parentesco{% endif %}"><option value="">Seleccione</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
+    {% if section.policy.branch_code == '28' %}<label>Ciudad<input name="include_{{ section.policy.pk }}_ciudad" maxlength="120"></label><label>Dirección<input name="include_{{ section.policy.pk }}_direccion" maxlength="180"></label><label>Tipo de uso<input name="include_{{ section.policy.pk }}_tipo_uso" maxlength="120"></label><label>Año de construcción<input name="include_{{ section.policy.pk }}_anio_construccion" inputmode="numeric" maxlength="4"></label><label>Descripción<input name="include_{{ section.policy.pk }}_descripcion" maxlength="300"></label><label>Valor asegurado<input name="include_{{ section.policy.pk }}_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif section.policy.branch_code == '83' %}<label>Valor asegurado<input name="include_{{ section.policy.pk }}_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif section.policy.branch_code == '40' %}<label>Vehículo<input name="include_{{ section.policy.pk }}_vehiculo" maxlength="120"></label><label>Placa<input name="include_{{ section.policy.pk }}_placa" maxlength="12"></label><label>Marca<input name="include_{{ section.policy.pk }}_marca" maxlength="80"></label><label>Modelo<input name="include_{{ section.policy.pk }}_modelo" maxlength="40"></label>{% endif %}
+    {% if not section.policy %}{% if item.branch_code == '28' %}<label>Ciudad<input name="include_ciudad" maxlength="120"></label><label>Dirección<input name="include_direccion" maxlength="180"></label><label>Tipo de uso<input name="include_tipo_uso" maxlength="120"></label><label>Año de construcción<input name="include_anio_construccion" inputmode="numeric" maxlength="4"></label><label>Descripción<input name="include_descripcion" maxlength="300"></label><label>Valor asegurado<input name="include_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif item.branch_code == '83' %}<label>Valor asegurado<input name="include_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif item.branch_code == '40' %}<label>Vehículo<input name="include_vehiculo" maxlength="120"></label><label>Placa<input name="include_placa" maxlength="12"></label><label>Marca<input name="include_marca" maxlength="80"></label><label>Modelo<input name="include_modelo" maxlength="40"></label>{% endif %}{% endif %}
+    <label>Fecha de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}"></label>
+    <label>Fecha de retiro<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_retiro{% else %}include_fecha_retiro{% endif %}"></label>
+    <label>Fecha efectiva<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_efectiva{% else %}include_fecha_efectiva{% endif %}"></label>
+    <label>Motivo<input name="{% if section.policy %}include_{{ section.policy.pk }}_motivo{% else %}include_motivo{% endif %}" maxlength="200"></label>
+    <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>
+  </details>
+  {% endif %}
+    {% else %}<p>Esta póliza no tiene ajustes editables habilitados.</p>{% endif %}
+  </section>
+  {% endfor %}
+  <label>¿Hay algo más que debamos saber?<textarea name="client_observations" maxlength="2000"></textarea></label>
+  <div class="external-sticky-save"><span>Sus cambios no se envían a Zoho automáticamente.</span><button type="submit">Guardar mis cambios</button></div>
+  {% if latest %}<p>Último borrador: versión {{ latest.version }} · {{ latest.updated_at }}</p>{% endif %}
+</form>
+<section class="external-card"><details><summary><strong>Prefiero trabajar con Excel</strong></summary><p>Descargue la plantilla o cargue un archivo para revisarlo antes de aplicarlo a esta respuesta.</p><div class="external-excel-actions"><form method="post" action="{% url 'colectivos_external:download_template' %}">{% csrf_token %}<button type="submit">Descargar plantilla</button></form><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_excel' %}">{% csrf_token %}<label>Archivo XLSX<input type="file" name="workbook" accept=".xlsx" required></label><button type="submit">Revisar archivo</button></form></div></details></section>
+{% if latest %}<section class="external-card"><h2>Adjuntos</h2><p>PDF, JPG o PNG.</p><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_attachment' %}">{% csrf_token %}{{ attachment_form.as_p }}<button type="submit">Cargar soporte</button></form></section>{% endif %}
+<section class="external-card"><h2>Confirmar y enviar</h2><form method="post" action="{% url 'colectivos_external:submit' %}">{% csrf_token %}<label>Observaciones del cliente<textarea name="client_observations" maxlength="2000"></textarea></label>{{ submit_form.as_p }}<button type="submit">Enviar respuesta</button></form></section>
+<script src="{% static 'js/colectivos-external.js' %}" defer></script>
 {% endblock %}

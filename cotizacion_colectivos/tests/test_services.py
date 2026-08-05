@@ -18,9 +18,11 @@ from cotizacion_colectivos.services.entity_detail import EntityDetailService
 from cotizacion_colectivos.services.mappings import (
     CONTACT_DETAIL_FIELDS,
     CONTACT_SEARCH_FIELDS,
+    INSURED_CONTACT_ROLES,
     INSURED_RELATION_FIELDS,
 )
 from cotizacion_colectivos.services.search import CompanySearchService, PersonSearchService
+from cotizacion_colectivos.services.policies import CONTACT_BATCH_FIELDS, PolicyService
 
 
 COMPANY = {
@@ -96,7 +98,7 @@ class SearchServiceTests(SimpleTestCase):
         sentinel = object()
         get_colectivos_zoho.return_value = sentinel
         self.assertIs(colectivos_zoho(), sentinel)
-        get_colectivos_zoho.assert_called_once_with()
+        get_colectivos_zoho.assert_called_once_with(timings=None)
 
     def test_company_by_nit_uses_fixed_filters_fields_and_masks_document(self):
         zoho = FakeZoho(search_pages=(Page((COMPANY,)),))
@@ -128,11 +130,9 @@ class SearchServiceTests(SimpleTestCase):
         self.assertIn("Tipo_de_persona:equals:Persona jurídica", exact)
         self.assertNotIn("Tipo_ID:equals:NIT", exact)
         self.assertIn("Nombre_comercial:equals:Empresa", exact)
-        self.assertIn("Nombre_comercial:starts_with:Empresa", zoho.search.calls[1]["criteria"])
-        self.assertIn("Raz_n_social:equals:Empresa", zoho.search.calls[2]["criteria"])
-        self.assertIn("Raz_n_social:starts_with:Empresa", zoho.search.calls[3]["criteria"])
-        self.assertIn("Full_Name:equals:Empresa", zoho.search.calls[4]["criteria"])
-        self.assertIn("Full_Name:starts_with:Empresa", zoho.search.calls[5]["criteria"])
+        self.assertIn("Raz_n_social:equals:Empresa", exact)
+        self.assertIn("Full_Name:equals:Empresa", exact)
+        self.assertEqual(len(zoho.search.calls), 1)
         self.assertTrue(
             all(
                 "Tipo_de_persona:equals:Persona jurídica" in call["criteria"]
@@ -144,7 +144,7 @@ class SearchServiceTests(SimpleTestCase):
 
     def test_company_name_falls_back_to_legal_name(self):
         record = {**COMPANY, "Nombre_comercial": "", "Raz_n_social": "Razón Segura"}
-        zoho = FakeZoho(search_pages=(Page(()), Page(()), Page((record,)), Page((record,)), Page(()), Page(())))
+        zoho = FakeZoho(search_pages=(Page(()), Page((record,))))
         self.assertEqual(CompanySearchService(zoho).search("Razón")[0].display_name, "Razón Segura")
 
     def test_exact_company_name_is_ranked_before_partial_match(self):
@@ -162,21 +162,19 @@ class SearchServiceTests(SimpleTestCase):
         PersonSearchService(zoho).search("Nombre")
         self.assertIn("Tipo_ID:equals:CC", zoho.search.calls[0]["criteria"])
         self.assertIn("N_mero_de_ID:equals:1012345678", zoho.search.calls[0]["criteria"])
-        self.assertIn("Full_Name:equals:Nombre", zoho.search.calls[2]["criteria"])
-        self.assertIn("Full_Name:starts_with:Nombre", zoho.search.calls[3]["criteria"])
-        self.assertIn("First_Name:equals:Nombre", zoho.search.calls[4]["criteria"])
-        self.assertIn("First_Name:starts_with:Nombre", zoho.search.calls[5]["criteria"])
-        self.assertIn("Last_Name:equals:Nombre", zoho.search.calls[6]["criteria"])
-        self.assertIn("Last_Name:starts_with:Nombre", zoho.search.calls[7]["criteria"])
+        name_criteria = zoho.search.calls[1]["criteria"]
+        self.assertIn("Full_Name:equals:Nombre", name_criteria)
+        self.assertIn("First_Name:equals:Nombre", name_criteria)
+        self.assertIn("Last_Name:equals:Nombre", name_criteria)
+        self.assertEqual(len(zoho.search.calls), 2)
         self.assertEqual(zoho.coql.calls, [])
 
     def test_zero_and_multiple_results_are_bounded_to_twenty(self):
         many = tuple({**COMPANY, "id": str(10**18 + index)} for index in range(25))
-        zoho = FakeZoho(
-            search_pages=(Page(()), Page(()), Page(()), Page(()), Page(()), Page(()), Page(many)),
-        )
-        self.assertEqual(CompanySearchService(zoho).search("Nada"), ())
-        self.assertEqual(len(CompanySearchService(zoho).search("Empresa")), 20)
+        empty = FakeZoho(search_pages=(Page(()), Page(())))
+        populated = FakeZoho(search_pages=(Page(many),))
+        self.assertEqual(CompanySearchService(empty).search("Nada"), ())
+        self.assertEqual(len(CompanySearchService(populated).search("Empresa")), 20)
 
     def test_unexpected_segment_is_discarded(self):
         zoho = FakeZoho(search_pages=(Page((PERSON,)), Page(()), Page(()), Page(()), Page(()), Page(())))
@@ -209,7 +207,21 @@ class SearchServiceTests(SimpleTestCase):
         facade = FakeZoho(search_pages=tuple(Page(()) for _ in range(6)))
         with patch("cotizacion_colectivos.services.search.colectivos_zoho", return_value=facade) as factory:
             CompanySearchService().search("Empresa")
-        factory.assert_called_once_with()
+        factory.assert_called_once()
+        self.assertIn("timings", factory.call_args.kwargs)
+
+    def test_person_exact_document_skips_prefix(self):
+        zoho = FakeZoho(search_pages=(Page((PERSON,)), Page(())))
+        results = PersonSearchService(zoho).search("1012345678")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(zoho.search.calls), 1)
+
+    def test_text_search_skips_prefix_when_any_exact_match_exists(self):
+        zoho = FakeZoho(search_pages=(Page((COMPANY,)), Page(()), Page(())))
+        results = CompanySearchService(zoho).search("Empresa")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(zoho.search.calls), 1)
+        self.assertTrue(all("starts_with" not in call["criteria"] for call in zoho.search.calls))
 
     def test_timeout_is_translated_without_internal_detail(self):
         zoho = FakeZoho(search_pages=(ZohoTimeoutError("endpoint privado"),))
@@ -323,7 +335,7 @@ class DetailServiceTests(SimpleTestCase):
 
     def test_person_company_lookup_is_only_displayed_when_present(self):
         record = {**PERSON, "Empresa": {"id": COMPANY["id"], "name": "Empresa relacionada"}}
-        zoho = FakeZoho(search_pages=(Page(()), Page(())), record={"Contacts": record})
+        zoho = FakeZoho(search_pages=(Page(()), Page(()), Page(()), Page(())), record={"Contacts": record})
         detail = EntityDetailService(zoho).person(sign_record_id(PERSON["id"]))
         self.assertEqual(detail.company_name, "Empresa relacionada")
 
@@ -334,11 +346,219 @@ class DetailServiceTests(SimpleTestCase):
         self.assertEqual(detail.direct_policies[0].layout_category, "unknown")
 
     def test_relations_use_only_ids_and_never_join_by_name(self):
-        zoho = FakeZoho(search_pages=(Page(()), Page(())), record={"Contacts": PERSON})
+        zoho = FakeZoho(search_pages=(Page(()), Page(()), Page(()), Page(())), record={"Contacts": PERSON})
         EntityDetailService(zoho).person(sign_record_id(PERSON["id"]))
-        self.assertEqual(zoho.search.calls[0]["criteria"], f"(Asegurado:equals:{PERSON['id']})")
-        self.assertEqual(zoho.search.calls[1]["criteria"], f"(Tomador_principal1:equals:{PERSON['id']})")
+        self.assertEqual(
+            [call["criteria"] for call in zoho.search.calls[:3]],
+            [f"({field}:equals:{PERSON['id']})" for field, _label in INSURED_CONTACT_ROLES],
+        )
+        self.assertEqual(zoho.search.calls[3]["criteria"], f"(Tomador_principal1:equals:{PERSON['id']})")
         self.assertNotIn(PERSON["Full_Name"], str(zoho.search.calls))
+
+    def test_person_detail_resolves_insured_affiliate_and_beneficiary_roles(self):
+        relations = []
+        for index, (field, _label) in enumerate(INSURED_CONTACT_ROLES):
+            relations.append({
+                "id": str(3234567890123456789 + index),
+                field: {"id": PERSON["id"], "name": "No usar para unir"},
+                "Estado": "Activo",
+                "Ramo": "Salud colectivo",
+                "Name": f"REL-{index}",
+            })
+        zoho = FakeZoho(
+            search_pages=(*(Page((relation,)) for relation in relations), Page(())),
+            record={"Contacts": PERSON},
+        )
+        detail = EntityDetailService(zoho).person(sign_record_id(PERSON["id"]))
+        self.assertEqual({item.role for item in detail.insured}, {"Asegurado", "Afiliado", "Beneficiario"})
+        self.assertEqual(len(detail.insured), 3)
+        self.assertNotIn("No usar para unir", repr(detail))
+
+    def test_relation_fields_use_confirmed_affiliate_api_name(self):
+        self.assertIn("Contacto_facturaci_n_dividida_colectivas", INSURED_RELATION_FIELDS)
+        self.assertNotIn("Afiliado", INSURED_RELATION_FIELDS)
+
+    def test_policy_group_restores_affiliate_contact_and_relationship(self):
+        policy_id = "4234567890123456789"
+        relation = {
+            "id": "3234567890123456789",
+            "Contacto_facturaci_n_dividida_colectivas": {"id": PERSON["id"], "name": "No usar"},
+            "Estado": "Activo",
+            "Ramo": "Salud colectivo",
+            "Parentesco": "Afiliado",
+            "Plan": "Plan vigente",
+        }
+        contact = {**PERSON, "Email": "persona@example.test", "Mobile": "3000000000"}
+        zoho = FakeZoho(
+            search_pages=(
+                Page(({"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"},)),
+                Page((relation,)),
+            ),
+            coql_pages=(Page((contact,)),),
+            record={"Polizas": {"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"}},
+        )
+        detail, members = PolicyService(zoho).group(sign_record_id(policy_id, "policy"))
+        self.assertEqual(detail.branch_code, "91")
+        self.assertEqual(members[0].role, "Afiliado")
+        self.assertEqual(members[0].relationship, "Afiliado")
+        self.assertEqual(members[0].email, "persona@example.test")
+        self.assertEqual(members[0].mobile, "3000000000")
+        self.assertEqual(members[0].associate_name, contact["Full_Name"])
+        self.assertEqual(zoho.coql.calls[0]["query"].split(" from ")[0], f"select {','.join(CONTACT_BATCH_FIELDS)}")
+
+    def test_policy_layout_never_exposes_an_sdk_object_representation(self):
+        class SDKLayoutLike:
+            def get_name(self):
+                return "Colectivos"
+
+        policy_id = "4234567890123456789"
+        zoho = FakeZoho(
+            search_pages=(
+                Page(({"id": policy_id, "Name": "POL", "Ramo": "Salud colectivo", "Layout": SDKLayoutLike()},)),
+                Page(()),
+            ),
+            record={
+                "Polizas": {
+                    "id": policy_id,
+                    "Name": "POL",
+                    "Ramo": "Salud colectivo",
+                    "Layout": SDKLayoutLike(),
+                }
+            },
+        )
+        detail, _members = PolicyService(zoho).group(sign_record_id(policy_id, "policy"))
+        self.assertEqual(detail.layout_name, "Colectivos")
+        self.assertEqual(detail.layout_category, "collective")
+        self.assertNotIn("object at", repr(detail))
+    def test_policy_hydration_fetches_each_risk_batch_only_once(self):
+        policy_id = "4234567890123456789"
+        contact_id = "5234567890123456781"
+        risk_id = "6234567890123456781"
+        relation = {
+            "id": "3234567890123456789",
+            "Asegurado": {"id": contact_id},
+            "Riesgo": {"id": risk_id},
+            "Estado": "Activo",
+            "Ramo": "Salud colectivo",
+        }
+        zoho = FakeZoho(
+            search_pages=(
+                Page(({"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"},)),
+                Page((relation,)),
+            ),
+            coql_pages=(
+                Page(({"id": contact_id, "Full_Name": "Persona"},)),
+                Page(({"id": risk_id, "Name": "Riesgo", "Tipo_de_riesgo": "Persona"},)),
+            ),
+            record={"Polizas": {"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"}},
+        )
+        service = PolicyService(zoho)
+        detail, members = service.group(sign_record_id(policy_id, "policy"))
+        self.assertEqual(len(zoho.coql.calls), 2)
+        self.assertEqual(service.timings["records_queries"], 0)
+        self.assertEqual(service.timings["search_queries"], 2)
+        self.assertEqual(service.timings["coql_queries"], 2)
+        self.assertEqual(service.timings["remote_queries"], 4)
+        self.assertEqual(service.timings["insured_pages"], 1)
+        self.assertEqual(service.timings["contacts_batches"], 1)
+        self.assertEqual(service.timings["risks_batches"], 1)
+        self.assertEqual(zoho.records.calls, [])
+        self.assertEqual(zoho.search.calls[0]["module"], "Polizas")
+        self.assertEqual(zoho.search.calls[0]["criteria"], f"(id:equals:{policy_id})")
+        self.assertEqual(len(detail.risks), 1)
+        self.assertEqual(members[0].risk_summary, "Persona")
+
+    def test_beneficiary_member_retains_confirmed_associate_and_insured_lookups(self):
+        policy_id = "4234567890123456789"
+        associate_id = "5234567890123456781"
+        insured_id = "5234567890123456782"
+        beneficiary_id = "5234567890123456783"
+        relation = {
+            "id": "3234567890123456789",
+            "Contacto_facturaci_n_dividida_colectivas": {"id": associate_id},
+            "Asegurado": {"id": insured_id},
+            "Beneficiario": {"id": beneficiary_id},
+            "Estado": "Activo", "Ramo": "Salud colectivo", "Parentesco": "Hijo",
+        }
+        contacts = tuple(
+            {
+                "id": identifier, "Full_Name": label, "Tipo_ID": kind,
+                "N_mero_de_ID": document,
+            }
+            for identifier, label, kind, document in (
+                (associate_id, "Asociado", "CC", "100"),
+                (insured_id, "Asegurado", "CC", "200"),
+                (beneficiary_id, "Beneficiario", "TI", "300"),
+            )
+        )
+        zoho = FakeZoho(
+            search_pages=(
+                Page(({"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"},)),
+                Page((relation,)),
+            ),
+            coql_pages=(Page(contacts),),
+            record={"Polizas": {"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"}},
+        )
+        _detail, members = PolicyService(zoho).group(sign_record_id(policy_id, "policy"))
+        beneficiary = next(member for member in members if member.role == "Beneficiario")
+        self.assertEqual(beneficiary.associate_document, "100")
+        self.assertEqual(beneficiary.insured_document, "200")
+        self.assertEqual(beneficiary.beneficiary_document, "300")
+        self.assertEqual(beneficiary.relationship, "Hijo")
+
+    def test_policy_relations_use_controlled_pagination_beyond_first_page(self):
+        first = {"id": "3234567890123456781", "Estado": "Activo"}
+        second = {"id": "3234567890123456782", "Estado": "Activo"}
+        zoho = FakeZoho(search_pages=(
+            Page(records=(first,), count=1, more_records=True),
+            Page(records=(second,), count=1, more_records=False),
+        ))
+        service = PolicyService(zoho)
+        records, truncated = service._relations("4234567890123456789")
+        self.assertEqual(records, (first, second))
+        self.assertFalse(truncated)
+        self.assertEqual([call["page"] for call in zoho.search.calls], [1, 2])
+        self.assertTrue(all(call["limit"] <= 200 for call in zoho.search.calls))
+
+    @patch("cotizacion_colectivos.services.policies.POLICY_GROUP_LIMIT", 1200)
+    @patch("cotizacion_colectivos.services.policies.POLICY_GROUP_PAGE_SIZE", 200)
+    def test_policy_relations_complete_group_larger_than_legacy_thousand_limit(self):
+        pages = []
+        for page_number in range(6):
+            size = 200 if page_number < 5 else 1
+            records = tuple(
+                {
+                    "id": str(3_000_000_000_000_000_000 + page_number * 200 + index),
+                    "Estado": "Activo",
+                }
+                for index in range(size)
+            )
+            pages.append(Page(records=records, count=size, more_records=page_number < 5))
+        zoho = FakeZoho(search_pages=tuple(pages))
+        records, truncated = PolicyService(zoho)._relations("4234567890123456789")
+        self.assertEqual(len(records), 1001)
+        self.assertFalse(truncated)
+        self.assertEqual([call["page"] for call in zoho.search.calls], [1, 2, 3, 4, 5, 6])
+        self.assertTrue(all(call["limit"] == 200 for call in zoho.search.calls))
+
+    @patch("cotizacion_colectivos.services.policies.POLICY_GROUP_LIMIT", 1001)
+    @patch("cotizacion_colectivos.services.policies.POLICY_GROUP_PAGE_SIZE", 200)
+    def test_group_over_configured_max_fails_before_publishing_partial_data(self):
+        pages = tuple(
+            Page(
+                records=tuple(
+                    {"id": str(4_000_000_000_000_000_000 + page_number * 200 + index)}
+                    for index in range(200)
+                ),
+                count=200,
+                more_records=True,
+            )
+            for page_number in range(6)
+        )
+        with self.assertRaises(ColectivosServiceError) as raised:
+            PolicyService(FakeZoho(search_pages=pages))._relations("4234567890123456789")
+        self.assertEqual(raised.exception.code, "group_too_large")
+        self.assertNotIn("parcial", raised.exception.message.casefold())
 
     def test_multiple_policy_and_risk_relations_are_fetched_in_fixed_batches(self):
         relations = tuple({

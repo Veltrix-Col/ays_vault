@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from datetime import timedelta
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from cotizacion_colectivos.models import (
     RevisionSolicitudColectivo,
     SolicitudColectivo,
     SolicitudColectivoRegistro,
+    NotificacionColectivos,
 )
 from cotizacion_colectivos.services.attachments import store_attachment
 from cotizacion_colectivos.services.excel_roundtrip import (
@@ -94,8 +96,7 @@ class ExternalWorkflowTests(TestCase):
         match = resolve(reverse("colectivos_external:portal"))
         self.assertEqual(match.url_name, "portal")
 
-    @override_settings(DEBUG=True, COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION="token_only")
-    def test_external_portal_uses_isolated_cookie_without_django_login(self):
+    def test_external_portal_uses_direct_link_and_isolated_cookie_without_django_login(self):
         generated = self.access()
         self.request.status = self.request.Status.SENT
         self.request.save(update_fields=("status",))
@@ -108,6 +109,99 @@ class ExternalWorkflowTests(TestCase):
         self.assertEqual(portal_response.status_code, 200)
         self.assertNotIn("_auth_user_id", self.client.session)
         self.assertEqual(portal_response["Cache-Control"], "max-age=0, no-cache, no-store, must-revalidate, private")
+        self.assertContains(portal_response, "data-row-filter", html=False)
+        self.assertContains(portal_response, "data-progress-count", html=False)
+        self.assertContains(portal_response, "js/colectivos-external.js", html=False)
+        self.assertContains(portal_response, "Mi póliza")
+        self.assertContains(portal_response, "Mis pólizas y mi grupo")
+        self.assertContains(portal_response, "Buscar dentro de mi información")
+        self.assertNotContains(portal_response, "Riesgos1")
+        self.assertNotContains(portal_response, "lookups")
+
+    @patch(
+        "cotizacion_colectivos.external_views._policy_sections",
+        return_value=({"grouping_warnings": ("relación inconsistente",)},),
+    )
+    def test_portal_warning_log_uses_request_correlation_without_model_attribute(self, _sections):
+        generated = self.access()
+        entry = self.client.get(
+            reverse("colectivos_external:entry", args=[generated.token])
+        )
+        self.assertEqual(entry.status_code, 302)
+        with self.assertLogs("cotizacion_colectivos", level="WARNING") as captured:
+            portal = self.client.get(
+                reverse("colectivos_external:portal"),
+                HTTP_X_CORRELATION_ID="qa-safe-correlation",
+            )
+        self.assertEqual(portal.status_code, 200)
+        self.assertIn("correlation=qa-safe-correlation", " ".join(captured.output))
+        self.assertNotIn("Cliente de prueba", " ".join(captured.output))
+
+    def test_client_can_confirm_without_creating_a_draft_first(self):
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        response = self.client.post(
+            reverse("colectivos_external:submit"),
+            {"declaration": "on", "client_observations": ""},
+        )
+        self.assertEqual(response.status_code, 200)
+        submitted = self.request.responses.get()
+        self.assertEqual(submitted.status, submitted.Status.SUBMITTED)
+        self.request.refresh_from_db()
+        self.assertEqual(self.request.status, self.request.Status.ANSWERED)
+        notification = NotificacionColectivos.objects.get(
+            notification_type="CLIENT_RESPONSE"
+        )
+        self.assertEqual(notification.title, "Respuesta recibida")
+        self.assertNotIn("revisión interna", notification.message.lower())
+
+    def test_legacy_otp_endpoint_is_not_part_of_current_flow(self):
+        generated = self.access()
+        response = self.client.post(
+            reverse("colectivos_external:verify", args=[generated.token]),
+            {"code": "123456"},
+        )
+        self.assertEqual(response.status_code, 410)
+        generated.access.refresh_from_db()
+        self.assertFalse(generated.access.otp_hash)
+
+    def test_all_confirmed_branches_have_editable_portal(self):
+        expected_field = {
+            "91": "include_parentesco",
+            "86": "include_parentesco",
+            "28": "include_direccion",
+            "83": "include_valor_asegurado",
+            "40": "include_placa",
+        }
+        for index, branch_code in enumerate(expected_field):
+            with self.subTest(branch=branch_code):
+                self.request.branch_code = branch_code
+                self.request.status = self.request.Status.READY
+                self.request.save(update_fields=("branch_code", "status"))
+                generated = generate_access(
+                    request=self.request,
+                    actor=self.admin,
+                    regenerate=index > 0,
+                )
+                response = self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+                self.assertEqual(response.status_code, 302)
+                portal = self.client.get(reverse("colectivos_external:portal"))
+                self.assertContains(portal, "Mis pólizas y mi grupo")
+                self.assertContains(portal, expected_field[branch_code])
+                saved = self.client.post(reverse("colectivos_external:save_draft"), {})
+                self.assertEqual(saved.status_code, 302)
+
+    def test_portal_uses_metadata_backed_selects_and_keeps_plan_as_text(self):
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertContains(portal, '<select name="include_rol">', html=False)
+        self.assertContains(portal, '<option value="Afiliado">Afiliado</option>', html=False)
+        self.assertContains(portal, '<option value="Cónyuge">Cónyuge</option>', html=False)
+        self.assertContains(portal, '<option value="Activo">Activo</option>', html=False)
+        self.assertContains(portal, '<input name="include_plan" maxlength="120">', html=False)
 
     def test_external_token_is_only_persisted_as_hash_and_is_tamper_evident(self):
         generated = self.access()
@@ -231,6 +325,69 @@ class ExternalWorkflowTests(TestCase):
         bad = SimpleUploadedFile("novedades.xlsx", modified.getvalue())
         with self.assertRaises(ValidationError):
             parse_novelties(bad, self.request)
+
+    def test_functional_excel_consolidates_roles_and_keeps_signed_source_mapping(self):
+        functional_key = "a" * 64
+        payload = {
+            "display_name": "Información protegida",
+            "insured_name": "Información protegida",
+            "insured_key": functional_key,
+        }
+        self.record.encrypted_branch_payload = encrypt(json.dumps(payload))
+        self.record.save(update_fields=("encrypted_branch_payload",))
+        second = SolicitudColectivoRegistro.objects.create(
+            request=self.request,
+            element_type=SolicitudColectivoRegistro.ElementType.PERSON,
+            role="Asegurado",
+            external_reference_hash="e" * 64,
+            initial_status="Activo",
+            plan="Plan vigente",
+            encrypted_branch_payload=encrypt(json.dumps(payload)),
+            original_position=2,
+            checksum="f" * 64,
+        )
+        content = build_novelties_template(self.request)
+        workbook = load_workbook(io.BytesIO(content), read_only=True)
+        self.assertEqual(workbook["Novedades"].max_row, 2)
+        upload = SimpleUploadedFile("novedades.xlsx", content)
+        preview = parse_novelties(upload, self.request)
+        self.assertEqual(preview.rows[0]["functional_key"], functional_key)
+        self.assertEqual(
+            set(preview.rows[0]["records"]),
+            {str(self.record.public_key), str(second.public_key)},
+        )
+
+    def test_one_functional_novelty_references_multiple_technical_records(self):
+        second = SolicitudColectivoRegistro.objects.create(
+            request=self.request,
+            element_type=SolicitudColectivoRegistro.ElementType.PERSON,
+            role="Beneficiario",
+            external_reference_hash="e" * 64,
+            initial_status="Activo",
+            plan="Plan vigente",
+            original_position=2,
+            checksum="f" * 64,
+        )
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{
+                "record": str(self.record.public_key),
+                "records": (str(self.record.public_key), str(second.public_key)),
+                "functional_key": "a" * 64,
+                "action": "MODIFICAR",
+                "plan": "Plan solicitado",
+                "fecha_efectiva": "2026-09-01",
+            }],
+            observations="",
+        )
+        self.assertEqual(response.changes.filter(functional_field="accion").count(), 1)
+        self.assertEqual(response.changes.filter(functional_field="plan").count(), 1)
+        mapping = json.loads(decrypt(response.changes.get(functional_field="accion").encrypted_branch_payload))
+        self.assertEqual(
+            set(mapping["source_record_keys"]),
+            {str(self.record.public_key), str(second.public_key)},
+        )
 
     def test_macro_or_external_link_payload_is_rejected(self):
         content = build_novelties_template(self.request)

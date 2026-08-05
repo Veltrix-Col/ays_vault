@@ -65,7 +65,7 @@ class ColectivosViewTests(TestCase):
         self.assertEqual(client.get(reverse("cotizacion_colectivos:index")).status_code, 200)
         self.assertEqual(client.get(reverse("vault:dashboard")).status_code, 302)
 
-    def test_superuser_sees_two_separate_forms_and_disabled_future_actions(self):
+    def test_superuser_sees_only_the_two_direct_search_forms(self):
         client = self.authenticated_client(self.admin)
         response = client.get(reverse("cotizacion_colectivos:index"))
         self.assertEqual(response.status_code, 200)
@@ -74,7 +74,9 @@ class ColectivosViewTests(TestCase):
         self.assertContains(response, 'id="id_company_query"')
         self.assertContains(response, 'id="id_person_query"')
         self.assertContains(response, 'name="query"', count=2)
-        self.assertContains(response, "disabled", count=4)
+        self.assertNotContains(response, "disabled")
+        self.assertNotContains(response, "Próximamente")
+        self.assertNotContains(response, "Solicitudes")
         self.assertContains(response, "Sandbox · Solo lectura")
 
     @override_settings(ZOHO_ACTIVE_PROFILE="production")

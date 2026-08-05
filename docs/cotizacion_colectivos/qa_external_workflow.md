@@ -1,5 +1,8 @@
 # QA reproducible del flujo externo de Colectivos
 
+> Las instrucciones de OTP son históricas. El QA vigente del enlace directo se
+> encuentra en `direct_external_flow.md`.
+
 ## Alcance y garantías
 
 Este procedimiento valida el portal externo, el Excel de ida y vuelta y el procesamiento de plazos. El flujo trabaja sobre el snapshot local de la solicitud y nunca crea, actualiza ni elimina registros en Zoho. No use datos personales reales en desarrollo.
@@ -74,6 +77,23 @@ Revise verificación OTP, portal, preview y confirmación en 320, 375, 768, 1024
 2. Revoque accesos externos que continúen activos y ejecute el procesador de plazos.
 3. Confirme que no quedan previews pendientes ni archivos temporales bajo `private_assets/colectivos/excel_previews`.
 4. En una base local descartable puede eliminar el expediente mediante las herramientas administrativas aprobadas o restaurar la base de QA. No copie adjuntos ni respuestas a artefactos versionados.
+
+## Recorrido desde la interfaz interna
+
+Sin escribir URLs manualmente:
+
+1. Busque una empresa y abra su ramo y una póliza colectiva clasificada.
+2. Compruebe `Ver grupo actual`, `Descargar Excel actual`, `Crear solicitud de actualización` y `Crear solicitud de renovación`.
+3. Descargue el Excel actual y confirme que la respuesta no queda cacheada.
+4. Cree una solicitud de actualización, confirme el snapshot y verifique la redirección al expediente.
+5. Regrese a la póliza y compruebe que la solicitud activa aparece sin mezclar expedientes de otra entidad o póliza.
+6. Abra el expediente, use `Preparar envío` y luego `Generar enlace`.
+7. Copie el enlace en la pantalla inmediata. Salga y confirme que el enlace completo no vuelve a mostrarse.
+8. Ábralo en una ventana incógnita, complete OTP y regrese al expediente para revisar estado, fechas y contador de accesos.
+9. Regenere el acceso y confirme que el anterior deja de funcionar; después pruebe la revocación explícita.
+10. Verifique también un usuario sin cada permiso: la acción debe quedar bloqueada con explicación y el endpoint debe responder 403.
+
+Revise el recorrido en 320, 375, 768, 1024 y 1440 px. No debe existir desplazamiento horizontal en los formularios ni en la ficha; las tablas extensas pueden conservar su contenedor de desplazamiento propio.
 5. Registre el resultado del QA sin documentos, nombres, destinatarios, tokens ni identificadores internos.
 
 ## Criterio de aceptación

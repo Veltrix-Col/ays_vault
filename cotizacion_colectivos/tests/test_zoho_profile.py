@@ -6,12 +6,15 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
 from integrations.zoho.exceptions import ZohoConfigurationError
 from integrations.zoho.schemas import Organization
 
 from cotizacion_colectivos.zoho import (
+    cached_metadata_fields,
+    cached_metadata_modules,
     get_colectivos_environment,
     get_colectivos_profile,
     get_colectivos_zoho,
@@ -70,6 +73,9 @@ class ColectivosProfileConfigurationTests(SimpleTestCase):
 
 
 class ColectivosProfileResolutionTests(SimpleTestCase):
+    def setUp(self):
+        cache.clear()
+
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_sandbox_calls_only_sandbox_and_validates_environment_once(self, get_zoho):
         selected = facade("sandbox")
@@ -91,6 +97,48 @@ class ColectivosProfileResolutionTests(SimpleTestCase):
         self.assertIn("operation=organization", output)
         self.assertIn("duration_ms=", output)
         self.assertNotIn("safe-org", output)
+
+    @patch("cotizacion_colectivos.zoho.get_zoho")
+    def test_organization_validation_is_cached_for_five_minutes(self, get_zoho):
+        selected = facade("sandbox")
+        get_zoho.return_value = selected
+        timings = {}
+        with override_settings(
+            ZOHO_ACTIVE_PROFILE="sandbox",
+            COLECTIVOS_ORGANIZATION_CACHE_TTL_SECONDS=300,
+        ):
+            get_colectivos_zoho(timings=timings)
+            get_colectivos_zoho(timings=timings)
+        self.assertEqual(selected.organization.calls, 1)
+        self.assertEqual(timings["organization_cache_hit"], 1)
+        self.assertEqual(timings["organization_ms"], 0)
+
+    def test_metadata_is_cached_by_profile_and_backend(self):
+        metadata = SimpleNamespace(
+            module_calls=0,
+            field_calls=0,
+        )
+
+        def list_modules():
+            metadata.module_calls += 1
+            return ("Contacts",)
+
+        def list_fields(module):
+            metadata.field_calls += 1
+            return (f"{module}.id",)
+
+        metadata.list_modules = list_modules
+        metadata.list_fields = list_fields
+        selected = SimpleNamespace(
+            profile="sandbox", backend_name="sdk", metadata=metadata
+        )
+        with override_settings(COLECTIVOS_METADATA_CACHE_TTL_SECONDS=1800):
+            self.assertEqual(cached_metadata_modules(selected), ("Contacts",))
+            self.assertEqual(cached_metadata_modules(selected), ("Contacts",))
+            self.assertEqual(cached_metadata_fields(selected, "Contacts"), ("Contacts.id",))
+            self.assertEqual(cached_metadata_fields(selected, "Contacts"), ("Contacts.id",))
+        self.assertEqual(metadata.module_calls, 1)
+        self.assertEqual(metadata.field_calls, 1)
 
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_mismatched_reported_environment_is_blocked_without_fallback(self, get_zoho):

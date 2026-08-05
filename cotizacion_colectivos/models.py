@@ -8,6 +8,40 @@ from django.db import models
 from django.utils import timezone
 
 
+class WorkspacePolizaColectivo(models.Model):
+    """Workspace local cifrado; Zoho sigue siendo la fuente de verdad."""
+
+    workspace_key = models.CharField(max_length=64, unique=True, editable=False)
+    profile = models.CharField(max_length=12, db_index=True)
+    backend = models.CharField(max_length=12)
+    source_kind = models.CharField(
+        max_length=12,
+        choices=(("company", "Empresa"), ("person", "Individuo")),
+    )
+    policy_reference_hash = models.CharField(max_length=64, db_index=True, editable=False)
+    source_reference_hash = models.CharField(max_length=64, db_index=True, editable=False)
+    encrypted_snapshot = models.TextField(editable=False)
+    snapshot_checksum = models.CharField(max_length=64, editable=False)
+    snapshot_version = models.PositiveSmallIntegerField(default=1)
+    revision = models.PositiveIntegerField(default=1)
+    record_count = models.PositiveIntegerField(default=0)
+    warning_count = models.PositiveIntegerField(default=0)
+    safe_metrics = models.JSONField(default=dict, blank=True)
+    safe_timeline = models.JSONField(default=list, blank=True)
+    synced_at = models.DateTimeField(db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = (
+            models.Index(
+                fields=("profile", "source_kind", "expires_at"),
+                name="colect_ws_profile_exp",
+            ),
+        )
+
+
 class SolicitudColectivo(models.Model):
     class Status(models.TextChoices):
         DRAFT = "BORRADOR", "Borrador"
@@ -103,6 +137,7 @@ class SolicitudColectivo(models.Model):
             ("generate_external_access", "Puede generar accesos externos"),
             ("send_requests", "Puede enviar solicitudes externas"),
             ("regenerate_external_access", "Puede regenerar accesos externos"),
+            ("revoke_external_access", "Puede revocar accesos externos"),
             ("view_responses", "Puede ver respuestas externas"),
             ("review_responses", "Puede revisar respuestas externas"),
             ("request_corrections", "Puede solicitar correcciones"),
@@ -129,6 +164,45 @@ class SolicitudColectivo(models.Model):
             self.closed_at = timezone.now()
 
 
+class SolicitudColectivoPoliza(models.Model):
+    class Modality(models.TextChoices):
+        UNKNOWN = "NO_DETERMINADA", "No determinada"
+        EMPLOYER = "PATRONAL", "Patronal"
+        VOLUNTARY = "VOLUNTARIA", "Voluntaria"
+        MIXED = "MIXTA", "Mixta"
+
+    request = models.ForeignKey(SolicitudColectivo, on_delete=models.CASCADE, related_name="policies")
+    policy_reference_hash = models.CharField(max_length=64, db_index=True)
+    encrypted_policy_token = models.TextField(editable=False)
+    masked_policy_reference = models.CharField(max_length=80)
+    branch_code = models.CharField(max_length=8, db_index=True)
+    branch_name = models.CharField(max_length=100)
+    modality = models.CharField(max_length=20, choices=Modality.choices, default=Modality.UNKNOWN)
+    insurer = models.CharField(max_length=160, blank=True)
+    policy_status = models.CharField(max_length=80, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    parameter_version = models.PositiveSmallIntegerField(default=1)
+    enabled_adjustments = models.JSONField(default=list)
+    encrypted_snapshot = models.TextField(editable=False)
+    snapshot_checksum = models.CharField(max_length=64)
+    record_count = models.PositiveIntegerField(default=0)
+    warnings = models.JSONField(default=list, blank=True)
+    position = models.PositiveSmallIntegerField()
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("position",)
+        constraints = (
+            models.UniqueConstraint(fields=("request", "position"), name="colect_policy_position"),
+            models.UniqueConstraint(fields=("request", "policy_reference_hash"), name="colect_request_policy"),
+        )
+        indexes = (
+            models.Index(fields=("request", "active"), name="colect_policy_active"),
+            models.Index(fields=("branch_code", "active"), name="colect_policy_branch"),
+        )
+
+
 class SolicitudColectivoRegistro(models.Model):
     public_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 
@@ -141,6 +215,7 @@ class SolicitudColectivoRegistro(models.Model):
         OTHER = "OTRO", "Otro"
 
     request = models.ForeignKey(SolicitudColectivo, on_delete=models.CASCADE, related_name="records")
+    policy = models.ForeignKey(SolicitudColectivoPoliza, null=True, blank=True, on_delete=models.CASCADE, related_name="records")
     element_type = models.CharField(max_length=20, choices=ElementType.choices)
     role = models.CharField(max_length=40)
     external_reference_hash = models.CharField(max_length=64)
@@ -310,6 +385,7 @@ class CambioSolicitudColectivo(models.Model):
         INVALID = "INVALIDO", "Inválido"
 
     response = models.ForeignKey(RespuestaSolicitudColectivo, on_delete=models.CASCADE, related_name="changes")
+    policy = models.ForeignKey(SolicitudColectivoPoliza, null=True, blank=True, on_delete=models.PROTECT, related_name="changes")
     original_record = models.ForeignKey(SolicitudColectivoRegistro, null=True, blank=True, on_delete=models.PROTECT, related_name="response_changes")
     action = models.CharField(max_length=16, choices=Action.choices)
     functional_field = models.CharField(max_length=64)

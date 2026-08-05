@@ -72,6 +72,14 @@ Tipos habilitados inicialmente:
 
 Una solicitud activa duplicada del mismo tipo y póliza se rechaza.
 
+## Navegación operativa desde la póliza
+
+La ficha de una póliza colectiva clasificada es el punto de entrada del flujo interno. Desde allí el usuario autorizado puede ver el grupo actual, descargar el Excel actual mediante POST, crear una solicitud de actualización o renovación y abrir los expedientes locales ya vinculados a la misma póliza, entidad de origen y perfil Zoho. La asociación usa hashes con clave de la referencia firmada; nunca compara solamente el número visible de póliza.
+
+Si ya existe una solicitud activa del mismo tipo, la interfaz ofrece abrirla y el servicio vuelve a impedir el duplicado dentro de la transacción. Una póliza sin clasificación confirmada no puede exportarse ni originar solicitudes. Los permisos ausentes se explican con acciones deshabilitadas o mensajes funcionales, sin exponer detalles técnicos.
+
+El acceso externo se administra únicamente desde el expediente: borrador → preparar envío → generar acceso. El enlace completo se muestra una sola vez en la respuesta inmediata de generación y solo se conserva su hash. Un enlace vigente puede regenerarse —revocando el anterior— o revocarse explícitamente mediante POST y CSRF. Un enlace perdido no puede recuperarse; debe regenerarse.
+
 ## Estados
 
 Transiciones habilitadas en la fase interna:
@@ -93,6 +101,19 @@ Mientras el expediente permanezca en `BORRADOR`, un usuario con permiso puede ac
 ## Permisos
 
 La lectura pública/intranet de las herramientas conserva la política delegada existente. Las acciones internas exigen usuario Django activo y permiso específico; los superusuarios activos mantienen bypass administrativo. Se crearon permisos separados para ver, crear, editar borradores, asignar, aprobar, cerrar, cancelar, exportar, ver datos económicos/personales y gestionar notificaciones.
+
+Para QA sin usar superusuario, un administrador puede asignar desde Django admin, directamente al usuario o a un grupo, los permisos mínimos según la función:
+
+- `export_excel`: descargar Excel actual y plantillas autorizadas.
+- `create_requests`: crear expedientes y prepararlos para envío.
+- `view_requests`: listar y abrir expedientes asociados.
+- `generate_external_access`: generar el primer acceso externo.
+- `regenerate_external_access`: rotar un acceso y revocar el anterior.
+- `revoke_external_access`: revocar un acceso vigente sin generar otro.
+- `send_requests`: enviar la invitación durante la generación o regeneración.
+- `view_personal_data` y `view_economic_data`: habilitar las vistas que correspondan a esas categorías; no se conceden implícitamente con los permisos anteriores.
+
+Los permisos deben asignarse explícitamente; esta implementación no amplía roles globales ni reutiliza automáticamente permisos de CardManager.
 
 ## Seguridad
 

@@ -1,0 +1,20 @@
+<article class="functional-entity" data-functional-entity>
+  <header><div><strong>{{ entity.display_name|default:"Información protegida" }}</strong><p>{% for role in entity.roles %}<span class="external-role">{{ role }}</span>{% endfor %}</p></div><span>{{ entity.state|default:"Sin estado" }}</span></header>
+  {% if entity.masked_document %}<p>{{ entity.id_type }} {{ entity.masked_document }}</p>{% endif %}
+  {% if entity.relationships %}<p>Parentesco o relación: {{ entity.relationships|join:", " }}</p>{% endif %}
+  {% if entity.plan %}<p>Plan: {{ entity.plan }}</p>{% endif %}
+  <input type="hidden" name="source_records_{{ entity.key }}" value="{{ entity.source_record_keys|join:',' }}">
+  {% if section.policy %}<input type="hidden" name="policy_{{ entity.key }}" value="{{ section.policy.pk }}">{% endif %}
+  <div class="functional-action-grid">
+    <label>Acción<select name="action_entity_{{ entity.key }}" data-row-action>{% if "SIN_CAMBIOS" in section.allowed_actions %}<option value="SIN_CAMBIOS">Sin cambios</option>{% endif %}{% if "MODIFICAR" in section.allowed_actions %}<option value="MODIFICAR">Modificar</option>{% endif %}{% if "RETIRAR" in section.allowed_actions %}<option value="RETIRAR">Retirar</option>{% endif %}</select></label>
+    <label>Estado solicitado<select name="estado_entity_{{ entity.key }}"><option value="">Sin cambio</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    <label>Plan solicitado<input name="plan_entity_{{ entity.key }}" maxlength="120"></label>
+    {% if section.branch_code == '91' or section.branch_code == '86' %}<label>Parentesco solicitado<select name="parentesco_entity_{{ entity.key }}"><option value="">Sin cambio</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
+    {% if section.branch_code == '28' %}<label>Ciudad<input name="ciudad_entity_{{ entity.key }}" maxlength="120"></label><label>Dirección<input name="direccion_entity_{{ entity.key }}" maxlength="180"></label><label>Tipo de uso<input name="tipo_uso_entity_{{ entity.key }}" maxlength="120"></label><label>Año de construcción<input name="anio_construccion_entity_{{ entity.key }}" inputmode="numeric" maxlength="4"></label><label>Descripción<input name="descripcion_entity_{{ entity.key }}" maxlength="300"></label><label>Valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>{% elif section.branch_code == '83' %}<label>Valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>{% elif section.branch_code == '40' %}<label>Vehículo<input name="vehiculo_entity_{{ entity.key }}" maxlength="120"></label><label>Placa<input name="placa_entity_{{ entity.key }}" maxlength="12"></label><label>Marca<input name="marca_entity_{{ entity.key }}" maxlength="80"></label><label>Modelo<input name="modelo_entity_{{ entity.key }}" maxlength="40"></label>{% endif %}
+    <label>Fecha de ingreso<input type="date" name="fecha_ingreso_entity_{{ entity.key }}"></label>
+    <label>Fecha de retiro<input type="date" name="fecha_retiro_entity_{{ entity.key }}"></label>
+    <label>Fecha efectiva<input type="date" name="fecha_efectiva_entity_{{ entity.key }}"></label>
+    <label>Motivo<input name="motivo_entity_{{ entity.key }}" maxlength="200"></label>
+    <label class="functional-action-grid__wide">Observaciones<input name="observaciones_entity_{{ entity.key }}" maxlength="500"></label>
+  </div>
+</article>

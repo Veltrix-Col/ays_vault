@@ -5,7 +5,7 @@ import hmac
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
@@ -17,6 +17,12 @@ from django.utils.crypto import salted_hmac
 
 from vault.crypto import decrypt, encrypt
 from vault.notifications import send_notification
+from .mappings import (
+    CONTACT_ID_TYPE_CHOICES,
+    INSURED_STATE_CHOICES,
+    RELATION_ROLE_CHOICES,
+    RELATIONSHIP_CHOICES,
+)
 
 from ..models import (
     AccesoExternoSolicitudColectivo,
@@ -30,11 +36,27 @@ from ..models import (
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
 ALLOWED_ACTIONS = set(CambioSolicitudColectivo.Action.values)
-EDITABLE_FIELDS = {"tipo_id", "documento", "nombre", "rol", "plan", "parentesco", "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo", "observaciones"}
+ACTION_TO_ADJUSTMENT = {
+    CambioSolicitudColectivo.Action.UNCHANGED: "SIN_CAMBIOS",
+    CambioSolicitudColectivo.Action.MODIFY: "MODIFICACION",
+    CambioSolicitudColectivo.Action.RETIRE: "RETIRO",
+    CambioSolicitudColectivo.Action.INCLUDE: "INCLUSION",
+}
+EDITABLE_FIELDS = {
+    "tipo_id", "documento", "nombre", "rol", "plan", "parentesco",
+    "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo",
+    "observaciones", "ciudad", "direccion", "tipo_uso",
+    "anio_construccion", "descripcion", "valor_asegurado", "vehiculo",
+    "placa", "marca", "modelo", "estado",
+}
 
 
 class ExternalAccessError(ValidationError):
     pass
+
+
+class ActiveAccessExistsError(ExternalAccessError):
+    """The full secret is unavailable, but a usable access already exists."""
 
 
 @dataclass(frozen=True)
@@ -62,33 +84,72 @@ def _notify(request: SolicitudColectivo, kind: str, title: str, message: str, su
 
 
 @transaction.atomic
-def generate_access(*, request: SolicitudColectivo, actor, recipient: str, contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False) -> GeneratedAccess:
+def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False) -> GeneratedAccess:
     locked = SolicitudColectivo.objects.select_for_update().get(pk=request.pk)
     if locked.status in {locked.Status.CLOSED, locked.Status.CANCELLED, locked.Status.EXPIRED}:
         raise ExternalAccessError("La solicitud no admite un nuevo acceso.")
     if locked.status == locked.Status.DRAFT:
-        raise ExternalAccessError("La solicitud debe marcarse lista para enviar.")
+        locked.transition_to(locked.Status.READY)
+        locked.save(update_fields=("status", "updated_at"))
     if locked.deadline <= timezone.localdate() or not locked.encrypted_snapshot or not locked.assigned_to_id:
         raise ExternalAccessError("La solicitud no cumple las condiciones de envío.")
     now = timezone.now()
-    active = locked.external_accesses.select_for_update().filter(status__in=[AccesoExternoSolicitudColectivo.Status.ACTIVE, AccesoExternoSolicitudColectivo.Status.VERIFIED])
+    access_candidates = locked.external_accesses.select_for_update().filter(
+        status__in=[
+            AccesoExternoSolicitudColectivo.Status.ACTIVE,
+            AccesoExternoSolicitudColectivo.Status.VERIFIED,
+        ]
+    )
+    access_candidates.filter(expires_at__lte=now).update(
+        status=AccesoExternoSolicitudColectivo.Status.EXPIRED
+    )
+    active = access_candidates.filter(expires_at__gt=now)
     if active.exists() and not regenerate:
-        raise ExternalAccessError("Ya existe un acceso externo activo.")
+        raise ActiveAccessExistsError("Ya existe un acceso externo activo.")
     active.update(status=AccesoExternoSolicitudColectivo.Status.REVOKED, revoked_at=now, revoked_by=actor)
     selector = secrets.token_urlsafe(18)[:24]
     secret = secrets.token_urlsafe(32)
-    ttl = min(settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS, settings.COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS)
+    next_version = (locked.external_accesses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
+    configured_expiry = timezone.make_aware(datetime.combine(
+        timezone.localdate() + timedelta(days=settings.COLECTIVOS_EXTERNAL_LINK_DAYS),
+        time.max,
+    ))
+    maximum_expiry = timezone.make_aware(datetime.combine(
+        timezone.localdate() + timedelta(days=settings.COLECTIVOS_EXTERNAL_LINK_MAX_DAYS),
+        time.max,
+    ))
+    deadline_expiry = timezone.make_aware(datetime.combine(locked.deadline, time.max))
+    expires_at = min(configured_expiry, maximum_expiry, deadline_expiry)
     access = AccesoExternoSolicitudColectivo.objects.create(
         request=locked, selector=selector, token_hash=_token_hash(secret), created_by=actor,
-        expires_at=now + timedelta(seconds=ttl), encrypted_recipient=encrypt(recipient.strip()),
-        recipient_hash=_recipient_hash(recipient), encrypted_contact_name=encrypt(contact_name.strip()),
+        version=next_version, channel="MANUAL", purpose="CLIENT_RESPONSE",
+        expires_at=expires_at, encrypted_recipient=encrypt(recipient.strip()),
+        recipient_hash=_recipient_hash(recipient) if recipient.strip() else "", encrypted_contact_name=encrypt(contact_name.strip()),
         encrypted_intro=encrypt(intro.strip()), encrypted_instructions=encrypt(instructions.strip()),
     )
     event = "EXTERNAL_ACCESS_REGENERATED" if regenerate else "EXTERNAL_ACCESS_CREATED"
     EventoSolicitudColectivo.objects.create(request=locked, actor=actor, event_type=event, safe_metadata={"access_version": access.version})
-    _notify(locked, event, "Acceso externo generado", f"Se generó un acceso para {locked.public_id}.", str(access.pk))
+    # La generación queda en el historial técnico. No crea una tarea o
+    # notificación administrativa para el analista.
     token = f"{selector}.{secret}"
     return GeneratedAccess(access, token, f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/{token}/", regenerate)
+
+
+@transaction.atomic
+def revoke_access(*, request: SolicitudColectivo, actor) -> AccesoExternoSolicitudColectivo:
+    access = request.external_accesses.select_for_update().filter(
+        status__in=[AccesoExternoSolicitudColectivo.Status.ACTIVE, AccesoExternoSolicitudColectivo.Status.VERIFIED]
+    ).order_by("-created_at").first()
+    if not access:
+        raise ExternalAccessError("No existe un acceso vigente para revocar.")
+    access.status = access.Status.REVOKED
+    access.revoked_at = timezone.now()
+    access.revoked_by = actor
+    access.otp_hash = ""
+    access.otp_expires_at = None
+    access.save(update_fields=("status", "revoked_at", "revoked_by", "otp_hash", "otp_expires_at"))
+    EventoSolicitudColectivo.objects.create(request=request, actor=actor, event_type="EXTERNAL_ACCESS_REVOKED", safe_metadata={"access_version": access.version})
+    return access
 
 
 def resolve_token(token: str) -> AccesoExternoSolicitudColectivo:
@@ -104,7 +165,20 @@ def resolve_token(token: str) -> AccesoExternoSolicitudColectivo:
         raise ExternalAccessError("El acceso no es válido.") from exc
     if not hmac.compare_digest(access.token_hash, _token_hash(secret)):
         raise ExternalAccessError("El acceso no es válido.")
+    if access.purpose != "CLIENT_RESPONSE" or access.version < 1:
+        raise ExternalAccessError("El acceso no es válido.")
     if access.status in {access.Status.REVOKED, access.Status.USED, access.Status.BLOCKED}:
+        raise ExternalAccessError("El acceso no está disponible.")
+    if access.request.status in {
+        access.request.Status.CLOSED,
+        access.request.Status.CANCELLED,
+        access.request.Status.EXPIRED,
+        access.request.Status.ANSWERED,
+        access.request.Status.REVIEW,
+        access.request.Status.APPROVED,
+        access.request.Status.PENDING_ZOHO,
+        access.request.Status.LOADED_ZOHO,
+    }:
         raise ExternalAccessError("El acceso no está disponible.")
     if access.expires_at <= timezone.now() or access.request.deadline < timezone.localdate():
         access.status = access.Status.EXPIRED
@@ -135,6 +209,8 @@ def send_invitation(generated: GeneratedAccess) -> None:
     access = AccesoExternoSolicitudColectivo.objects.select_for_update().select_related("request").get(pk=generated.access.pk)
     request = access.request
     recipient = decrypt(access.encrypted_recipient)
+    if not recipient:
+        raise ExternalAccessError("Debe indicar un correo para enviar la invitación.")
     record = send_notification(
         notification_type="COLECTIVOS_ACCESS_REGENERATED" if generated.regenerated else "COLECTIVOS_INVITATION", recipient=recipient,
         subject=(f"Acceso renovado · {request.public_id}" if generated.regenerated else f"Solicitud A&S · {request.public_id}"),
@@ -154,19 +230,61 @@ def send_invitation(generated: GeneratedAccess) -> None:
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_INVITATION_SENT", new_status=request.status)
 
 
+@transaction.atomic
+def send_optional_invitation(*, generated: GeneratedAccess, recipient: str) -> None:
+    """Attach an optional delivery address and send without changing the link."""
+
+    access = AccesoExternoSolicitudColectivo.objects.select_for_update().get(pk=generated.access.pk)
+    access.encrypted_recipient = encrypt(recipient.strip())
+    access.recipient_hash = _recipient_hash(recipient)
+    access.channel = "EMAIL"
+    access.save(update_fields=("encrypted_recipient", "recipient_hash", "channel"))
+    send_invitation(GeneratedAccess(access=access, token=generated.token, url=generated.url, regenerated=generated.regenerated))
+
+
 def authorize_token_only(access: AccesoExternoSolicitudColectivo) -> str:
-    if not settings.DEBUG or settings.COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION != "token_only":
-        raise ExternalAccessError("La verificación adicional es obligatoria.")
+    # Legacy API name retained for callers from already-deployed QA data.
+    return authorize_direct_access(access)
+
+
+@transaction.atomic
+def authorize_direct_access(access: AccesoExternoSolicitudColectivo) -> str:
+    """Authorize a valid high-entropy link without a second shared secret."""
+
+    locked = AccesoExternoSolicitudColectivo.objects.select_for_update().select_related("request").get(pk=access.pk)
+    if locked.status not in {locked.Status.ACTIVE, locked.Status.VERIFIED}:
+        raise ExternalAccessError("El acceso no está disponible.")
     now = timezone.now()
-    access.status = access.Status.VERIFIED
-    access.first_access_at = access.first_access_at or now
-    access.last_access_at = now
-    access.access_count += 1
-    access.save(update_fields=("status", "first_access_at", "last_access_at", "access_count"))
-    if access.request.status == access.request.Status.SENT:
-        access.request.transition_to(access.request.Status.OPENED)
-        access.request.save(update_fields=("status", "updated_at"))
-    return signing.dumps({"access": access.selector, "request": str(access.request.uuid), "nonce": secrets.token_urlsafe(16)}, salt=SESSION_SALT, compress=True)
+    if locked.expires_at <= now or locked.request.deadline < timezone.localdate():
+        raise ExternalAccessError("El acceso ha expirado.")
+    if locked.request.status not in {
+        locked.request.Status.READY,
+        locked.request.Status.SENT,
+        locked.request.Status.OPENED,
+        locked.request.Status.CORRECTION,
+    }:
+        raise ExternalAccessError("El acceso no está disponible.")
+    locked.status = locked.Status.VERIFIED
+    locked.first_access_at = locked.first_access_at or now
+    locked.last_access_at = now
+    locked.access_count += 1
+    locked.save(update_fields=("status", "first_access_at", "last_access_at", "access_count"))
+    if locked.request.status == locked.request.Status.READY:
+        locked.request.transition_to(locked.request.Status.SENT)
+    if locked.request.status in {locked.request.Status.SENT, locked.request.Status.CORRECTION}:
+        locked.request.transition_to(locked.request.Status.OPENED)
+    locked.request.save(update_fields=("status", "updated_at"))
+    EventoSolicitudColectivo.objects.create(
+        request=locked.request,
+        event_type="EXTERNAL_LINK_OPENED",
+        origin="EXTERNO",
+        safe_metadata={"access_version": locked.version},
+    )
+    return signing.dumps(
+        {"access": locked.selector, "request": str(locked.request.uuid), "nonce": secrets.token_urlsafe(16)},
+        salt=SESSION_SALT,
+        compress=True,
+    )
 
 
 def verify_otp(access: AccesoExternoSolicitudColectivo, code: str) -> str:
@@ -228,7 +346,7 @@ def resolve_external_session(cookie: str) -> AccesoExternoSolicitudColectivo:
     return access
 
 
-def response_checksum(rows: list[dict[str, str]]) -> str:
+def response_checksum(rows: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -245,28 +363,71 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             raise ExternalAccessError("Existe una acción no permitida.")
         record_key = str(row.get("record", "")).strip()
         record = None
+        source_records = []
+        policy = None
         if action != CambioSolicitudColectivo.Action.INCLUDE:
-            record = request.records.filter(public_key=record_key).first()
-            if not record or record_key in seen:
+            record_keys = tuple(dict.fromkeys(
+                str(value).strip() for value in (row.get("records") or (record_key,)) if str(value).strip()
+            ))
+            source_records = list(
+                request.records.select_related("policy").filter(public_key__in=record_keys)
+            )
+            found_keys = {str(item.public_key) for item in source_records}
+            if not record_keys or found_keys != set(record_keys) or seen.intersection(found_keys):
                 raise ExternalAccessError("Existe una referencia de registro no válida.")
-            seen.add(record_key)
+            seen.update(found_keys)
+            policy_ids = {item.policy_id for item in source_records}
+            if len(policy_ids) != 1:
+                raise ExternalAccessError("La referencia funcional mezcla pólizas.")
+            record = sorted(source_records, key=lambda item: item.original_position)[0]
+            policy = record.policy
+        elif request.policies.exists():
+            policy_key = str(row.get("policy", "")).strip()
+            if not policy_key.isdigit():
+                raise ExternalAccessError("La inclusión no identifica una póliza válida.")
+            policy = request.policies.filter(pk=int(policy_key), active=True).first()
+            if policy is None:
+                raise ExternalAccessError("La inclusión no identifica una póliza válida.")
+        if policy is not None:
+            required_adjustment = ACTION_TO_ADJUSTMENT[action]
+            if required_adjustment not in set(policy.enabled_adjustments or ()):
+                raise ExternalAccessError("La acción no está habilitada para esta póliza.")
         fields = {key: str(row.get(key, "")).strip()[:500] for key in EDITABLE_FIELDS}
+        if action == CambioSolicitudColectivo.Action.UNCHANGED:
+            fields = {key: "" for key in EDITABLE_FIELDS}
         if action in {CambioSolicitudColectivo.Action.MODIFY, CambioSolicitudColectivo.Action.RETIRE, CambioSolicitudColectivo.Action.INCLUDE} and not fields["fecha_efectiva"]:
             raise ExternalAccessError("La fecha efectiva es obligatoria para la novedad.")
         if action == CambioSolicitudColectivo.Action.INCLUDE:
-            if fields["tipo_id"] not in {"CC", "CE", "TI", "RC", "PP", "PEP", "PPT", "NIT"} or not fields["documento"].isdigit() or not fields["nombre"]:
+            if (
+                fields["tipo_id"] not in CONTACT_ID_TYPE_CHOICES
+                or fields["rol"] not in RELATION_ROLE_CHOICES
+                or not fields["documento"].isdigit()
+                or not fields["nombre"]
+            ):
                 raise ExternalAccessError("La inclusión requiere identificación y nombre válidos.")
-        normalized.append({"action": action, "record": record, "fields": fields, "position": position})
+        if fields["parentesco"] and fields["parentesco"] not in RELATIONSHIP_CHOICES:
+            raise ExternalAccessError("El parentesco seleccionado no es válido.")
+        if fields["estado"] and fields["estado"] not in INSURED_STATE_CHOICES:
+            raise ExternalAccessError("El estado seleccionado no es válido.")
+        normalized.append({
+            "action": action, "record": record, "source_records": tuple(source_records),
+            "functional_key": str(row.get("functional_key") or ""),
+            "policy": policy, "fields": fields, "position": position,
+        })
     current = request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).order_by("-version").first()
     version = (request.responses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
     if current:
         current.status = current.Status.SUPERSEDED
         current.save(update_fields=("status",))
-    checksum_rows = [{"action": item["action"], "record": str(item["record"].public_key) if item["record"] else "new", "fields": item["fields"]} for item in normalized]
+    checksum_rows = [{"action": item["action"], "records": sorted(str(record.public_key) for record in item["source_records"]) or ["new"], "policy_position": item["policy"].position if item["policy"] else 0, "fields": item["fields"]} for item in normalized]
     response = RespuestaSolicitudColectivo.objects.create(request=request, access=access, version=version, origin=origin, checksum=response_checksum(checksum_rows), encrypted_client_observations=encrypt(observations.strip()[:2000]))
     for item in normalized:
-        marker = response_checksum([{"action": item["action"], "position": item["position"]}])
-        CambioSolicitudColectivo.objects.create(response=response, original_record=item["record"], action=item["action"], functional_field="accion", position=item["position"], checksum=marker)
+        marker = response_checksum([{"action": item["action"], "position": item["position"], "policy_position": item["policy"].position if item["policy"] else 0}])
+        source_payload = encrypt(json.dumps({
+            "functional_key": item["functional_key"],
+            "source_record_keys": sorted(str(record.public_key) for record in item["source_records"]),
+        }, sort_keys=True))
+        CambioSolicitudColectivo.objects.create(response=response, policy=item["policy"], original_record=item["record"], action=item["action"], functional_field="accion", position=item["position"], encrypted_branch_payload=source_payload, checksum=marker)
         for field, value in item["fields"].items():
             if not value:
                 continue
@@ -274,8 +435,8 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             if item["record"] and field in {"plan", "fecha_ingreso", "fecha_retiro"}:
                 attribute = {"plan": "plan", "fecha_ingreso": "entry_date", "fecha_retiro": "exit_date"}[field]
                 prior = str(getattr(item["record"], attribute, "") or "")
-            digest = response_checksum([{"action": item["action"], "field": field, "position": item["position"], "value": value}])
-            CambioSolicitudColectivo.objects.create(response=response, original_record=item["record"], action=item["action"], functional_field=field, encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value), position=item["position"], checksum=digest)
+            digest = response_checksum([{"action": item["action"], "field": field, "position": item["position"], "policy_position": item["policy"].position if item["policy"] else 0, "value": value}])
+            CambioSolicitudColectivo.objects.create(response=response, policy=item["policy"], original_record=item["record"], action=item["action"], functional_field=field, encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value), encrypted_branch_payload=source_payload, position=item["position"], checksum=digest)
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_DRAFT_SAVED", origin="EXTERNO", safe_metadata={"version": version, "changes": response.changes.count()})
     return response
 
@@ -299,7 +460,13 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     access.used_for_submission_at = now
     access.save(update_fields=("status", "used_for_submission_at"))
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_RESPONSE_SUBMITTED", origin="EXTERNO", new_status=request.status, safe_metadata={"version": locked.version})
-    _notify(request, "CLIENT_RESPONSE", "Respuesta recibida", f"La solicitud {request.public_id} recibió respuesta.", str(locked.version))
+    _notify(
+        request,
+        "CLIENT_RESPONSE",
+        "Respuesta recibida",
+        f"El cliente respondió la revisión de la póliza {request.masked_policy_reference}.",
+        str(locked.version),
+    )
     transaction.on_commit(lambda: _send_submission_receipt(access.pk, request.public_id))
     return locked
 
@@ -308,6 +475,8 @@ def _send_submission_receipt(access_id: int, public_id: str) -> None:
     try:
         access = AccesoExternoSolicitudColectivo.objects.get(pk=access_id)
         recipient = decrypt(access.encrypted_recipient)
+        if not recipient:
+            return
         record = send_notification(
             notification_type="COLECTIVOS_RESPONSE_RECEIPT",
             recipient=recipient,

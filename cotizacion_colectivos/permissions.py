@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from django.http import HttpResponseForbidden
+from django.conf import settings
 
 
 def has_internal_permission(request, codename: str) -> bool:
+    if getattr(settings, "COLECTIVOS_INTERNAL_PUBLIC_ACCESS", False):
+        return True
     user = request.user
     return bool(
         user.is_authenticated

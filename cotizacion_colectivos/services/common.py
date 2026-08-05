@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from django.core import signing
+from django.core.signing import salted_hmac
 
 from integrations.zoho.exceptions import (
     ZohoAuthenticationError,
@@ -31,8 +32,8 @@ class ColectivosServiceError(Exception):
         self.message = message
 
 
-def colectivos_zoho():
-    return get_colectivos_zoho()
+def colectivos_zoho(*, timings=None):
+    return get_colectivos_zoho(timings=timings)
 
 
 def escape_criteria_value(value: str) -> str:
@@ -59,6 +60,13 @@ def mask_reference(value: object) -> str:
         return "Sin referencia"
     visible = min(4, len(text))
     return f"Referencia terminada en {text[-visible:]}"
+
+
+def functional_reference(value: object, purpose: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return salted_hmac(f"colectivos.functional.{purpose}.v1", text).hexdigest()
 
 
 def sign_record_id(record_id: object, entity_type: str = "contact", context: dict[str, str] | None = None) -> str:
