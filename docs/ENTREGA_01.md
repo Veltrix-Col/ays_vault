@@ -1,5 +1,7 @@
 # Entrega 01 — A&S Vault
 
+> Acta histórica de una entrega anterior; no describe por sí sola el estado actual. Consulte [`cardmanager/README.md`](cardmanager/README.md) y [`cardmanager/technical_handover.md`](cardmanager/technical_handover.md).
+
 ## 1. Identificación de la entrega
 
 | Campo | Información |

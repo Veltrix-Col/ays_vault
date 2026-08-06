@@ -1,5 +1,7 @@
 # Alertas y correo Microsoft 365
 
+> Documento histórico conservado como antecedente. La referencia vigente es [`cardmanager/audit_and_monitoring.md`](cardmanager/audit_and_monitoring.md) y [`cardmanager/configuration.md`](cardmanager/configuration.md).
+
 ## Centro de Alertas
 
 Cada alerta contiene tipo, severidad, estado, actor/afectado, IP, dispositivo, politica, excepcion, descripcion, evidencia segura, recomendacion, vencimiento, asignacion y cierre. Estados: nueva, en revision, revisada heredada, justificada, escalada, cerrada y reabierta.
