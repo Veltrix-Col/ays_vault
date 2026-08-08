@@ -1,0 +1,24 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Plantillas de invitación{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:policy_detail' policy_token %}">Detalle de póliza</a><span>/</span><span>Plantillas de invitación</span></nav>
+<header class="policy-workspace-hero"><div><span class="eyebrow">Vista previa</span><h1>Plantillas de invitación</h1><p>{{ detail.branch_name }} · {{ detail.masked_reference }}</p></div><div class="workspace-status"><span class="read-only-chip">Datos locales · Solo lectura</span></div></header>
+
+<section class="workspace-card">
+  <div class="section-heading"><div><span class="eyebrow">Catálogo parametrizado</span><h2>Archivos disponibles</h2></div><span>{{ previews|length }}</span></div>
+  <p>Se utilizan exclusivamente los datos del Workspace vigente. Los campos no confirmados permanecen vacíos para diligenciamiento manual.</p>
+  <div class="workspace-accordion-grid">
+  {% for preview in previews %}
+    <article class="relation-row">
+      <div><strong>{{ preview.template.insurer_name }}</strong><span>{{ preview.template.purpose }} · .{{ preview.template.extension }}</span><small>Versión {{ preview.template.version }} · {{ preview.rows }} registros · capacidad {{ preview.capacity }}</small></div>
+      <span class="state-chip">{% if preview.status == 'ready' %}Lista{% elif preview.status == 'incomplete' %}Completar manualmente{% elif preview.status == 'error' %}No generable{% else %}No disponible{% endif %}</span>
+      <p>{{ preview.message }}</p>
+      <small>{{ preview.automatic_fields }} campos parametrizados automáticamente · {{ preview.manual_fields }} manuales</small>
+      {% if preview.missing_required %}<details><summary>Campos obligatorios pendientes</summary><ul>{% for field in preview.missing_required %}<li>{{ field }}</li>{% endfor %}</ul></details>{% endif %}
+      {% if preview.template.limitation %}<p class="muted">{{ preview.template.limitation }}</p>{% endif %}
+    </article>
+  {% empty %}<p class="muted">No hay plantillas registradas para este ramo.</p>{% endfor %}
+  </div>
+  {% if has_generable %}<form method="post" action="{% url 'cotizacion_colectivos:policy_invitation_download' policy_token %}">{% csrf_token %}<button type="submit">Descargar plantillas disponibles</button></form>{% endif %}
+</section>
+{% endblock %}

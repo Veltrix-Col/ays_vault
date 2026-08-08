@@ -36,6 +36,10 @@ from .services.excel_roundtrip import (
 )
 from .services.review import finalize_review, record_reviews
 from .services.preparations import load_builder_preparation, store_builder_preparation
+from .services.invitation_templates import (
+    generate_invitation_templates,
+    preview_invitation_templates,
+)
 from pathlib import Path
 from django.conf import settings
 from django.http import FileResponse
@@ -539,6 +543,8 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "can_export": has_internal_permission(request, "export_excel"),
         "can_create": can_create_requests,
         "builder_token": builder_token,
+        "source_detail_token": builder_token,
+        "source_display_name": detail.source_name or "Ficha del cliente",
         "source_kind": source_kind,
         "can_view_requests": can_view_requests,
         "can_view_responses": has_internal_permission(request, "view_responses"),
@@ -880,6 +886,54 @@ def policy_excel(request, token):
         service.profile, service.preparation_status,
         service.timings.get("remote_queries", 0),
         round((time.monotonic() - started) * 1000),
+    )
+    return response
+
+
+@never_cache
+@require_http_methods(["GET"])
+def policy_invitation_preview(request, token):
+    if not has_internal_permission(request, "export_excel"):
+        return permission_denied_response()
+    try:
+        detail, previews, metadata = preview_invitation_templates(token)
+    except ColectivosServiceError as exc:
+        if exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Póliza no encontrada") from exc
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": exc.message, **_environment_context(),
+        }, status=409)
+    return render(request, "cotizacion_colectivos/invitation_preview.html", {
+        "detail": detail, "previews": previews, "policy_token": token,
+        "has_generable": any(item.status in {"ready", "incomplete"} for item in previews),
+        "preparation_metadata": metadata, **_environment_context(),
+    })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def policy_invitation_download(request, token):
+    if not has_internal_permission(request, "export_excel"):
+        return permission_denied_response()
+    try:
+        content, filename, content_type, errors = generate_invitation_templates(token)
+    except ColectivosServiceError as exc:
+        if exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Póliza no encontrada") from exc
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": exc.message, **_environment_context(),
+        }, status=409)
+    response = HttpResponse(content, content_type=content_type)
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["Cache-Control"] = "no-store, private"
+    response["Pragma"] = "no-cache"
+    response["X-Content-Type-Options"] = "nosniff"
+    if errors:
+        response["X-Colectivos-Template-Warnings"] = str(len(errors))
+    audit(
+        request, "REPORT_EXPORT",
+        reason="Exportación de plantillas de invitación Colectivos.",
+        metadata={"application": "cotizacion_colectivos", "format": "zip" if content_type == "application/zip" else "xlsx", "generated": 1 if content_type != "application/zip" else 2, "warnings": len(errors)},
     )
     return response
 

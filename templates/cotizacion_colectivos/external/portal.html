@@ -30,8 +30,8 @@
     {% for section in policy_sections %}<a href="#policy-{{ forloop.counter }}">Póliza {{ forloop.counter }} · {% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</a>{% endfor %}
   </nav>
   <div class="external-response-tools">
-    <label>Buscar dentro de mi información<input type="search" data-row-filter placeholder="Persona, rol, estado, plan o bien" autocomplete="off"></label>
-    <p aria-live="polite"><strong data-progress-count>0</strong> cambios seleccionados · <strong data-visible-count>0</strong> elementos visibles</p>
+    <label>Buscar dentro de mi información<input type="search" data-row-filter placeholder="Nombre, placa, dirección, ciudad, rol, plan o estado" autocomplete="off"></label>
+    <p aria-live="polite"><strong data-progress-count>0</strong> cambios preparados · <strong data-visible-count>0</strong> registros</p>
   </div>
   {% for section in policy_sections %}
   <section class="external-policy" id="policy-{{ forloop.counter }}">
@@ -40,7 +40,17 @@
     </div><span class="external-policy-status">Solo lectura hasta guardar cambios</span></header>
     {% if section.allowed_actions %}
   <div class="functional-groups">
-    {% for group in section.functional_groups %}<article class="functional-group-card"><header><div><p class="eyebrow">Titular o principal</p><h4>{{ group.principal.display_name }}</h4><p>{% for role in group.principal.roles %}<span class="external-role">{{ role }}</span>{% endfor %}</p></div><span>{{ group.related_count }} relacionado{{ group.related_count|pluralize }}</span></header><p>{{ group.principal.state }}{% if group.principal.plan %} · Plan {{ group.principal.plan }}{% endif %}</p><details><summary>Ver familia, beneficiarios y coberturas</summary><div class="functional-drawer">{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section %}{% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section %}{% endfor %}{% for risk in group.risks %}<article class="functional-risk"><strong>{{ risk.summary }}</strong>{% for label, value in risk.attributes.items %}<span>{{ value }}</span>{% endfor %}</article>{% endfor %}</div></details></article>{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
+    {% for group in section.functional_groups %}{% with group_index=forloop.counter %}
+      <section class="functional-group" aria-label="{% if section.branch_code == '28' %}Inmueble {{ group_index }}{% elif section.branch_code == '40' %}Vehículo {{ group_index }}{% else %}Grupo {{ group_index }}{% endif %}">
+        {% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section risk=group.risks.0 entity_index=group_index %}
+        {% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section risk=group.risks.0 entity_index=forloop.counter %}{% endfor %}
+        {% if group.risks and section.branch_code != '28' and section.branch_code != '40' %}
+          <details class="functional-related-details"><summary>Ver coberturas y detalles relacionados</summary><div class="functional-related-list">
+            {% for risk in group.risks %}<article><strong>{{ risk.summary|default:"Detalle relacionado" }}</strong>{% for label, value in risk.attributes.items %}{% if value %}<span><b>{{ label|capfirst }}:</b> {{ value }}</span>{% endif %}{% endfor %}</article>{% endfor %}
+          </div></details>
+        {% endif %}
+      </section>
+    {% endwith %}{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
   </div>
   {% if section.allows_include or not section.policy %}<details class="external-add-card"><summary>Agregar una persona, beneficiario o bien</summary>
     <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero agregar esta información a mi póliza</label>

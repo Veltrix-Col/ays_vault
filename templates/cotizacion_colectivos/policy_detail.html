@@ -2,7 +2,18 @@
 {% load static %}
 {% block title %}Detalle de póliza{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span><span>Detalle de póliza</span></nav>
+<nav class="breadcrumbs policy-breadcrumbs" aria-label="Migas de pan">
+  <a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span aria-hidden="true">/</span>
+  {% if source_kind == 'person' %}<a href="{% url 'cotizacion_colectivos:person_search' %}">Individuos</a>{% else %}<a href="{% url 'cotizacion_colectivos:company_search' %}">Empresas</a>{% endif %}<span aria-hidden="true">/</span>
+  {% if source_detail_token %}
+    {% if source_kind == 'person' %}<a href="{% url 'cotizacion_colectivos:person_detail' source_detail_token %}">{{ source_display_name }}</a>{% else %}<a href="{% url 'cotizacion_colectivos:company_detail' source_detail_token %}">{{ source_display_name }}</a>{% endif %}
+  {% else %}<span>{{ source_display_name }}</span>{% endif %}<span aria-hidden="true">/</span>
+  <span aria-current="page">Póliza {{ detail.full_reference|default:detail.masked_reference }}</span>
+</nav>
+
+{% if source_detail_token %}<div class="policy-context-navigation">
+  {% if source_kind == 'person' %}<a class="policy-back-link" href="{% url 'cotizacion_colectivos:person_detail' source_detail_token %}">← Volver a la ficha del cliente</a>{% else %}<a class="policy-back-link" href="{% url 'cotizacion_colectivos:company_detail' source_detail_token %}">← Volver a la ficha del cliente</a>{% endif %}
+</div>{% endif %}
 
 <header class="policy-workspace-hero">
   <div><span class="eyebrow">Póliza</span><h1>{{ detail.full_reference|default:detail.masked_reference }}</h1><p>{{ detail.branch_name }} · {{ detail.insurer }}</p></div>
@@ -63,6 +74,7 @@
 
   <section class="workspace-card sticky-actions"><div class="section-heading"><h2>Herramientas</h2></div><div class="workspace-action-stack">
     {% if can_export and detail.classification == 'confirmed' %}<form method="post" action="{% url 'cotizacion_colectivos:policy_excel' policy_token %}">{% csrf_token %}<button type="submit">Descargar Excel actual</button></form>{% endif %}
+    {% if can_export and detail.classification == 'confirmed' %}<a class="button-link button-link--secondary" href="{% url 'cotizacion_colectivos:policy_invitation_preview' policy_token %}">Descargar plantillas de invitación</a>{% endif %}
     <a class="button-link button-link--secondary" href="#grupo">Ver grupo</a>
   </div></section>
 </aside>

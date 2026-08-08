@@ -203,6 +203,73 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, '<option value="Activo">Activo</option>', html=False)
         self.assertContains(portal, '<input name="include_plan" maxlength="120">', html=False)
 
+    def test_external_entities_show_current_values_before_progressive_editing(self):
+        cases = {
+            "91": ("Persona", "Plan actual", "Nuevo plan"),
+            "86": ("Persona", "Parentesco o relación", "Nuevo parentesco"),
+            "28": ("Inmueble 1", "Calle 10 # 20-30", "Nueva dirección"),
+            "83": ("Asegurado", "Valor asegurado", "Nuevo valor asegurado"),
+            "40": ("Vehículo 1", "ABC123", "Nueva placa"),
+        }
+        member = {
+            "display_name": "Persona de prueba",
+            "insured_name": "Persona de prueba",
+            "insured_key": "a" * 64,
+            "state": "Activo",
+            "plan": "Plan vigente",
+            "relationship": "Hija",
+            "risk_key": "b" * 64,
+            "risk_summary": "Bien registrado",
+            "risk_attributes": {
+                "direccion": "Calle 10 # 20-30", "ciudad": "Medellín",
+                "tipo_uso": "Residencial", "anio_construccion": "2018",
+                "vehiculo": "Mazda CX-5", "placa": "ABC123",
+                "marca": "Mazda CX-5", "modelo": "2024",
+            },
+        }
+        self.record.economic_values = {"Valor asegurado": "$450.000.000"}
+        self.record.save(update_fields=("economic_values",))
+        for index, (branch_code, expected) in enumerate(cases.items()):
+            with self.subTest(branch=branch_code):
+                self.request.branch_code = branch_code
+                self.request.status = self.request.Status.READY
+                self.request.encrypted_snapshot = encrypt(json.dumps({
+                    "version": 1, "policy": {}, "group": [member], "warnings": [],
+                }, ensure_ascii=False))
+                self.request.save(update_fields=("branch_code", "status", "encrypted_snapshot"))
+                generated = generate_access(
+                    request=self.request, actor=self.admin, regenerate=index > 0,
+                )
+                self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+                portal = self.client.get(reverse("colectivos_external:portal"))
+                self.assertEqual(portal.status_code, 200)
+                for text in expected:
+                    self.assertContains(portal, text)
+                self.assertContains(portal, "data-edit-disclosure", html=False)
+                self.assertContains(portal, "data-edit-panel", html=False)
+                self.assertNotContains(portal, "data-edit-panel hidden", html=False)
+                self.assertContains(portal, "Modificar información")
+                self.assertNotContains(portal, "Titular o principal")
+                self.assertNotContains(portal, "Ver familia, beneficiarios y coberturas")
+
+    def test_progressive_editor_keeps_the_existing_backend_field_contract(self):
+        member = {
+            "display_name": "Persona de prueba", "insured_name": "Persona de prueba",
+            "insured_key": "a" * 64, "state": "Activo", "plan": "Plan vigente",
+        }
+        self.request.encrypted_snapshot = encrypt(json.dumps({
+            "version": 1, "policy": {}, "group": [member], "warnings": [],
+        }))
+        self.request.save(update_fields=("encrypted_snapshot",))
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        functional_key = "a" * 64
+        self.assertContains(portal, f'name="action_entity_{functional_key}"', html=False)
+        self.assertContains(portal, f'name="estado_entity_{functional_key}"', html=False)
+        self.assertContains(portal, f'name="plan_entity_{functional_key}"', html=False)
+        self.assertContains(portal, f'name="source_records_{functional_key}"', html=False)
+
     def test_external_token_is_only_persisted_as_hash_and_is_tamper_evident(self):
         generated = self.access()
         self.assertNotIn(generated.token, generated.access.token_hash)

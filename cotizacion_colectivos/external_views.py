@@ -76,7 +76,7 @@ def verify(request, token):
 
 
 def _rows(request_obj):
-    return request_obj.records.select_related("policy").only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "encrypted_branch_payload").order_by("original_position")
+    return request_obj.records.select_related("policy").only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
 
 
 def _display_rows(request_obj, snapshot):
@@ -97,6 +97,7 @@ def _display_rows(request_obj, snapshot):
             "relationship": member.get("relationship", ""),
             "risk_summary": member.get("risk_summary", ""),
             "risk_attributes": member.get("risk_attributes", {}),
+            "economic_values": dict(record.economic_values or {}),
             "email": member.get("email", ""),
             "phone": member.get("phone", ""),
             "mobile": member.get("mobile", ""),
@@ -117,13 +118,35 @@ def _display_rows(request_obj, snapshot):
     return result
 
 
+def _external_functional_groups(rows, *, branch_code):
+    """Añade datos de lectura ya persistidos sin cambiar la consolidación funcional."""
+    groups, warnings = consolidate_functional_groups(rows, branch_code=branch_code)
+    if branch_code not in {"28", "40"}:
+        return groups, warnings
+    economics_by_risk = {}
+    for row in rows:
+        risk_key = str(row.get("risk_key") or "")
+        if not risk_key:
+            continue
+        values = economics_by_risk.setdefault(risk_key, {})
+        for label, value in dict(row.get("economic_values") or {}).items():
+            if value not in (None, ""):
+                values.setdefault(label, value)
+    for group in groups:
+        principal = group.get("principal", {})
+        principal["economic_values"] = economics_by_risk.get(
+            str(principal.get("key") or ""), {}
+        )
+    return groups, warnings
+
+
 def _policy_sections(request_obj, snapshot):
     snapshots = snapshot.get("policies") if isinstance(snapshot, dict) else None
     snapshots = snapshots if isinstance(snapshots, list) and snapshots else [snapshot]
     policies = list(request_obj.policies.all())
     if not policies:
         rows = _display_rows(request_obj, snapshot)
-        groups, grouping_warnings = consolidate_functional_groups(
+        groups, grouping_warnings = _external_functional_groups(
             rows, branch_code=request_obj.branch_code,
         )
         return [{
@@ -151,6 +174,7 @@ def _policy_sections(request_obj, snapshot):
                 "relationship": member.get("relationship", ""),
                 "risk_summary": member.get("risk_summary", ""),
                 "risk_attributes": member.get("risk_attributes", {}),
+                "economic_values": dict(record.economic_values or {}),
                 "email": member.get("email", ""),
                 "phone": member.get("phone", ""),
                 "mobile": member.get("mobile", ""),
@@ -168,7 +192,7 @@ def _policy_sections(request_obj, snapshot):
                 "beneficiary_key": member.get("beneficiary_key", ""),
                 "risk_key": member.get("risk_key", ""),
             })
-        groups, grouping_warnings = consolidate_functional_groups(
+        groups, grouping_warnings = _external_functional_groups(
             rows, branch_code=policy.branch_code,
         )
         sections.append({

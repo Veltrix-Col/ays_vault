@@ -45,6 +45,10 @@ class ContactSummary:
     mobile: str = ""
     city: str = ""
     address: str = ""
+    # Solo se persiste dentro del Workspace cifrado. Las vistas usan siempre
+    # masked_document; los generadores autorizados pueden consumir el valor
+    # exacto sin una nueva consulta remota.
+    document: str = ""
 
 
 @dataclass(frozen=True)

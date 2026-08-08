@@ -223,6 +223,7 @@ class PolicyService:
                     mobile=_text(source_contact.get("Mobile")),
                     city=_text(source_contact.get("Ciudad_de_direcci_n_principal")),
                     address=_text(source_contact.get("Direcci_n")),
+                    document=_text(source_contact.get("N_mero_de_ID")),
                 ) if source_contact else None
             ),
             payment_method=_text(policy.get("Medio_de_pago")),

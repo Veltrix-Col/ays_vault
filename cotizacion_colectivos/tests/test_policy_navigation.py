@@ -38,6 +38,11 @@ TOKEN = sign_record_id(
     "policy",
     context={"source_id": SOURCE_ID, "source_kind": "company"},
 )
+PERSON_TOKEN = sign_record_id(
+    POLICY_ID,
+    "policy",
+    context={"source_id": SOURCE_ID, "source_kind": "person"},
+)
 
 
 class AnchorByTextParser(HTMLParser):
@@ -135,6 +140,12 @@ class FakePolicyService:
         return {}
 
 
+class AnyPolicyTokenService(FakePolicyService):
+    def detail(self, token):
+        unsign_record_context(token, "policy")
+        return self.policy
+
+
 class FakeEntityDetailService:
     def company(self, token):
         unsign_record_context(token, "company")
@@ -190,14 +201,69 @@ class PolicyNavigationTests(TestCase):
             service=FakePolicyService(),
         )
 
-    def policy_page(self, service=None, client=None):
+    def policy_page(self, service=None, client=None, token=TOKEN):
         with patch(
             "cotizacion_colectivos.views.PolicyService",
             return_value=service or FakePolicyService(),
         ):
             return (client or self.client).get(
-                reverse("cotizacion_colectivos:policy_detail", args=[TOKEN])
+                reverse("cotizacion_colectivos:policy_detail", args=[token])
             )
+
+    def test_company_breadcrumb_and_back_action_resolve_to_signed_source(self):
+        service = FakePolicyService(_policy(source_name="Fonconstruimos", source_kind="company"))
+        service.group = Mock(wraps=service.group)
+        with patch("cotizacion_colectivos.views.EntityDetailService") as entity_service:
+            response = self.policy_page(service)
+        self.assertContains(response, "Empresas")
+        self.assertContains(response, "Fonconstruimos")
+        self.assertContains(response, "← Volver a la ficha del cliente")
+        href = anchor_href(response, "← Volver a la ficha del cliente")
+        match = resolve(urlsplit(href).path)
+        self.assertEqual(match.view_name, "cotizacion_colectivos:company_detail")
+        source_context = unsign_record_context(match.kwargs["token"], "company")
+        self.assertEqual(source_context, {"id": SOURCE_ID, "type": "company"})
+        self.assertNotContains(response, SOURCE_ID)
+        service.group.assert_called_once_with(TOKEN, source_kind="company")
+        entity_service.assert_not_called()
+
+    def test_person_breadcrumb_and_back_action_resolve_to_signed_source(self):
+        detail = _policy(source_name="Persona de prueba", source_kind="person")
+        response = self.policy_page(AnyPolicyTokenService(detail), token=PERSON_TOKEN)
+        self.assertContains(response, "Individuos")
+        self.assertContains(response, "Persona de prueba")
+        href = anchor_href(response, "← Volver a la ficha del cliente")
+        match = resolve(urlsplit(href).path)
+        self.assertEqual(match.view_name, "cotizacion_colectivos:person_detail")
+        source_context = unsign_record_context(match.kwargs["token"], "person")
+        self.assertEqual(source_context, {"id": SOURCE_ID, "type": "person"})
+        self.assertNotContains(response, SOURCE_ID)
+
+    def test_multiple_policies_return_to_the_same_source_entity(self):
+        service = AnyPolicyTokenService(_policy(source_name="Fonconstruimos"))
+        back_contexts = []
+        for policy_id in ("4234567890123456789", "4234567890123456790"):
+            policy_token = sign_record_id(
+                policy_id, "policy",
+                context={"source_id": SOURCE_ID, "source_kind": "company"},
+            )
+            response = self.policy_page(service, token=policy_token)
+            href = anchor_href(response, "← Volver a la ficha del cliente")
+            match = resolve(urlsplit(href).path)
+            back_contexts.append(unsign_record_context(match.kwargs["token"], "company"))
+        self.assertEqual(back_contexts, [
+            {"id": SOURCE_ID, "type": "company"},
+            {"id": SOURCE_ID, "type": "company"},
+        ])
+
+    def test_policy_navigation_classes_include_mobile_safe_layout(self):
+        response = self.policy_page()
+        self.assertContains(response, 'class="breadcrumbs policy-breadcrumbs"', html=False)
+        self.assertContains(response, 'class="policy-back-link"', html=False)
+        css = (settings.BASE_DIR / "static" / "css" / "colectivos.css").read_text(encoding="utf-8")
+        self.assertIn(".policy-breadcrumbs", css)
+        self.assertIn(".policy-back-link", css)
+        self.assertIn("@media (max-width: 380px)", css)
 
     def test_policy_exposes_complete_navigation_without_obsolete_placeholders(self):
         response = self.policy_page()
