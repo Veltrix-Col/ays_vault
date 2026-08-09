@@ -15,7 +15,7 @@ Dispositivo: {% if alert.device %}{{ alert.device.friendly_name|default:alert.de
 IP: {{ alert.ip_address|default:"No disponible" }}
 {% if is_reveal_outside and alert.event.card_id %}Tarjeta: ID interno #{{ alert.event.card_id }}{% if alert.event.card %} · terminación •••• {{ alert.event.card.last4 }}{% endif %}
 Campo revelado: {{ alert.event.metadata.field|default:"Dato protegido" }}
-Número certificado recibo - Zoho: {{ alert.event.metadata.reference|default:"No disponible" }}
+Póliza: {{ alert.event.metadata.reference|default:"No disponible" }}
 {% endif %}
 
 Recomendación: {{ alert.recommendation|default:"Revise el evento y confirme que corresponda a una actividad autorizada." }}

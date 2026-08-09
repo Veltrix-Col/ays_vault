@@ -140,7 +140,7 @@ class ReportingTests(TestCase):
         self.assertTrue(all(headers))
         self.assertEqual(len(headers), len({header.casefold() for header in headers}))
         self.assertIn("Referencia", headers)
-        self.assertIn("Número certificado recibo - Zoho", headers)
+        self.assertIn("Póliza", headers)
         self.assertNotIn("Motivo seguro", headers)
         resaved = BytesIO()
         workbook.save(resaved)
@@ -203,7 +203,7 @@ class ReportingTests(TestCase):
         headers = list(rows[0])
         exported = dict(zip(headers, rows[1]))
         self.assertEqual(exported["Referencia"], "Referencia administrativa")
-        self.assertEqual(exported["Número certificado recibo - Zoho"], "ZOHO-EVENTO-001")
+        self.assertEqual(exported["Póliza"], "ZOHO-EVENTO-001")
 
     def test_card_excel_uses_latest_context_for_each_card(self):
         now = timezone.now()
@@ -242,7 +242,7 @@ class ReportingTests(TestCase):
         headers = list(rows[0])
         exported = dict(zip(headers, rows[1]))
         self.assertEqual(exported["Referencia"], "Uso interno")
-        self.assertEqual(exported["Número certificado recibo - Zoho"], "ZOHO-RECIENTE")
+        self.assertEqual(exported["Póliza"], "ZOHO-RECIENTE")
 
     def test_formula_injection_is_neutralized_in_card_report(self):
         response = self.login(self.admin).post(reverse("vault:export_report", args=["CARDS", "XLSX"]))

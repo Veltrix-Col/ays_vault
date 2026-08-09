@@ -29,11 +29,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  const cardholderCopyButton = document.querySelector("[data-copy-cardholder]");
-  if (cardholderCopyButton) {
-    const cardholderValue = document.querySelector("[data-cardholder-value]");
-    const cardholderStatus = document.querySelector("[data-cardholder-copy-status]");
-    const writeCardholderToClipboard = async (value) => {
+  const visibleCopyButtons = document.querySelectorAll("[data-copy-visible]");
+  if (visibleCopyButtons.length) {
+    const visibleCopyStatus = document.querySelector("[data-visible-copy-status]");
+    const writeVisibleValueToClipboard = async (value) => {
       if (navigator.clipboard?.writeText && window.isSecureContext) {
         await navigator.clipboard.writeText(value);
         return;
@@ -49,25 +48,27 @@ document.addEventListener("DOMContentLoaded", () => {
       fallback.remove();
       if (!copied) throw new Error("Clipboard unavailable");
     };
-    cardholderCopyButton.addEventListener("click", async () => {
-      const value = cardholderValue?.textContent.trim();
+    visibleCopyButtons.forEach((button) => button.addEventListener("click", async () => {
+      const valueElement = document.getElementById(button.dataset.copyVisible);
+      const value = valueElement?.textContent.trim();
       if (!value) return;
-      const originalText = cardholderCopyButton.textContent;
-      cardholderCopyButton.disabled = true;
+      const label = button.dataset.copyLabel || "Dato";
+      const originalText = button.textContent;
+      button.disabled = true;
       try {
-        await writeCardholderToClipboard(value);
-        cardholderCopyButton.textContent = "Copiado";
-        if (cardholderStatus) cardholderStatus.textContent = "Titular copiado";
+        await writeVisibleValueToClipboard(value);
+        button.textContent = "Copiado";
+        if (visibleCopyStatus) visibleCopyStatus.textContent = `${label} copiado`;
       } catch (error) {
-        cardholderCopyButton.textContent = "No fue posible copiar";
-        if (cardholderStatus) cardholderStatus.textContent = "No fue posible copiar el titular";
+        button.textContent = "No fue posible copiar";
+        if (visibleCopyStatus) visibleCopyStatus.textContent = `No fue posible copiar ${label.toLowerCase()}`;
       } finally {
         window.setTimeout(() => {
-          cardholderCopyButton.textContent = originalText;
-          cardholderCopyButton.disabled = false;
+          button.textContent = originalText;
+          button.disabled = false;
         }, 1800);
       }
-    });
+    }));
   }
 
   const sidebar = document.querySelector("#app-sidebar");

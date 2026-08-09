@@ -131,17 +131,17 @@ class InterfaceSpanishAndResponsiveTests(TestCase):
             finders.find("img/branding/cardmanager/Logo-CardManager-CO-COLOR.png")
         )
 
-    def test_cardholder_copy_javascript_is_local_and_scoped_to_visible_name(self):
+    def test_administrative_copy_javascript_is_local_and_scoped_to_visible_values(self):
         source = (
             Path(__file__).resolve().parents[1] / "static" / "js" / "vault.js"
         ).read_text(encoding="utf-8")
-        start = source.index('document.querySelector("[data-copy-cardholder]")')
+        start = source.index('document.querySelectorAll("[data-copy-visible]")')
         end = source.index('const sidebar = document.querySelector("#app-sidebar")')
         handler = source[start:end]
-        self.assertIn("[data-cardholder-value]", handler)
+        self.assertIn("button.dataset.copyVisible", handler)
         self.assertIn("navigator.clipboard.writeText(value)", handler)
         self.assertIn('document.execCommand("copy")', handler)
-        self.assertIn("Titular copiado", handler)
+        self.assertIn("`${label} copiado`", handler)
         self.assertNotIn("fetch(", handler)
         self.assertNotIn("protectedMeta", handler)
         self.assertNotIn("data-field", handler)
