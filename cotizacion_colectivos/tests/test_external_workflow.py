@@ -6,6 +6,7 @@ import zipfile
 from datetime import timedelta
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -203,10 +204,10 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, '<option value="Activo">Activo</option>', html=False)
         self.assertContains(portal, '<input name="include_plan" maxlength="120">', html=False)
 
-    def test_external_entities_show_current_values_before_progressive_editing(self):
+    def test_external_entities_render_structured_rows_and_drawers(self):
         cases = {
-            "91": ("Persona", "Plan actual", "Nuevo plan"),
-            "86": ("Persona", "Parentesco o relación", "Nuevo parentesco"),
+            "91": ("Nombre", "Rol", "Nuevo plan"),
+            "86": ("Nombre", "Parentesco", "Nuevo parentesco"),
             "28": ("Inmueble 1", "Calle 10 # 20-30", "Nueva dirección"),
             "83": ("Asegurado", "Valor asegurado", "Nuevo valor asegurado"),
             "40": ("Vehículo 1", "ABC123", "Nueva placa"),
@@ -245,10 +246,13 @@ class ExternalWorkflowTests(TestCase):
                 self.assertEqual(portal.status_code, 200)
                 for text in expected:
                     self.assertContains(portal, text)
-                self.assertContains(portal, "data-edit-disclosure", html=False)
+                self.assertContains(portal, "data-functional-table", html=False)
+                self.assertContains(portal, "data-record-summary", html=False)
                 self.assertContains(portal, "data-edit-panel", html=False)
-                self.assertNotContains(portal, "data-edit-panel hidden", html=False)
-                self.assertContains(portal, "Modificar información")
+                self.assertContains(portal, "data-edit-panel hidden", html=False)
+                self.assertContains(portal, 'role="dialog"', html=False)
+                self.assertContains(portal, "Modificar")
+                self.assertNotContains(portal, "data-edit-disclosure", html=False)
                 self.assertNotContains(portal, "Titular o principal")
                 self.assertNotContains(portal, "Ver familia, beneficiarios y coberturas")
 
@@ -269,6 +273,103 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, f'name="estado_entity_{functional_key}"', html=False)
         self.assertContains(portal, f'name="plan_entity_{functional_key}"', html=False)
         self.assertContains(portal, f'name="source_records_{functional_key}"', html=False)
+
+    def test_drawer_posts_the_unchanged_payload_contract(self):
+        functional_key = "a" * 64
+        member = {
+            "display_name": "Persona de prueba", "insured_name": "Persona de prueba",
+            "insured_key": functional_key, "state": "Activo", "plan": "Plan vigente",
+        }
+        self.request.encrypted_snapshot = encrypt(json.dumps({
+            "version": 1, "policy": {}, "group": [member], "warnings": [],
+        }))
+        self.request.save(update_fields=("encrypted_snapshot",))
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        saved = self.client.post(reverse("colectivos_external:save_draft"), {
+            f"source_records_{functional_key}": str(self.record.public_key),
+            f"action_entity_{functional_key}": "MODIFICAR",
+            f"plan_entity_{functional_key}": "Plan solicitado",
+            f"fecha_efectiva_entity_{functional_key}": "2026-09-01",
+        })
+        self.assertEqual(saved.status_code, 302)
+        response = self.request.responses.get(status=RespuestaSolicitudColectivo.Status.DRAFT)
+        change = response.changes.get(functional_field="plan")
+        self.assertEqual(decrypt(change.encrypted_new_value), "Plan solicitado")
+
+    def test_external_table_keeps_final_save_and_local_pagination_controls(self):
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertContains(portal, "Guardar mis cambios")
+        self.assertContains(portal, "data-page-size", html=False)
+        self.assertContains(portal, '<option value="25">25</option>', html=False)
+        self.assertContains(portal, '<option value="50">50</option>', html=False)
+        self.assertContains(portal, '<option value="100">100</option>', html=False)
+        self.assertContains(portal, "data-page-previous", html=False)
+        self.assertContains(portal, "data-page-next", html=False)
+
+    def test_external_drawer_accessibility_and_javascript_contract(self):
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertContains(portal, 'aria-modal="true"', html=False)
+        self.assertContains(portal, "data-drawer-title", html=False)
+        self.assertContains(portal, "data-drawer-close", html=False)
+        self.assertContains(portal, "data-drawer-backdrop", html=False)
+        script = (settings.BASE_DIR / "static" / "js" / "colectivos-external.js").read_text(encoding="utf-8")
+        self.assertIn('event.key === "Escape"', script)
+        self.assertIn('event.key !== "Tab"', script)
+        self.assertIn("activeTrigger", script)
+        self.assertIn("focusableElements", script)
+
+    def test_people_with_same_confirmed_key_render_once_with_consolidated_roles(self):
+        shared_key = "a" * 64
+        second = SolicitudColectivoRegistro.objects.create(
+            request=self.request,
+            element_type=SolicitudColectivoRegistro.ElementType.BENEFICIARY,
+            role="Beneficiario",
+            external_reference_hash="e" * 64,
+            initial_status="Activo",
+            plan="Plan vigente",
+            original_position=2,
+            checksum="f" * 64,
+        )
+        members = [
+            {"insured_name": "Persona de prueba", "insured_key": shared_key},
+            {"beneficiary_name": "Persona de prueba", "beneficiary_key": shared_key},
+        ]
+        self.request.encrypted_snapshot = encrypt(json.dumps({
+            "version": 1, "policy": {}, "group": members, "warnings": [],
+        }))
+        self.request.save(update_fields=("encrypted_snapshot",))
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertEqual(portal.content.count(b"data-functional-entity"), 1)
+        self.assertContains(portal, "Asegurado · Beneficiario")
+        source_records = ",".join(sorted((str(self.record.public_key), str(second.public_key))))
+        self.assertContains(
+            portal,
+            f'value="{source_records}"',
+            html=False,
+        )
+
+    @patch("cotizacion_colectivos.zoho.get_zoho")
+    def test_external_table_and_drawer_use_only_persisted_snapshot(self, get_zoho):
+        generated = self.access()
+        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertEqual(portal.status_code, 200)
+        get_zoho.assert_not_called()
+
+    def test_external_table_and_drawer_have_mobile_layout_without_page_overflow(self):
+        css = (settings.BASE_DIR / "static" / "css" / "colectivos_external.css").read_text(encoding="utf-8")
+        self.assertIn("@media(max-width:1024px)", css)
+        self.assertIn("@media(max-width:768px)", css)
+        self.assertIn("@media(max-width:480px)", css)
+        self.assertIn(".functional-drawer{width:100%}", css)
+        self.assertIn("body main{width:min(100% - 1rem,1480px)}", css)
 
     def test_external_token_is_only_persisted_as_hash_and_is_tamper_evident(self):
         generated = self.access()

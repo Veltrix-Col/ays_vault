@@ -20,7 +20,7 @@
 </section>
 <section class="external-card external-card--steps">
   <h2>¿Qué debo hacer?</h2>
-  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Abra solamente la tarjeta que necesite actualizar.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
+  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Seleccione “Modificar” en el registro que necesite actualizar.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
   {% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
 </section>
 <form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card" data-external-response>
@@ -39,9 +39,21 @@
       <p>{% if section.policy %}{{ section.policy.masked_reference }} · {{ section.policy.insurer|default:"Aseguradora sin información" }}{% else %}{{ item.masked_policy_reference }}{% endif %}</p>
     </div><span class="external-policy-status">Solo lectura hasta guardar cambios</span></header>
     {% if section.allowed_actions %}
-  <div class="functional-groups">
+  <div class="functional-table" role="table" aria-label="Información de la póliza" data-functional-table data-branch-code="{{ section.branch_code }}">
+    <div class="functional-table__header" role="row">
+      {% if section.branch_code == '28' %}
+        <span role="columnheader">#</span><span role="columnheader">Dirección</span><span role="columnheader">Ciudad</span><span role="columnheader">Tipo de uso</span><span role="columnheader">Año</span><span role="columnheader">Valor asegurado</span><span role="columnheader">Estado</span><span role="columnheader">Acción</span>
+      {% elif section.branch_code == '40' %}
+        <span role="columnheader">Placa</span><span role="columnheader">Marca / referencia</span><span role="columnheader">Modelo</span><span role="columnheader">Ciudad</span><span role="columnheader">Asegurado</span><span role="columnheader">Estado</span><span role="columnheader">Acción</span>
+      {% elif section.branch_code == '83' %}
+        <span role="columnheader">Asegurado</span><span role="columnheader">Plan</span><span role="columnheader">Estado</span><span role="columnheader">Valor asegurado</span><span role="columnheader">Fecha de ingreso</span><span role="columnheader">Acción</span>
+      {% else %}
+        <span role="columnheader">Nombre</span><span role="columnheader">Rol</span><span role="columnheader">Parentesco</span><span role="columnheader">Plan</span><span role="columnheader">Estado</span><span role="columnheader">Ingreso</span><span role="columnheader">Acción</span>
+      {% endif %}
+    </div>
+    <div class="functional-table__body" role="rowgroup">
     {% for group in section.functional_groups %}{% with group_index=forloop.counter %}
-      <section class="functional-group" aria-label="{% if section.branch_code == '28' %}Inmueble {{ group_index }}{% elif section.branch_code == '40' %}Vehículo {{ group_index }}{% else %}Grupo {{ group_index }}{% endif %}">
+      <div class="functional-group" aria-label="{% if section.branch_code == '28' %}Inmueble {{ group_index }}{% elif section.branch_code == '40' %}Vehículo {{ group_index }}{% else %}Grupo {{ group_index }}{% endif %}">
         {% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section risk=group.risks.0 entity_index=group_index %}
         {% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section risk=group.risks.0 entity_index=forloop.counter %}{% endfor %}
         {% if group.risks and section.branch_code != '28' and section.branch_code != '40' %}
@@ -49,10 +61,20 @@
             {% for risk in group.risks %}<article><strong>{{ risk.summary|default:"Detalle relacionado" }}</strong>{% for label, value in risk.attributes.items %}{% if value %}<span><b>{{ label|capfirst }}:</b> {{ value }}</span>{% endif %}{% endfor %}</article>{% endfor %}
           </div></details>
         {% endif %}
-      </section>
+      </div>
     {% endwith %}{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
+    </div>
+    <p class="functional-table__empty" data-filter-empty hidden>No hay registros que coincidan con la búsqueda.</p>
+    <nav class="functional-pagination" aria-label="Paginación local" data-pagination>
+      <label>Filas por página <select data-page-size><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+      <span data-page-status aria-live="polite"></span>
+      <div><button type="button" class="functional-pagination__button" data-page-previous>Anterior</button><button type="button" class="functional-pagination__button" data-page-next>Siguiente</button></div>
+    </nav>
   </div>
-  {% if section.allows_include or not section.policy %}<details class="external-add-card"><summary>Agregar una persona, beneficiario o bien</summary>
+  {% if section.allows_include or not section.policy %}<button type="button" class="external-add-button" data-drawer-open="include-drawer-{{ forloop.counter }}" aria-controls="include-drawer-{{ forloop.counter }}" aria-haspopup="dialog" aria-expanded="false">Agregar una persona, beneficiario o bien</button>
+  <aside class="functional-drawer" id="include-drawer-{{ forloop.counter }}" role="dialog" aria-modal="true" aria-labelledby="include-drawer-title-{{ forloop.counter }}" data-drawer hidden>
+    <div class="functional-drawer__header"><div><p class="eyebrow">Nueva información</p><h4 id="include-drawer-title-{{ forloop.counter }}" tabindex="-1" data-drawer-title>Agregar a mi póliza</h4></div><button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button></div>
+    <div class="functional-drawer__content external-add-card">
     <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero agregar esta información a mi póliza</label>
     <label>Rol<select name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}"><option value="">Seleccione</option>{% for choice in relation_roles %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
     <label>Tipo de identificación<select name="{% if section.policy %}include_{{ section.policy.pk }}_tipo_id{% else %}include_tipo_id{% endif %}"><option value="">Seleccione</option>{% for choice in contact_id_types %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
@@ -67,11 +89,14 @@
     <label>Fecha efectiva<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_efectiva{% else %}include_fecha_efectiva{% endif %}"></label>
     <label>Motivo<input name="{% if section.policy %}include_{{ section.policy.pk }}_motivo{% else %}include_motivo{% endif %}" maxlength="200"></label>
     <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>
-  </details>
+    </div>
+    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-drawer-done>Preparar inclusión</button></div>
+  </aside>
   {% endif %}
     {% else %}<p>Esta póliza no tiene ajustes editables habilitados.</p>{% endif %}
   </section>
   {% endfor %}
+  <div class="functional-drawer-backdrop" data-drawer-backdrop hidden></div>
   <label>¿Hay algo más que debamos saber?<textarea name="client_observations" maxlength="2000"></textarea></label>
   <div class="external-sticky-save"><span>Sus cambios no se envían a Zoho automáticamente.</span><button type="submit">Guardar mis cambios</button></div>
   {% if latest %}<p>Último borrador: versión {{ latest.version }} · {{ latest.updated_at }}</p>{% endif %}

@@ -1,97 +1,109 @@
-<article class="functional-entity{% if section.branch_code == '28' or section.branch_code == '40' %} functional-entity--asset{% endif %}" data-functional-entity>
-  <header class="functional-entity__header">
-    <div class="functional-entity__identity">
-      <p class="functional-entity__kind">
-        {% if section.branch_code == '28' %}Inmueble {{ entity_index }}
-        {% elif section.branch_code == '40' %}Vehículo {{ entity_index }}
-        {% elif section.branch_code == '83' %}Asegurado
-        {% else %}Persona{% endif %}
-      </p>
-      <h4>
-        {% if section.branch_code == '28' %}
-          {% if risk.attributes.direccion %}{{ risk.attributes.direccion }}{% elif risk.summary %}{{ risk.summary }}{% else %}Inmueble registrado{% endif %}
-        {% elif section.branch_code == '40' %}
-          {% if risk.attributes.placa %}{{ risk.attributes.placa }}{% else %}{{ risk.summary|default:"Vehículo registrado" }}{% endif %}
-        {% else %}
-          {{ entity.display_name|default:"Información protegida" }}
-        {% endif %}
-      </h4>
-      {% if section.branch_code == '40' and risk.attributes.marca %}
-        <p class="functional-entity__subtitle">{{ risk.attributes.marca }}{% if risk.attributes.modelo %} · Modelo {{ risk.attributes.modelo }}{% endif %}</p>
-      {% elif section.branch_code == '28' and risk.summary and risk.summary != risk.attributes.direccion %}
-        <p class="functional-entity__subtitle">{{ risk.summary }}</p>
-      {% endif %}
-      {% if entity.roles %}<div class="functional-entity__roles" aria-label="Roles">
-        {% for role in entity.roles %}{% if role != "Riesgo" %}<span class="external-role">{{ role }}</span>{% endif %}{% endfor %}
-      </div>{% endif %}
-    </div>
-    {% if entity.state %}<span class="functional-entity__state">{{ entity.state }}</span>{% endif %}
-  </header>
-
-  <dl class="functional-current-data" aria-label="Información actual">
-    {% if entity.masked_document %}<div><dt>Identificación</dt><dd>{{ entity.id_type }} {{ entity.masked_document }}</dd></div>{% endif %}
-    {% if entity.relationships %}<div><dt>Parentesco o relación</dt><dd>{{ entity.relationships|join:", " }}</dd></div>{% endif %}
-    {% if entity.plan %}<div><dt>Plan actual</dt><dd>{{ entity.plan }}</dd></div>{% endif %}
-    {% if entity.entry_date %}<div><dt>Fecha de ingreso</dt><dd>{{ entity.entry_date }}</dd></div>{% endif %}
-    {% if entity.exit_date %}<div><dt>Fecha de retiro</dt><dd>{{ entity.exit_date }}</dd></div>{% endif %}
-    {% if risk.attributes.direccion %}<div><dt>Dirección</dt><dd>{{ risk.attributes.direccion }}</dd></div>{% endif %}
-    {% if risk.attributes.ciudad %}<div><dt>Ciudad</dt><dd>{{ risk.attributes.ciudad }}</dd></div>{% endif %}
-    {% if risk.attributes.tipo_uso %}<div><dt>Tipo de uso</dt><dd>{{ risk.attributes.tipo_uso }}</dd></div>{% endif %}
-    {% if risk.attributes.anio_construccion %}<div><dt>Año de construcción</dt><dd>{{ risk.attributes.anio_construccion }}</dd></div>{% endif %}
-    {% if risk.attributes.vehiculo and section.branch_code == '40' %}<div><dt>Vehículo</dt><dd>{{ risk.attributes.vehiculo }}</dd></div>{% endif %}
-    {% if risk.attributes.placa %}<div><dt>Placa</dt><dd>{{ risk.attributes.placa }}</dd></div>{% endif %}
-    {% if risk.attributes.marca %}<div><dt>Marca o referencia</dt><dd>{{ risk.attributes.marca }}</dd></div>{% endif %}
-    {% if risk.attributes.modelo %}<div><dt>Modelo</dt><dd>{{ risk.attributes.modelo }}</dd></div>{% endif %}
-    {% for label, value in entity.economic_values.items %}{% if value %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}
-  </dl>
+<div class="functional-record" data-functional-entity>
+  <div class="functional-table__row" role="row" data-record-summary>
+    {% if section.branch_code == '28' %}
+      <span role="cell" data-label="#">{{ entity_index }}</span>
+      <strong role="cell" data-label="Dirección">{% if risk.attributes.direccion %}{{ risk.attributes.direccion }}{% elif risk.summary %}{{ risk.summary }}{% else %}Inmueble registrado{% endif %}</strong>
+      <span role="cell" data-label="Ciudad">{{ risk.attributes.ciudad|default:"No informada" }}</span>
+      <span role="cell" data-label="Tipo de uso">{{ risk.attributes.tipo_uso|default:"No informado" }}</span>
+      <span role="cell" data-label="Año">{{ risk.attributes.anio_construccion|default:"No informado" }}</span>
+      <span role="cell" data-label="Valor asegurado">{% for label, value in entity.economic_values.items %}{% if forloop.first %}{{ value }}{% endif %}{% empty %}No informado{% endfor %}</span>
+      <span role="cell" data-label="Estado">{% if entity.state %}{{ entity.state }}{% elif risk.attributes.estado %}{{ risk.attributes.estado }}{% else %}No informado{% endif %}</span>
+    {% elif section.branch_code == '40' %}
+      <strong role="cell" data-label="Placa">{{ risk.attributes.placa|default:"Sin placa informada" }}</strong>
+      <span role="cell" data-label="Marca / referencia">{% if risk.attributes.marca %}{{ risk.attributes.marca }}{% elif risk.attributes.vehiculo %}{{ risk.attributes.vehiculo }}{% else %}No informada{% endif %}</span>
+      <span role="cell" data-label="Modelo">{{ risk.attributes.modelo|default:"No informado" }}</span>
+      <span role="cell" data-label="Ciudad">{{ risk.attributes.ciudad|default:"No informada" }}</span>
+      <span role="cell" data-label="Asegurado">{{ risk.attributes.asegurado|default:"No informado" }}</span>
+      <span role="cell" data-label="Estado">{% if entity.state %}{{ entity.state }}{% elif risk.attributes.estado %}{{ risk.attributes.estado }}{% else %}No informado{% endif %}</span>
+    {% elif section.branch_code == '83' %}
+      <strong role="cell" data-label="Asegurado">{{ entity.display_name|default:"Información protegida" }}</strong>
+      <span role="cell" data-label="Plan">{{ entity.plan|default:"No informado" }}</span>
+      <span role="cell" data-label="Estado">{{ entity.state|default:"No informado" }}</span>
+      <span role="cell" data-label="Valor asegurado">{% for label, value in entity.economic_values.items %}{% if forloop.first %}{{ value }}{% endif %}{% empty %}No informado{% endfor %}</span>
+      <span role="cell" data-label="Fecha de ingreso">{{ entity.entry_date|default:"No informada" }}</span>
+    {% else %}
+      <strong role="cell" data-label="Nombre">{{ entity.display_name|default:"Información protegida" }}</strong>
+      <span role="cell" data-label="Rol">{{ entity.roles|join:" · "|default:"No informado" }}</span>
+      <span role="cell" data-label="Parentesco">{{ entity.relationships|join:", "|default:"No informado" }}</span>
+      <span role="cell" data-label="Plan">{{ entity.plan|default:"No informado" }}</span>
+      <span role="cell" data-label="Estado">{{ entity.state|default:"No informado" }}</span>
+      <span role="cell" data-label="Ingreso">{{ entity.entry_date|default:"No informada" }}</span>
+    {% endif %}
+    <span role="cell" data-label="Acción" class="functional-table__action">
+      <button type="button" class="functional-edit-toggle" data-edit-toggle data-drawer-open="editor-{{ entity.key }}" aria-controls="editor-{{ entity.key }}" aria-haspopup="dialog" aria-expanded="false">Modificar</button>
+      <span class="functional-change-state" data-change-state hidden>✓ Cambio preparado</span>
+    </span>
+  </div>
 
   <input type="hidden" name="source_records_{{ entity.key }}" value="{{ entity.source_record_keys|join:',' }}">
   {% if section.policy %}<input type="hidden" name="policy_{{ entity.key }}" value="{{ section.policy.pk }}">{% endif %}
 
-  <details class="functional-editor-disclosure" data-edit-disclosure>
-    <summary class="functional-edit-toggle" data-edit-toggle aria-controls="editor-{{ entity.key }}">Modificar información</summary>
-    <section class="functional-editor" id="editor-{{ entity.key }}" data-edit-panel aria-label="Editar información">
-    <div class="functional-editor__heading">
-      <div><p class="eyebrow">Información nueva</p><h5>Indique únicamente lo que desea cambiar</h5></div>
-      <button type="button" class="functional-editor__close" data-edit-close aria-label="Cerrar edición">Cerrar</button>
+  <aside class="functional-drawer" id="editor-{{ entity.key }}" role="dialog" aria-modal="true" aria-labelledby="editor-title-{{ entity.key }}" data-drawer data-edit-panel hidden>
+    <div class="functional-drawer__header">
+      <div><p class="eyebrow">Modificar información</p><h4 id="editor-title-{{ entity.key }}" tabindex="-1" data-drawer-title>{% if section.branch_code == '28' %}Inmueble {{ entity_index }}{% elif section.branch_code == '40' %}Vehículo {{ risk.attributes.placa|default:entity_index }}{% else %}{{ entity.display_name|default:"Registro seleccionado" }}{% endif %}</h4></div>
+      <button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button>
     </div>
-    <p class="functional-editor__help">Los valores actuales permanecen visibles arriba. Deje en blanco cualquier dato que no necesite cambiar.</p>
-    <div class="functional-action-grid">
-      <label>¿Qué desea hacer?
-        <select name="action_entity_{{ entity.key }}" data-row-action>
-          {% if "SIN_CAMBIOS" in section.allowed_actions %}<option value="SIN_CAMBIOS">Sin cambios</option>{% endif %}
-          {% if "MODIFICAR" in section.allowed_actions %}<option value="MODIFICAR">Modificar información</option>{% endif %}
-          {% if "RETIRAR" in section.allowed_actions %}<option value="RETIRAR">Retirar</option>{% endif %}
-        </select>
-      </label>
-      <label>Nuevo estado <small>Actual: {{ entity.state|default:"No informado" }}</small>
-        <select name="estado_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select>
-      </label>
-      <label>Nuevo plan <small>Actual: {{ entity.plan|default:"No informado" }}</small><input name="plan_entity_{{ entity.key }}" maxlength="120" placeholder="Conservar actual si queda vacío"></label>
-      {% if section.branch_code == '91' or section.branch_code == '86' %}<label>Nuevo parentesco <small>Actual: {{ entity.relationships|join:", "|default:"No informado" }}</small><select name="parentesco_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
-      {% if section.branch_code == '28' %}
-        <label>Nueva ciudad <small>Actual: {{ risk.attributes.ciudad|default:"No informado" }}</small><input name="ciudad_entity_{{ entity.key }}" maxlength="120"></label>
-        <label>Nueva dirección <small>Actual: {{ risk.attributes.direccion|default:"No informado" }}</small><input name="direccion_entity_{{ entity.key }}" maxlength="180"></label>
-        <label>Nuevo tipo de uso <small>Actual: {{ risk.attributes.tipo_uso|default:"No informado" }}</small><input name="tipo_uso_entity_{{ entity.key }}" maxlength="120"></label>
-        <label>Nuevo año de construcción <small>Actual: {{ risk.attributes.anio_construccion|default:"No informado" }}</small><input name="anio_construccion_entity_{{ entity.key }}" inputmode="numeric" maxlength="4"></label>
-        <label class="functional-action-grid__wide">Nueva descripción <small>Actual: {{ risk.summary|default:"No informado" }}</small><textarea name="descripcion_entity_{{ entity.key }}" maxlength="300" rows="3"></textarea></label>
-        <label>Nuevo valor asegurado <small>Consulte el valor actual en el resumen</small><input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
-      {% elif section.branch_code == '83' %}
-        <label>Nuevo valor asegurado <small>Consulte el valor actual en el resumen</small><input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
-      {% elif section.branch_code == '40' %}
-        <label>Nuevo vehículo <small>Actual: {% if risk.attributes.vehiculo %}{{ risk.attributes.vehiculo }}{% elif risk.summary %}{{ risk.summary }}{% else %}No informado{% endif %}</small><input name="vehiculo_entity_{{ entity.key }}" maxlength="120"></label>
-        <label>Nueva placa <small>Actual: {{ risk.attributes.placa|default:"No informado" }}</small><input name="placa_entity_{{ entity.key }}" maxlength="12"></label>
-        <label>Nueva marca o referencia <small>Actual: {{ risk.attributes.marca|default:"No informado" }}</small><input name="marca_entity_{{ entity.key }}" maxlength="80"></label>
-        <label>Nuevo modelo <small>Actual: {{ risk.attributes.modelo|default:"No informado" }}</small><input name="modelo_entity_{{ entity.key }}" maxlength="40"></label>
-      {% endif %}
-      <label>Fecha de ingreso solicitada <small>Actual: {{ entity.entry_date|default:"No informada" }}</small><input type="date" name="fecha_ingreso_entity_{{ entity.key }}"></label>
-      <label>Fecha de retiro solicitada <small>Actual: {{ entity.exit_date|default:"No informada" }}</small><input type="date" name="fecha_retiro_entity_{{ entity.key }}"></label>
-      <label>Fecha efectiva del cambio<input type="date" name="fecha_efectiva_entity_{{ entity.key }}"></label>
-      <label>Motivo<input name="motivo_entity_{{ entity.key }}" maxlength="200"></label>
-      <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3"></textarea></label>
+
+    <div class="functional-drawer__content">
+      <section class="functional-current-panel" aria-labelledby="current-title-{{ entity.key }}">
+        <h5 id="current-title-{{ entity.key }}">Información actual</h5>
+        <dl>
+          {% if entity.masked_document %}<div><dt>Identificación</dt><dd>{{ entity.id_type }} {{ entity.masked_document }}</dd></div>{% endif %}
+          {% if entity.roles %}<div><dt>Rol</dt><dd>{{ entity.roles|join:" · " }}</dd></div>{% endif %}
+          {% if entity.relationships %}<div><dt>Parentesco o relación</dt><dd>{{ entity.relationships|join:", " }}</dd></div>{% endif %}
+          <div><dt>Estado</dt><dd>{{ entity.state|default:"No informado" }}</dd></div>
+          <div><dt>Plan</dt><dd>{{ entity.plan|default:"No informado" }}</dd></div>
+          {% if entity.entry_date %}<div><dt>Fecha de ingreso</dt><dd>{{ entity.entry_date }}</dd></div>{% endif %}
+          {% if entity.exit_date %}<div><dt>Fecha de retiro</dt><dd>{{ entity.exit_date }}</dd></div>{% endif %}
+          {% if risk.attributes.direccion %}<div><dt>Dirección</dt><dd>{{ risk.attributes.direccion }}</dd></div>{% endif %}
+          {% if risk.attributes.ciudad %}<div><dt>Ciudad</dt><dd>{{ risk.attributes.ciudad }}</dd></div>{% endif %}
+          {% if risk.attributes.tipo_uso %}<div><dt>Tipo de uso</dt><dd>{{ risk.attributes.tipo_uso }}</dd></div>{% endif %}
+          {% if risk.attributes.anio_construccion %}<div><dt>Año de construcción</dt><dd>{{ risk.attributes.anio_construccion }}</dd></div>{% endif %}
+          {% if risk.attributes.vehiculo %}<div><dt>Vehículo</dt><dd>{{ risk.attributes.vehiculo }}</dd></div>{% endif %}
+          {% if risk.attributes.placa %}<div><dt>Placa</dt><dd>{{ risk.attributes.placa }}</dd></div>{% endif %}
+          {% if risk.attributes.marca %}<div><dt>Marca o referencia</dt><dd>{{ risk.attributes.marca }}</dd></div>{% endif %}
+          {% if risk.attributes.modelo %}<div><dt>Modelo</dt><dd>{{ risk.attributes.modelo }}</dd></div>{% endif %}
+          {% for label, value in entity.economic_values.items %}{% if value %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}
+        </dl>
+      </section>
+
+      <section class="functional-new-panel" aria-labelledby="new-title-{{ entity.key }}">
+        <div class="functional-new-panel__heading"><p class="eyebrow">Información nueva</p><h5 id="new-title-{{ entity.key }}">Indique únicamente lo que desea cambiar</h5></div>
+        <p>Los campos vacíos conservarán la información actual.</p>
+        <div class="functional-action-grid">
+          <label>Acción
+            <select name="action_entity_{{ entity.key }}" data-row-action>
+              {% if "SIN_CAMBIOS" in section.allowed_actions %}<option value="SIN_CAMBIOS">Sin cambios</option>{% endif %}
+              {% if "MODIFICAR" in section.allowed_actions %}<option value="MODIFICAR">Modificar</option>{% endif %}
+              {% if "RETIRAR" in section.allowed_actions %}<option value="RETIRAR">Retirar</option>{% endif %}
+            </select>
+          </label>
+          <label>Nuevo estado<select name="estado_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+          <label>Nuevo plan<input name="plan_entity_{{ entity.key }}" maxlength="120" placeholder="Conservar actual"></label>
+          {% if section.branch_code == '91' or section.branch_code == '86' %}<label>Nuevo parentesco<select name="parentesco_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
+          {% if section.branch_code == '28' %}
+            <label>Nueva ciudad<input name="ciudad_entity_{{ entity.key }}" maxlength="120"></label>
+            <label>Nueva dirección<input name="direccion_entity_{{ entity.key }}" maxlength="180"></label>
+            <label>Nuevo tipo de uso<input name="tipo_uso_entity_{{ entity.key }}" maxlength="120"></label>
+            <label>Nuevo año de construcción<input name="anio_construccion_entity_{{ entity.key }}" inputmode="numeric" maxlength="4"></label>
+            <label class="functional-action-grid__wide">Nueva descripción<textarea name="descripcion_entity_{{ entity.key }}" maxlength="300" rows="3"></textarea></label>
+            <label>Nuevo valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
+          {% elif section.branch_code == '83' %}
+            <label>Nuevo valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
+          {% elif section.branch_code == '40' %}
+            <label>Nuevo vehículo<input name="vehiculo_entity_{{ entity.key }}" maxlength="120"></label>
+            <label>Nueva placa<input name="placa_entity_{{ entity.key }}" maxlength="12"></label>
+            <label>Nueva marca o referencia<input name="marca_entity_{{ entity.key }}" maxlength="80"></label>
+            <label>Nuevo modelo<input name="modelo_entity_{{ entity.key }}" maxlength="40"></label>
+          {% endif %}
+          <label>Fecha de ingreso solicitada<input type="date" name="fecha_ingreso_entity_{{ entity.key }}"></label>
+          <label>Fecha de retiro solicitada<input type="date" name="fecha_retiro_entity_{{ entity.key }}"></label>
+          <label>Fecha efectiva del cambio<input type="date" name="fecha_efectiva_entity_{{ entity.key }}"></label>
+          <label>Motivo<input name="motivo_entity_{{ entity.key }}" maxlength="200"></label>
+          <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3"></textarea></label>
+        </div>
+      </section>
     </div>
-      <button type="button" class="functional-editor__done" data-edit-done>Listo</button>
-    </section>
-  </details>
-  <span class="functional-change-state" data-change-state hidden>Cambio preparado</span>
-</article>
+    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-edit-done data-drawer-done>Preparar cambio</button></div>
+  </aside>
+</div>
