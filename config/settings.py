@@ -33,7 +33,7 @@ SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if 
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
 CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','conciliacion.apps.ConciliacionConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','config.middleware.TrustedIntranetAccessMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
@@ -103,6 +103,8 @@ SOAT_ZOHO_REPORT_URL=os.getenv('SOAT_ZOHO_REPORT_URL','').strip()
 SOAT_MAX_UPLOAD_BYTES=int(os.getenv('SOAT_MAX_UPLOAD_BYTES',str(25*1024*1024)))
 SOAT_MAX_ROWS=int(os.getenv('SOAT_MAX_ROWS','100000'))
 SOAT_MAX_COLUMNS=int(os.getenv('SOAT_MAX_COLUMNS','200'))
+CONCILIACION_APP_URL=os.getenv('CONCILIACION_APP_URL','').strip()
+CONCILIACION_MAX_UPLOAD_BYTES=int(os.getenv('CONCILIACION_MAX_UPLOAD_BYTES',str(25*1024*1024)))
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS',86400,300,604800)

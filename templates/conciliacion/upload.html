@@ -1,0 +1,104 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conciliador de Facturación | A&amp;S</title>
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/conciliacion.css' %}">
+  <script defer src="{% static 'js/conciliacion.js' %}"></script>
+</head>
+<body class="conc-page">
+  <a class="skip-link" href="#contenido">Ir al contenido principal</a>
+  <header class="conc-header">
+    <a href="{% url 'public_home' %}" class="conc-brand" aria-label="Volver al Banco de Herramientas">
+      <img src="{% static 'img/branding/logo-ays-blanco.png' %}" alt="A&S">
+      <span>Banco de Herramientas</span>
+    </a>
+  </header>
+
+  <main id="contenido" class="conc-shell">
+    <section class="conc-intro">
+      <span class="eyebrow">Herramienta pública</span>
+      <h1>Conciliador de Facturación</h1>
+      <p>Concilie la relación de asegurados contra el cobro de la aseguradora por ramo.
+         El proceso es efímero: los archivos no se almacenan.</p>
+    </section>
+
+    <section class="conc-card" aria-labelledby="form-title">
+      <h2 id="form-title">Datos de la conciliación</h2>
+      <form method="post" enctype="multipart/form-data" data-conc-form novalidate>
+        {% csrf_token %}
+
+        <div class="conc-fields">
+          <div class="conc-field">
+            <label for="{{ form.ramo.id_for_label }}">Ramo</label>
+            {{ form.ramo }}
+            {% if form.ramo.errors %}<p class="conc-error" role="alert">{{ form.ramo.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="conc-field">
+            <label for="{{ form.poliza.id_for_label }}">Número de póliza</label>
+            {{ form.poliza }}
+            {% if form.poliza.errors %}<p class="conc-error" role="alert">{{ form.poliza.errors|striptags }}</p>{% endif %}
+          </div>
+        </div>
+
+        <div class="conc-slot-group">
+          <h3>Archivos de la aseguradora</h3>
+          <div class="conc-slots">
+            {% include "conciliacion/_slot.html" with field=form.cobro slot="cobro" slotdata=slots_iniciales_map.cobro %}
+            {% include "conciliacion/_slot.html" with field=form.recibo slot="recibo" slotdata=slots_iniciales_map.recibo %}
+          </div>
+        </div>
+
+        <div class="conc-slot-group">
+          <h3>Datos de Zoho <span class="conc-temporal-badge">temporal</span></h3>
+          <p class="conc-muted">Estos archivos se cargan manualmente por ahora. Se reemplazarán por conexión directa por API a Zoho.</p>
+          <div class="conc-slots">
+            {% include "conciliacion/_slot.html" with field=form.relacion slot="relacion" slotdata=slots_iniciales_map.relacion %}
+            {% include "conciliacion/_slot.html" with field=form.personas slot="personas" slotdata=slots_iniciales_map.personas %}
+            {% include "conciliacion/_slot.html" with field=form.novedades slot="novedades" slotdata=slots_iniciales_map.novedades %}
+          </div>
+        </div>
+
+        {% if processing_error %}
+          <div class="conc-error conc-error--block" role="alert">
+            <strong>No fue posible procesar la conciliación</strong><br>{{ processing_error }}
+          </div>
+        {% endif %}
+
+        <button class="conc-button" type="submit" data-conc-submit>Enviar y conciliar</button>
+        <p class="conc-progress" data-conc-progress hidden role="status">Conciliando… esto puede tomar algunos segundos.</p>
+      </form>
+    </section>
+
+    <section class="conc-result" data-conc-result hidden aria-labelledby="result-title">
+      <h2 id="result-title">Resultado de la conciliación</h2>
+      <div class="conc-result-meta" data-result-meta></div>
+      <div class="conc-banner" data-result-banner></div>
+      <div class="conc-incidents" data-result-incidents hidden>
+        <h3>Incidentes por tipo</h3>
+        <ul data-incidents-list></ul>
+      </div>
+      <div class="conc-result-actions">
+        <button class="conc-button" type="button" data-action-facturar hidden>Facturar</button>
+        <button class="conc-button" type="button" data-action-download hidden>Descargar Excel de incidentes</button>
+        <button class="conc-button secondary" type="button" data-action-reset>Nueva conciliación</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="conc-modal" data-facturar-modal hidden role="dialog" aria-modal="true" aria-labelledby="facturar-modal-title">
+    <div class="conc-modal-card">
+      <h2 id="facturar-modal-title">Facturación (próximamente)</h2>
+      <p>Esta acción es un marcador de posición. La facturación automática se ejecutará
+         más adelante como una acción directa sobre Zoho. Por ahora no realiza ninguna operación.</p>
+      <button class="conc-button" type="button" data-facturar-close>Entendido</button>
+    </div>
+  </div>
+
+  <script type="application/json" id="conc-slots-catalog">{{ slots_catalog_json|safe }}</script>
+</body>
+</html>

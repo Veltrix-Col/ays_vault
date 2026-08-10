@@ -12,6 +12,7 @@ ALLOWED_ACCESS_MODES = frozenset({LOCAL_PUBLIC, TRUSTED_INTRANET})
 
 INHERITED_NAMESPACES = {
     "soat": "soat",
+    "conciliacion": "conciliacion",
     "cotizacion_colectivos": "cotizacion_colectivos",
 }
 

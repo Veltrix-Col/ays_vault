@@ -14,6 +14,8 @@ def application_catalog():
     """Catálogo declarativo del portal; no contiene datos operativos."""
     external_soat_url = _safe_external_url(getattr(settings, "SOAT_APP_URL", ""))
     soat_url = external_soat_url or reverse("soat:upload")
+    external_conciliacion_url = _safe_external_url(getattr(settings, "CONCILIACION_APP_URL", ""))
+    conciliacion_url = external_conciliacion_url or reverse("conciliacion:index")
     return [
         {
             "name": "CardManager",
@@ -34,6 +36,16 @@ def application_catalog():
             "url": soat_url,
             "active": True,
             "external": bool(external_soat_url),
+        },
+        {
+            "name": "Conciliador de Facturación",
+            "description": "Conciliación de relaciones de asegurados contra el cobro de la aseguradora, por ramo, con reporte de incidentes.",
+            "logo": "",
+            "logo_class": "",
+            "icon_path": "M4 4h16v4H4V4Zm0 6h16v10H4V10Zm3 3h4M7 16h7",
+            "url": conciliacion_url,
+            "active": True,
+            "external": bool(external_conciliacion_url),
         },
         {
             "name": "Cotización – Colectivos",
