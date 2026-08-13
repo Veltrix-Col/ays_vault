@@ -1,7 +1,7 @@
 {% load static %}
 <!doctype html><html lang="es"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Cotización – Colectivos{% endblock %} | Banco de Herramientas</title>
+  <title>{% block title %}Colectivos{% endblock %} | Banco de Herramientas</title>
   <meta name="robots" content="noindex,nofollow">
   <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
   <link rel="stylesheet" href="{% static 'css/ays.css' %}">
@@ -12,7 +12,7 @@
   <a href="{% url 'public_home' %}" class="colectivos-brand" aria-label="Volver al Banco de Herramientas">
     <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S Asesores en Seguros"><span>Banco de Herramientas</span>
   </a>
-  <nav class="header-actions" aria-label="Navegación de Colectivos"><a href="{% url 'cotizacion_colectivos:index' %}">Buscar</a><a class="notification-link" href="{% url 'cotizacion_colectivos:notification_list' %}" aria-label="Respuestas de clientes">Respuestas<span>{{ colectivos_unread_notifications|default:0 }}</span></a><div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Ambiente Zoho activo">{{ zoho_environment.label }} · Solo lectura</div></nav>
+  <nav class="header-actions" aria-label="Navegación de Colectivos">{% if colectivos_mode.code == 'individual' %}<a href="{% url 'cotizacion_colectivos:individual_index' %}">Cambiar ramo</a>{% elif colectivos_mode.code == 'invitations' %}<a href="{% url 'cotizacion_colectivos:invitations_index' %}">Buscar cliente</a>{% else %}<a href="{% url 'cotizacion_colectivos:requests_index' %}">Buscar cliente</a>{% endif %}{% if colectivos_mode.code != 'individual' %}<a class="notification-link" href="{% url 'cotizacion_colectivos:notification_list' %}" aria-label="Respuestas de clientes">Respuestas<span>{{ colectivos_unread_notifications|default:0 }}</span></a>{% endif %}<div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Ambiente Zoho activo">{{ zoho_environment.label }} · Solo lectura</div></nav>
 </header>
 <main id="main-content" class="colectivos-main" tabindex="-1">{% block content %}{% endblock %}</main>
 <script src="{% static 'js/colectivos-loading.js' %}" defer></script>

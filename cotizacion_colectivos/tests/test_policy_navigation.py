@@ -215,12 +215,13 @@ class PolicyNavigationTests(TestCase):
         service.group = Mock(wraps=service.group)
         with patch("cotizacion_colectivos.views.EntityDetailService") as entity_service:
             response = self.policy_page(service)
-        self.assertContains(response, "Empresas")
+        self.assertContains(response, "Solicitudes y Renovaciones")
         self.assertContains(response, "Fonconstruimos")
         self.assertContains(response, "← Volver a la ficha del cliente")
         href = anchor_href(response, "← Volver a la ficha del cliente")
         match = resolve(urlsplit(href).path)
-        self.assertEqual(match.view_name, "cotizacion_colectivos:company_detail")
+        self.assertEqual(match.view_name, "cotizacion_colectivos:requests_client_detail")
+        self.assertEqual(match.kwargs["entity_kind"], "company")
         source_context = unsign_record_context(match.kwargs["token"], "company")
         self.assertEqual(source_context, {"id": SOURCE_ID, "type": "company"})
         self.assertNotContains(response, SOURCE_ID)
@@ -230,11 +231,12 @@ class PolicyNavigationTests(TestCase):
     def test_person_breadcrumb_and_back_action_resolve_to_signed_source(self):
         detail = _policy(source_name="Persona de prueba", source_kind="person")
         response = self.policy_page(AnyPolicyTokenService(detail), token=PERSON_TOKEN)
-        self.assertContains(response, "Individuos")
+        self.assertContains(response, "Solicitudes y Renovaciones")
         self.assertContains(response, "Persona de prueba")
         href = anchor_href(response, "← Volver a la ficha del cliente")
         match = resolve(urlsplit(href).path)
-        self.assertEqual(match.view_name, "cotizacion_colectivos:person_detail")
+        self.assertEqual(match.view_name, "cotizacion_colectivos:requests_client_detail")
+        self.assertEqual(match.kwargs["entity_kind"], "person")
         source_context = unsign_record_context(match.kwargs["token"], "person")
         self.assertEqual(source_context, {"id": SOURCE_ID, "type": "person"})
         self.assertNotContains(response, SOURCE_ID)
@@ -278,6 +280,21 @@ class PolicyNavigationTests(TestCase):
         self.assertNotContains(response, "Novedades y solicitudes")
         self.assertNotContains(response, "Preparar envío")
         self.assertContains(response, "method=\"post\"")
+
+    def test_same_policy_workspace_changes_only_the_primary_tool_context(self):
+        with patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService()):
+            requests_page = self.client.get(reverse(
+                "cotizacion_colectivos:requests_policy_detail", args=[TOKEN]
+            ))
+            invitations_page = self.client.get(reverse(
+                "cotizacion_colectivos:invitations_policy_detail", args=[TOKEN]
+            ))
+        self.assertContains(requests_page, "Solicitudes y Renovaciones")
+        self.assertContains(requests_page, "Generar enlace")
+        self.assertContains(invitations_page, "Invitaciones a Aseguradoras")
+        self.assertContains(invitations_page, "Descargar plantillas de invitación")
+        self.assertContains(requests_page, "Salud colectivo")
+        self.assertContains(invitations_page, "Salud colectivo")
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_legacy_single_policy_endpoint_remains_compatible_and_reuses_request(self, _service):

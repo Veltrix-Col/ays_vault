@@ -1,10 +1,16 @@
-# Inventario de rutas de Cotización–Colectivos
+# Inventario de rutas del motor de Colectivos
 
-## Flujo principal enlazado
+## Puntos de entrada visibles
 
-- `/cotizacion-colectivos/`: búsqueda separada de empresa e individuo.
-- `/cotizacion-colectivos/empresas/buscar/` e
-  `/individuos/buscar/`: resultados.
+- `/cotizacion-colectivos/solicitudes-renovaciones/`.
+- `/cotizacion-colectivos/invitaciones-aseguradoras/`.
+- Cada entrada tiene una ruta de búsqueda de cliente con modo fijado por el
+  servidor y rutas de ficha cliente/póliza que conservan ese contexto.
+
+## Motor compartido
+
+- `/cotizacion-colectivos/`: entrada histórica; usa Solicitudes y Renovaciones.
+- `/cotizacion-colectivos/clientes/buscar/`: compatibilidad de búsqueda común.
 - `/empresas/<token>/` e `/individuos/<token>/`: selección de póliza.
 - `/polizas/<token>/`: detalle de póliza y centro operativo.
 - `/polizas/<token>/enlace/`: generación directa.

@@ -81,7 +81,7 @@ def inline_value(archive: bytes, part: str, coordinate: str):
 
 class InvitationTemplateCatalogTests(TestCase):
     def test_catalog_is_closed_and_does_not_infer_insurer_from_filename(self):
-        self.assertEqual(len(INVITATION_TEMPLATE_CATALOG), 3)
+        self.assertEqual(len(INVITATION_TEMPLATE_CATALOG), 4)
         general = next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "allianz_autos_collective")
         self.assertEqual(general.insurer_code, "ALLIANZ")
         self.assertNotEqual(general.insurer_name, "SURA")
@@ -94,6 +94,13 @@ class InvitationTemplateCatalogTests(TestCase):
         self.assertFalse(legacy.active)
         self.assertEqual(legacy.generator, "unsupported_biff8")
         self.assertTrue(legacy.path.read_bytes().startswith(bytes.fromhex("D0CF11E0A1B11AE1")))
+
+    def test_reorganized_sources_resolve_and_allianz_life_is_active(self):
+        self.assertTrue(all(item.path.is_file() for item in INVITATION_TEMPLATE_CATALOG))
+        allianz = next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "allianz_vg_collective")
+        self.assertTrue(allianz.active)
+        self.assertEqual(allianz.path.parent.name, "allianz")
+        self.assertEqual({item.insurer_code for item in templates_for_branch("83")}, {"SURA", "ALLIANZ"})
 
     def test_local_loader_has_no_facade_or_zoho_query_dependency(self):
         from cotizacion_colectivos.services import invitation_templates as service
@@ -199,10 +206,18 @@ class InvitationTemplateGenerationTests(TestCase):
     def test_inactive_xls_is_reported_but_not_generated(self, workspace):
         workspace.return_value = local_workspace(branch="83")
         _detail, previews, _metadata = preview_invitation_templates(TOKEN)
-        self.assertEqual(len(previews), 1)
-        self.assertEqual(previews[0].status, "unavailable")
-        with self.assertRaisesMessage(Exception, "No hay plantillas generables"):
-            generate_invitation_templates(TOKEN)
+        self.assertEqual(len(previews), 2)
+        self.assertEqual({item.template.insurer_code: item.status for item in previews}["SURA"], "unavailable")
+        content, filename, content_type, errors = generate_invitation_templates(TOKEN)
+        self.assertEqual(filename, "Invitacion_ALLIANZ_83.xlsx")
+        self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertEqual(errors, ())
+        self.assertEqual(inline_value(content, "xl/worksheets/sheet1.xml", "B10"), "Empresa de prueba")
+        self.assertEqual(inline_value(content, "xl/worksheets/sheet1.xml", "B26"), "2027-08-01")
+        self.assertIn(inline_value(content, "xl/worksheets/sheet1.xml", "B12"), ("", None))
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            sheet = ET.fromstring(package.read("xl/worksheets/sheet1.xml"))
+            self.assertEqual(sheet.find(f".//{{{NS}}}c[@r='B4']/{{{NS}}}f").text, "TODAY()")
 
 
 class InvitationTemplateViewTests(TestCase):

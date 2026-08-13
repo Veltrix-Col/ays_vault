@@ -37,6 +37,7 @@ class InvitationTemplate:
     end_row: int
     fields: tuple[TemplateField, ...]
     limitation: str = ""
+    clear_cells: tuple[str, ...] = ()
 
     @property
     def path(self) -> Path:
@@ -102,12 +103,40 @@ SURA_VG_ANALYSIS_FIELDS = (
 )
 
 
+ALLIANZ_VG_FIELDS = (
+    TemplateField("Nombre tomador", "FORMATO", "B10", "policy.holder", required=True),
+    TemplateField("Identificación tomador", "FORMATO", "B11", "holder.document", required=True),
+    TemplateField("Ubicación tomador", "FORMATO", "B13", "holder.city"),
+    TemplateField("Inicio de vigencia", "FORMATO", "B25", "policy.start_date"),
+    TemplateField("Fin de vigencia", "FORMATO", "B26", "policy.end_date"),
+    TemplateField("Compañía actual", "FORMATO", "B77", "policy.current_insurer"),
+    TemplateField("Procedimiento", "FORMATO", "B5", "manual.procedure", automatic=False, required=True),
+    TemplateField("Clase de póliza", "FORMATO", "B6", "manual.policy_class", automatic=False, required=True),
+    TemplateField("Actividad económica", "FORMATO", "B12", "manual.economic_activity", automatic=False),
+    TemplateField("Característica y ocupación del grupo", "FORMATO", "B17:B20", "manual.group", automatic=False, required=True),
+    TemplateField("Número y edades de personas", "FORMATO", "B21:B23", "manual.demographics", automatic=False, required=True),
+    TemplateField("Datos de intermediario", "FORMATO", "B30:B34", "manual.intermediary", automatic=False, required=True),
+    TemplateField("Valores asegurados", "FORMATO", "B38:B53", "manual.insured_values", automatic=False, required=True),
+    TemplateField("Amparos", "FORMATO", "B56:B72", "manual.coverages", automatic=False, required=True),
+    TemplateField("Condiciones particulares", "FORMATO", "B76:B82", "manual.conditions", automatic=False),
+    TemplateField("Siniestralidad", "FORMATO", "A85:C87", "manual.claims", automatic=False),
+)
+
+ALLIANZ_VG_CLEAR_CELLS = tuple(
+    "B5 B6 B10 B11 B12 B13 B17 B18 B19 B20 B21 B22 B23 B25 B26 "
+    "B30 B31 B32 B33 B34 B38 B42 B43 B44 B45 B46 B47 B48 B49 B50 B51 "
+    "B56 B57 B58 B59 B60 B61 B62 B63 B64 B67 B68 B69 B70 B71 B72 "
+    "B76 B77 B78 B79 B80 B81 B82 A85 B85 C85 A86 B86 C86 A87 B87 C87 B93"
+    .split()
+)
+
+
 INVITATION_TEMPLATE_CATALOG = (
     InvitationTemplate(
         code="sura_vg_mass_biff8", insurer_code="SURA", insurer_name="SURA",
         branch_code="83", branch_name="Vida grupo deudores",
         purpose="Carga masiva de asegurados y beneficiarios de Vida Grupo",
-        filename="Plantilla Carga Masiva Sura_VG.xls", extension="xls",
+        filename="vida/sura/Plantilla Carga Masiva Sura_VG.xls", extension="xls",
         version="maestra-biff8", active=False, generator="unsupported_biff8",
         data_sheet="Plantilla Cargas Masivas", start_row=14, end_row=53,
         fields=SURA_VG_ANALYSIS_FIELDS,
@@ -117,10 +146,24 @@ INVITATION_TEMPLATE_CATALOG = (
         ),
     ),
     InvitationTemplate(
+        code="allianz_vg_collective", insurer_code="ALLIANZ", insurer_name="Allianz",
+        branch_code="83", branch_name="Vida grupo deudores",
+        purpose="Solicitud de cotización de Vida Grupo colectiva",
+        filename="vida/allianz/Formato Vida Grupo Colectiva_Allianz_EDM.xlsx",
+        extension="xlsx", version="2026-04-10", active=True,
+        generator="ooxml_patch", data_sheet="FORMATO", start_row=1, end_row=1,
+        fields=ALLIANZ_VG_FIELDS,
+        limitation=(
+            "Solo se precargan tomador, identificación, ubicación, vigencias y compañía actual. "
+            "Coberturas, valores, siniestralidad e intermediación permanecen manuales."
+        ),
+        clear_cells=ALLIANZ_VG_CLEAR_CELLS,
+    ),
+    InvitationTemplate(
         code="sura_autos_quote", insurer_code="SURA", insurer_name="SURA",
         branch_code="40", branch_name="Movilidad colectivo",
         purpose="Cotización de automóviles",
-        filename="Plantilla cotizacion Autos_Sura.xlsx", extension="xlsx",
+        filename="movilidad/sura/Plantilla cotizacion Autos_Sura.xlsx", extension="xlsx",
         version="2026-07-14", active=True, generator="ooxml_patch",
         data_sheet="Riesgos", start_row=2, end_row=22,
         fields=AUTOS_SURA_FIELDS,
@@ -130,7 +173,7 @@ INVITATION_TEMPLATE_CATALOG = (
         insurer_name="Allianz", branch_code="40",
         branch_name="Movilidad colectivo",
         purpose="Solicitud general de cotización de Autos colectivo",
-        filename="Plantilla Solicitud Cotizaciones_Autos colectivo.xlsx",
+        filename="movilidad/allianz/Plantilla Solicitud Cotizaciones_Autos colectivo.xlsx",
         extension="xlsx", version="maestra-repositorio", active=True,
         generator="ooxml_patch", data_sheet="Datos Vehículos a cotizar",
         start_row=2, end_row=300, fields=AUTOS_GENERAL_FIELDS,

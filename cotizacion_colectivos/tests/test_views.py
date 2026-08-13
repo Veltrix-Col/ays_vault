@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from cotizacion_colectivos.dto import CompanySearchResult
+from cotizacion_colectivos.dto import ClientSearchResult, CompanySearchResult
 from vault.crypto import encrypt
 from vault.models import SecureSession
 from vault.security import session_hash
@@ -65,19 +65,37 @@ class ColectivosViewTests(TestCase):
         self.assertEqual(client.get(reverse("cotizacion_colectivos:index")).status_code, 200)
         self.assertEqual(client.get(reverse("vault:dashboard")).status_code, 302)
 
-    def test_superuser_sees_only_the_two_direct_search_forms(self):
+    def test_each_entry_point_has_one_unified_client_search(self):
         client = self.authenticated_client(self.admin)
-        response = client.get(reverse("cotizacion_colectivos:index"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "NIT o nombre de empresa")
-        self.assertContains(response, "Cédula o nombre del individuo")
-        self.assertContains(response, 'id="id_company_query"')
-        self.assertContains(response, 'id="id_person_query"')
-        self.assertContains(response, 'name="query"', count=2)
-        self.assertNotContains(response, "disabled")
-        self.assertNotContains(response, "Próximamente")
-        self.assertNotContains(response, "Solicitudes")
-        self.assertContains(response, "Sandbox · Solo lectura")
+        for route, title in (
+            ("cotizacion_colectivos:requests_index", "Solicitudes y Renovaciones"),
+            ("cotizacion_colectivos:invitations_index", "Invitaciones a Aseguradoras"),
+        ):
+            response = client.get(reverse(route))
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, title)
+            self.assertContains(response, "Buscar por nombre o identificación")
+            self.assertContains(response, 'id="id_query"')
+            self.assertContains(response, 'name="query"', count=1)
+            self.assertNotContains(response, 'id="id_company_query"')
+            self.assertNotContains(response, 'id="id_person_query"')
+            self.assertContains(response, "Sandbox · Solo lectura")
+
+    @patch("cotizacion_colectivos.views.UnifiedClientSearchService")
+    def test_unified_search_renders_company_and_person_as_clients(self, service):
+        service.return_value.search.return_value = (
+            ClientSearchResult("company-token", "company", "Empresa Segura", "Empresa", "NIT", "•••567", "Cliente"),
+            ClientSearchResult("person-token", "person", "Persona Segura", "Persona", "Documento", "•••890", "Activo"),
+        )
+        client = self.authenticated_client(self.admin)
+        response = client.post(
+            reverse("cotizacion_colectivos:requests_client_search"), {"query": "Segura"}
+        )
+        self.assertContains(response, "Empresa Segura")
+        self.assertContains(response, "Persona Segura")
+        self.assertContains(response, reverse(
+            "cotizacion_colectivos:requests_client_detail", args=["company", "company-token"]
+        ))
 
     @override_settings(ZOHO_ACTIVE_PROFILE="production")
     def test_production_badge_is_derived_from_configuration(self):
@@ -177,6 +195,9 @@ class ColectivosViewTests(TestCase):
 
     def test_portal_contains_authorized_link_and_soat_remains(self):
         response = self.client.get(reverse("public_home"))
-        self.assertContains(response, "Cotización – Colectivos")
-        self.assertContains(response, reverse("cotizacion_colectivos:index"))
+        self.assertContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, "Invitaciones a Aseguradoras")
+        self.assertContains(response, reverse("cotizacion_colectivos:requests_index"))
+        self.assertContains(response, reverse("cotizacion_colectivos:invitations_index"))
+        self.assertNotContains(response, "Cotización – Colectivos")
         self.assertContains(response, "Gestión SOAT")

@@ -20,6 +20,17 @@ class PersonSearchResult:
 
 
 @dataclass(frozen=True)
+class ClientSearchResult:
+    detail_token: str
+    source_kind: str
+    display_name: str
+    entity_label: str
+    document_label: str
+    masked_document: str
+    state: str
+
+
+@dataclass(frozen=True)
 class RequestPolicyOption:
     detail_token: str
     masked_reference: str

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 import unicodedata
 import uuid
@@ -8,6 +9,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django.core import signing
 from django.db import OperationalError, transaction
 from django.db.models import Count, Prefetch, Q
 from django.http import Http404, HttpResponse
@@ -19,13 +21,13 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 from django.template.loader import render_to_string
 
-from .forms import CompanySearchForm, ExternalAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
-from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService
+from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
+from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
 from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
-from .dto import RequestPolicyOption
+from .dto import ClientSearchResult, RequestPolicyOption
 from .services.requests import create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
 from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation
 from .services.excel_roundtrip import (
@@ -49,13 +51,22 @@ from vault.notifications import mask_email
 from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
+from .modes import INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
+from .quotation_forms.catalog import BRANCH_SCHEMAS, get_branch_schema
+from .quotation_forms.forms import IndividualQuotationForm
+from .quotation_forms.security import sign_context, sign_receipt, unsign_context, unsign_receipt
+from .services.individual_quotations import create_individual_quotation
+from .models import CotizacionIndividual
 
 
 logger = logging.getLogger("cotizacion_colectivos")
 
 
-def _environment_context():
-    return {"zoho_environment": get_colectivos_environment()}
+def _environment_context(request=None, mode=None):
+    context = {"zoho_environment": get_colectivos_environment()}
+    if request is not None:
+        context["colectivos_mode"] = resolve_tool_mode(request, mode)
+    return context
 
 
 def _error_status(exc):
@@ -68,16 +79,158 @@ def _error_status(exc):
 
 @never_cache
 @require_http_methods(["GET"])
-def index(request):
+def index(request, mode=None):
+    tool_mode = resolve_tool_mode(request, mode)
     return render(request, "cotizacion_colectivos/index.html", {
-        "company_form": CompanySearchForm(auto_id="id_company_%s"),
-        "person_form": PersonSearchForm(auto_id="id_person_%s"),
+        "form": ClientSearchForm(),
+        "colectivos_mode": tool_mode,
         **_environment_context(),
     })
 
 
+@never_cache
+@require_http_methods(["GET"])
+def individual_quotation_index(request):
+    tool_mode = resolve_tool_mode(request, INDIVIDUAL_MODE)
+    return render(request, "cotizacion_colectivos/individual/index.html", {
+        "branches": BRANCH_SCHEMAS,
+        "colectivos_mode": tool_mode,
+        **_environment_context(),
+    })
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def individual_quotation_form(request, branch_slug):
+    tool_mode = resolve_tool_mode(request, INDIVIDUAL_MODE)
+    schema = get_branch_schema(branch_slug)
+    context_token = str(request.GET.get("context") or request.POST.get("context_token") or "")
+    context = {}
+    if context_token:
+        try:
+            context = unsign_context(context_token)
+        except signing.BadSignature as exc:
+            raise Http404("Contexto no válido") from exc
+    initial_items = {group.key: [{} for _ in range(group.minimum)] for group in schema.repeatables}
+    form = IndividualQuotationForm(
+        request.POST or None,
+        request.FILES or None,
+        schema=schema,
+        context=context,
+        initial={"items_payload": json.dumps(initial_items)},
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            quotation = create_individual_quotation(
+                schema=schema,
+                cleaned_data=form.cleaned_data,
+                actor=get_internal_actor(request, create=True),
+                context=context,
+            )
+        except ValidationError as exc:
+            form.add_error("attachments", exc.message)
+        else:
+            logger.info(
+                "colectivos_individual application=cotizacion_colectivos operation=submit "
+                "branch=%s items=%d attachments=%d actor=%s",
+                schema.slug, quotation.item_count, quotation.attachment_count,
+                "technical" if public_internal_access_enabled() else "authenticated",
+            )
+            return redirect("cotizacion_colectivos:individual_confirmation", token=sign_receipt(quotation.public_id))
+    schema_payload = {
+        "repeatables": [asdict(item) for item in schema.repeatables],
+        "initial": initial_items,
+    }
+    return render(request, "cotizacion_colectivos/individual/form.html", {
+        "schema": schema,
+        "schema_payload": schema_payload,
+        "form": form,
+        "field_rows": tuple((field, form[field.key]) for field in schema.fields),
+        "context_token": context_token,
+        "colectivos_mode": tool_mode,
+        **_environment_context(),
+    })
+
+
+@never_cache
+@require_http_methods(["GET"])
+def individual_quotation_confirmation(request, token):
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.only(
+            "public_id", "branch_slug", "branch_code", "item_count", "attachment_count", "submitted_at"
+        ).get(public_id=public_id)
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError) as exc:
+        raise Http404("Confirmación no encontrada") from exc
+    return render(request, "cotizacion_colectivos/individual/confirmation.html", {
+        "quotation": quotation,
+        "schema": get_branch_schema(quotation.branch_slug),
+        "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
+        **_environment_context(),
+    })
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def client_search(request, mode=None):
+    environment = get_colectivos_environment()
+    tool_mode = resolve_tool_mode(request, mode)
+    form = ClientSearchForm(request.POST or None)
+    results, error, status = None, "", 200
+    if request.method == "POST" and form.is_valid():
+        started = time.monotonic()
+        correlation = uuid.uuid4().hex
+        error_category = "none"
+        timings = {
+            "facade_ms": 0, "organization_ms": 0, "metadata_ms": 0,
+            "search_ms": 0, "coql_ms": 0, "mapper_ms": 0,
+            "dedup_ms": 0, "dto_ms": 0,
+        }
+        try:
+            service = UnifiedClientSearchService()
+            results = service.search(form.cleaned_data["query"])
+            timings.update(service.timings)
+        except ColectivosServiceError as exc:
+            error_category = exc.code
+            error, status = exc.message, _error_status(exc)
+        except Exception:
+            error_category = "unknown"
+            error = f"{environment['label']} no está disponible temporalmente. Intente nuevamente más tarde."
+            status = 503
+        logger.info(
+            "colectivos_search application=cotizacion_colectivos entity=client operation=search "
+            "facade_ms=%d organization_ms=%d search_ms=%d duration_ms=%d results=%d "
+            "error=%s actor=%s profile=%s correlation=%s",
+            timings["facade_ms"], timings["organization_ms"], timings["search_ms"],
+            round((time.monotonic() - started) * 1000), len(results or ()),
+            error_category, "technical" if public_internal_access_enabled() else "authenticated",
+            environment["profile"], correlation,
+        )
+    return render(request, "cotizacion_colectivos/search.html", {
+        "form": form,
+        "results": results,
+        "error": error,
+        "entity_kind": "client",
+        "colectivos_mode": tool_mode,
+        "zoho_environment": environment,
+    }, status=status)
+
+
+@never_cache
+@require_http_methods(["GET"])
+def client_detail(request, entity_kind, token, mode=None):
+    resolve_tool_mode(request, mode)
+    if entity_kind == "company":
+        return _detail(request, token, method="company", entity_kind="company")
+    if entity_kind == "person":
+        return _detail(request, token, method="person", entity_kind="person")
+    raise Http404("Cliente no encontrado")
+
+
 def _search(request, *, form_class, service_class, entity_kind):
     environment = get_colectivos_environment()
+    tool_mode = resolve_tool_mode(request)
     form = form_class(request.POST or None)
     results, error, status = None, "", 200
     if request.method == "POST" and form.is_valid():
@@ -92,7 +245,17 @@ def _search(request, *, form_class, service_class, entity_kind):
         try:
             query = form.cleaned_data["query"]
             service = service_class()
-            results = service.search(query)
+            raw_results = service.search(query)
+            if entity_kind == "company":
+                results = tuple(ClientSearchResult(
+                    item.detail_token, "company", item.display_name, "Empresa", "NIT",
+                    item.masked_document, item.state,
+                ) for item in raw_results)
+            else:
+                results = tuple(ClientSearchResult(
+                    item.detail_token, "person", item.full_name, "Persona", "Documento",
+                    item.masked_document, item.state,
+                ) for item in raw_results)
             timings.update(service.timings)
             if query.isdigit():
                 form = form_class()
@@ -121,7 +284,7 @@ def _search(request, *, form_class, service_class, entity_kind):
         )
     context = {
         "form": form, "results": results, "error": error, "entity_kind": entity_kind,
-        "zoho_environment": environment,
+        "zoho_environment": environment, "colectivos_mode": tool_mode,
     }
     template_started = time.monotonic()
     html = render_to_string("cotizacion_colectivos/search.html", context, request=request)
@@ -151,6 +314,7 @@ def person_search(request):
 
 def _detail(request, token, *, method, entity_kind):
     environment = get_colectivos_environment()
+    tool_mode = resolve_tool_mode(request)
     started = time.monotonic()
     correlation = uuid.uuid4().hex
     error_category = "none"
@@ -164,13 +328,14 @@ def _detail(request, token, *, method, entity_kind):
         _log_detail(request, entity_kind, environment, started, error_category, correlation, 0)
         return render(request, "cotizacion_colectivos/detail_error.html", {
             "message": exc.message, "zoho_environment": environment,
+            "colectivos_mode": tool_mode,
         }, status=_error_status(exc))
     except Exception:
         _log_detail(request, entity_kind, environment, started, "unknown", correlation, 0)
         return render(
             request,
             "cotizacion_colectivos/detail_error.html",
-            {"message": "No fue posible consultar la información relacionada. Intente nuevamente más tarde.", "zoho_environment": environment},
+            {"message": "No fue posible consultar la información relacionada. Intente nuevamente más tarde.", "zoho_environment": environment, "colectivos_mode": tool_mode},
             status=503,
         )
     _log_detail(request, entity_kind, environment, started, error_category, correlation, 1)
@@ -208,12 +373,22 @@ def _client_requests(request, *, token, entity_kind, environment):
 
 def _render_client_detail(request, *, detail, token, entity_kind, environment=None, **extra):
     environment = environment or get_colectivos_environment()
+    mode = resolve_tool_mode(request)
+    individual_context = ""
+    if mode.code == INDIVIDUAL_MODE:
+        label = getattr(detail, "display_name", "") or getattr(detail, "full_name", "")
+        individual_context = sign_context(
+            entity_kind=entity_kind, entity_token=token, label=label,
+        )
     return render(request, "cotizacion_colectivos/detail.html", {
         "detail": detail, "entity_kind": entity_kind, "entity_token": token,
         "related_requests": _client_requests(
             request, token=token, entity_kind=entity_kind, environment=environment,
         ),
         "zoho_environment": environment,
+        "colectivos_mode": mode,
+        "individual_branches": BRANCH_SCHEMAS,
+        "individual_context_token": individual_context,
         **extra,
     })
 
@@ -566,6 +741,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "functional_groups": getattr(service, "preparation_metadata", {}).get(
             "functional_groups", (),
         ),
+        "colectivos_mode": resolve_tool_mode(request),
     }
     context.update(extra_context or {})
     if hasattr(service, "timings"):
@@ -642,7 +818,8 @@ def person_detail(request, token):
 
 @never_cache
 @require_http_methods(["GET"])
-def policy_detail(request, token):
+def policy_detail(request, token, mode=None):
+    resolve_tool_mode(request, mode)
     environment = get_colectivos_environment()
     total_started = time.monotonic()
     service = PolicyService()
@@ -895,6 +1072,7 @@ def policy_excel(request, token):
 def policy_invitation_preview(request, token):
     if not has_internal_permission(request, "export_excel"):
         return permission_denied_response()
+    tool_mode = resolve_tool_mode(request, INVITATIONS_MODE)
     try:
         detail, previews, metadata = preview_invitation_templates(token)
     except ColectivosServiceError as exc:
@@ -906,7 +1084,9 @@ def policy_invitation_preview(request, token):
     return render(request, "cotizacion_colectivos/invitation_preview.html", {
         "detail": detail, "previews": previews, "policy_token": token,
         "has_generable": any(item.status in {"ready", "incomplete"} for item in previews),
-        "preparation_metadata": metadata, **_environment_context(),
+        "preparation_metadata": metadata,
+        "colectivos_mode": tool_mode,
+        **_environment_context(),
     })
 
 

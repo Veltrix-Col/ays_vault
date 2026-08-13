@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Crear solicitud al cliente{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:index' %}">Cotización – Colectivos</a><span>/</span><span>Crear solicitud</span></nav>
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:requests_index' %}">Solicitudes y Renovaciones</a><span>/</span><span>Crear solicitud</span></nav>
 <header class="page-heading page-heading--compact"><span class="eyebrow">Expediente multipóliza</span><h1>Crear solicitud al cliente</h1><p>Seleccione únicamente las pólizas y los ajustes que el cliente podrá responder en un solo enlace.</p></header>
 {% if form.non_field_errors %}<div class="status-message status-message--error">{{ form.non_field_errors }}</div>{% endif %}
 <form method="post" class="builder-layout" data-request-builder>

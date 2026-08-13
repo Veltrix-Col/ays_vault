@@ -65,6 +65,22 @@ class PersonSearchForm(BaseEntitySearchForm):
     )
 
 
+class ClientSearchForm(BaseEntitySearchForm):
+    query = forms.CharField(
+        label="Buscar por nombre o identificación",
+        max_length=100,
+        strip=True,
+        error_messages={"required": "Ingrese un criterio de búsqueda."},
+        widget=forms.TextInput(
+            attrs={
+                "autocomplete": "off",
+                "inputmode": "search",
+                "placeholder": "Nombre o identificación",
+            }
+        ),
+    )
+
+
 class RequestCreateForm(forms.Form):
     source_kind = forms.ChoiceField(
         choices=(("company", "Empresa"), ("person", "Individuo")),

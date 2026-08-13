@@ -57,10 +57,14 @@ class PublicHomeTests(TestCase):
 
     def test_catalog_renders_authorized_applications_without_system_information(self):
         response = self.client.get("/")
-        self.assertContains(response, 'class="application-card', count=3)
+        self.assertContains(response, 'class="application-card', count=6)
         self.assertContains(response, "CardManager")
         self.assertContains(response, "Gestión SOAT")
-        self.assertContains(response, "Cotización – Colectivos")
+        self.assertContains(response, "Conciliador de Facturación")
+        self.assertContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, "Invitaciones a Aseguradoras")
+        self.assertContains(response, "Cotización Individual")
+        self.assertNotContains(response, "Cotización – Colectivos")
         self.assertContains(
             response,
             "/static/img/branding/cardmanager/Logo-CardManager-COLOR.png",
@@ -75,7 +79,7 @@ class PublicHomeTests(TestCase):
             'class="application-logo application-logo--cardmanager"',
             count=1,
         )
-        self.assertContains(response, 'class="application-icon"', count=2)
+        self.assertContains(response, 'class="application-icon"', count=5)
         self.assertContains(response, "M7 3h7l4 4v14H7V3", count=1)
         self.assertNotContains(response, "Centro de Control")
         self.assertNotContains(response, "Correo y destinatarios")

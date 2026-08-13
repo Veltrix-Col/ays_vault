@@ -105,6 +105,7 @@ def _context(detail, members, token_context) -> tuple[dict[str, str], tuple[dict
         "holder.document": source_document,
         "holder.city": detail.source_summary.city if detail.source_summary else "",
         "policy.start_date": detail.start_date,
+        "policy.end_date": detail.end_date,
         "policy.current_insurer": detail.insurer,
         "policy.payment_mode": detail.payment_mode,
     }
@@ -118,12 +119,13 @@ def preview_invitation_templates(token: str):
     previews = []
     for template in templates_for_branch(detail.branch_code):
         capacity = template.end_row - template.start_row + 1
+        template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
         if not template.active:
             previews.append(TemplatePreview(
                 template, "unavailable",
                 sum(field.automatic for field in template.fields),
                 sum(not field.automatic for field in template.fields),
-                len(rows), capacity,
+                len(template_rows), capacity,
                 (), template.limitation,
             ))
             continue
@@ -131,12 +133,12 @@ def preview_invitation_templates(token: str):
         for field in template.fields:
             if not field.required or not field.automatic:
                 continue
-            values = rows if "{row}" in field.position else (fixed,)
+            values = template_rows if "{row}" in field.position else (fixed,)
             if not values or any(not row.get(field.source) for row in values):
                 missing.append(field.destination)
         status = "ready"
         message = "Lista para descargar y completar."
-        if len(rows) > capacity:
+        if len(template_rows) > capacity:
             status, message = "error", "La maestra no tiene filas suficientes para el grupo completo."
         elif missing:
             status, message = "incomplete", "Se generará con campos obligatorios pendientes de completar."
@@ -144,7 +146,7 @@ def preview_invitation_templates(token: str):
             template, status,
             sum(field.automatic for field in template.fields),
             sum(not field.automatic for field in template.fields),
-            len(rows), capacity, tuple(dict.fromkeys(missing)), message,
+            len(template_rows), capacity, tuple(dict.fromkeys(missing)), message,
         ))
     logger.info(
         "colectivos_invitation_templates application=cotizacion_colectivos operation=preview "
@@ -192,6 +194,8 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
     source_buffer = io.BytesIO(original)
     output = io.BytesIO()
     changes: dict[str, dict[str, str]] = {}
+    for coordinate in template.clear_cells:
+        changes.setdefault(template.data_sheet, {})[coordinate] = ""
     for field in template.fields:
         if not field.automatic:
             continue
@@ -232,11 +236,12 @@ def generate_invitation_templates(token: str):
     fixed, rows = _context(detail, members, context)
     generated, errors = [], []
     for template in templates_for_branch(detail.branch_code, active_only=True):
-        if len(rows) > template.end_row - template.start_row + 1:
+        template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
+        if len(template_rows) > template.end_row - template.start_row + 1:
             errors.append((template.insurer_name, "capacidad"))
             continue
         try:
-            content = _patch_xlsx(template, fixed, rows)
+            content = _patch_xlsx(template, fixed, template_rows)
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError):
             logger.exception(
                 "colectivos_invitation_templates application=cotizacion_colectivos operation=generate "

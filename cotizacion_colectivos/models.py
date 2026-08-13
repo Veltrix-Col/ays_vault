@@ -42,6 +42,55 @@ class WorkspacePolizaColectivo(models.Model):
         )
 
 
+class CotizacionIndividual(models.Model):
+    """Captura local cifrada; no representa ni sincroniza un registro Zoho."""
+
+    class Status(models.TextChoices):
+        RECEIVED = "RECIBIDA", "Recibida"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    branch_code = models.CharField(max_length=16, db_index=True)
+    branch_slug = models.CharField(max_length=24)
+    schema_version = models.PositiveSmallIntegerField(default=1)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.RECEIVED)
+    encrypted_payload = models.TextField(editable=False)
+    payload_checksum = models.CharField(max_length=64, editable=False)
+    context_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
+    item_count = models.PositiveSmallIntegerField(default=0)
+    attachment_count = models.PositiveSmallIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cotizaciones_individuales_creadas",
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-submitted_at", "-pk")
+        permissions = (
+            ("create_individual_quotation", "Puede crear cotizaciones individuales"),
+            ("view_individual_quotation", "Puede ver cotizaciones individuales"),
+        )
+
+
+class AdjuntoCotizacionIndividual(models.Model):
+    quotation = models.ForeignKey(
+        CotizacionIndividual, on_delete=models.CASCADE, related_name="attachments"
+    )
+    safe_original_name = models.CharField(max_length=80)
+    internal_name = models.CharField(max_length=96, unique=True, editable=False)
+    extension = models.CharField(max_length=8)
+    detected_mime = models.CharField(max_length=80)
+    size = models.PositiveIntegerField()
+    checksum = models.CharField(max_length=64, editable=False)
+    stored_path = models.CharField(max_length=255, editable=False)
+    category = models.CharField(max_length=32, default="SOPORTE")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    safe_metadata = models.JSONField(default=dict, blank=True)
+
+
 class SolicitudColectivo(models.Model):
     class Status(models.TextChoices):
         DRAFT = "BORRADOR", "Borrador"

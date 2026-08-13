@@ -1,0 +1,124 @@
+# Tres herramientas sobre un motor común de Colectivos
+
+## Estado
+
+Implementado en la interfaz web. El nombre técnico de la aplicación Django se
+mantiene como `cotizacion_colectivos` para preservar imports, migraciones,
+tablas, tokens, Workspace y compatibilidad.
+
+Las entradas funcionales son **Solicitudes y Renovaciones**, **Invitaciones a
+Aseguradoras** y **Cotización Individual**. La tercera reutiliza branding,
+búsqueda opcional y cifrado, pero su captura local por ramo no duplica cliente,
+póliza, Workspace ni integración Zoho.
+
+## Arquitectura
+
+```text
+Banco de Herramientas
+├── Solicitudes y Renovaciones
+├── Invitaciones a Aseguradoras
+└── Cotización Individual
+             │
+             ▼
+      Motor común de Colectivos
+      ├── búsqueda de cliente
+      ├── ficha consolidada
+      ├── pólizas
+      ├── Policy Workspace / Snapshot
+      ├── enlaces y respuestas
+      ├── catálogo de invitaciones
+      └── catálogo de formularios por ramo
+```
+
+No existen dos aplicaciones, dos clientes Zoho ni dos Workspaces para una
+misma póliza. El modo de entrada es contexto de presentación; no forma parte de
+la identidad del Workspace y no altera el perfil Zoho.
+
+## Puntos de entrada
+
+- `/cotizacion-colectivos/solicitudes-renovaciones/`
+- `/cotizacion-colectivos/invitaciones-aseguradoras/`
+- `/cotizacion-colectivos/cotizacion-individual/`
+
+El modo se fija mediante rutas declaradas en servidor y se conserva en sesión
+con una allowlist cerrada (`requests`, `invitations`, `individual`). No se acepta un modo
+libre desde formulario, query string, cookie personalizada o identificador CRM.
+
+Las rutas históricas se conservan para compatibilidad. La entrada histórica
+usa por defecto Solicitudes y Renovaciones.
+
+## Buscador común
+
+Cada herramienta muestra un solo campo: **Buscar por nombre o identificación**.
+La capa de negocio compone las búsquedas confirmadas de empresa y persona sobre
+un único facade ya validado. Esto evita repetir la validación de Organization.
+
+- Entrada numérica: documento exacto y, si no hay coincidencia, prefijo.
+- Entrada textual: nombre comercial, razón social o nombre de persona.
+- Máximo global: 20 resultados.
+- Los resultados se presentan como clientes y conservan internamente el tipo
+  firmado `company` o `person`.
+- No se consultan relaciones para mostrar el listado, evitando N+1.
+
+La ficha consolidada sí muestra las pólizas relacionadas mediante los servicios
+existentes. Los tokens siguen siendo opacos, firmados y ligados al tipo.
+
+## Comportamiento por herramienta
+
+### Solicitudes y Renovaciones
+
+La acción primaria en la misma ficha de póliza es generar el enlace de
+actualización o renovación. Se mantienen expiración, regeneración, revocación,
+miniportal, respuesta local y notificación.
+
+### Invitaciones a Aseguradoras
+
+La acción primaria es abrir el preview y descargar las plantillas activas del
+ramo de la póliza. El ramo se lee del Workspace local: no se vuelve a consultar
+Zoho ni se intenta inferirlo.
+
+La aseguradora vigente de la póliza no filtra el catálogo. Para un ramo se
+ofrecen todas las plantillas activas registradas. Una plantilla se incorpora de
+forma declarativa con ramo, aseguradora, versión, estado, archivo y mapping; el
+generador no contiene una bifurcación por aseguradora.
+
+Estado inicial del catálogo:
+
+- Movilidad colectivo: SURA y Allianz activas; la descarga conjunta es ZIP.
+- Vida grupo deudores: Allianz XLSX activa; SURA BIFF8 `.xls` catalogada e
+  inactiva hasta disponer de edición que preserve verificablemente el formato
+  maestro.
+
+### Cotización Individual
+
+El usuario selecciona Movilidad, Salud, Vida, Exequial o SOAT y diligencia un
+esquema declarativo con grupos repetibles y adjuntos. Puede partir de un cliente
+mediante contexto opaco, firmado y cifrado, pero no necesita una póliza previa.
+El resultado se persiste localmente cifrado y termina en una confirmación
+temporal; no crea registros ni tareas en Zoho. Campos, adjuntos y reglas
+definitivas siguen marcados para validación con Colectivos.
+
+## Persona y empresa
+
+Ambos recorridos aceptan empresas y personas. La misma ficha de cliente y la
+misma ficha de póliza se reutilizan. La UI habla de “cliente”; el tipo técnico
+solo determina la validación del token y el servicio confirmado que resuelve el
+registro.
+
+## Seguridad y límites
+
+- Zoho continúa en solo lectura.
+- No se crean tareas ni se actualizan registros CRM.
+- El modo no modifica HMAC, tokens, anti-IDOR, CSRF, cifrado ni no-store.
+- Los documentos permanecen enmascarados en resultados.
+- El catálogo y las plantillas se procesan desde Workspace/Snapshot local.
+- La escritura futura en Zoho está fuera de alcance.
+
+## QA operativo
+
+Verificar desde el Banco los tres accesos, la búsqueda de empresa y persona, la
+navegación cliente → póliza y el énfasis de acciones. En Solicitudes validar
+generación/apertura del enlace; en Invitaciones validar preview, XLSX y ZIP;
+en Cotización Individual validar cada ramo, repetibles, adjuntos y confirmación.
+Las lecturas reales deben realizarse únicamente con autorización operativa y el
+perfil global configurado.

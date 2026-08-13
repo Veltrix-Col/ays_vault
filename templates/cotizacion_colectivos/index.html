@@ -1,20 +1,18 @@
 {% extends "cotizacion_colectivos/base.html" %}
+{% block title %}{{ colectivos_mode.name }}{% endblock %}
 {% block content %}
-<header class="page-heading"><span class="eyebrow">Consulta operativa</span><h1>Cotización – Colectivos</h1>
-<p>Consulte empresas e individuos disponibles en el ambiente Zoho configurado. Este módulo no modifica información.</p></header>
-<div class="search-choice-grid">
-  <section class="tool-card" aria-labelledby="company-heading"><div class="tool-card__icon" aria-hidden="true">E</div>
-    <h2 id="company-heading">Buscar empresa</h2><p>Consulte por NIT completo, prefijo desde 3 dígitos, nombre comercial o razón social.</p>
-    <form method="post" action="{% url 'cotizacion_colectivos:company_search' %}" class="search-form">{% csrf_token %}
-      <label for="{{ company_form.query.id_for_label }}">{{ company_form.query.label }}</label>{{ company_form.query }}
-      <button type="submit">Buscar empresa</button></form>
-  </section>
-  <section class="tool-card" aria-labelledby="person-heading"><div class="tool-card__icon" aria-hidden="true">I</div>
-    <h2 id="person-heading">Buscar individuo</h2><p>Consulte por cédula completa, prefijo desde 3 dígitos, nombre o apellido.</p>
-    <form method="post" action="{% url 'cotizacion_colectivos:person_search' %}" class="search-form">{% csrf_token %}
-      <label for="{{ person_form.query.id_for_label }}">{{ person_form.query.label }}</label>{{ person_form.query }}
-      <button type="submit">Buscar individuo</button></form>
-  </section>
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><span>{{ colectivos_mode.name }}</span></nav>
+<header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
+<section class="search-panel" aria-labelledby="client-search-heading">
+  <div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div>
+  <p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p>
+  <form method="post" action="{% if colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_client_search' %}{% else %}{% url 'cotizacion_colectivos:requests_client_search' %}{% endif %}" class="search-form search-form--inline unified-client-search" data-remote-zoho>{% csrf_token %}<div>
+    <label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}
+  </div><button type="submit">Buscar</button></form>
+</section>
+<div class="tool-mode-note">
+  {% if colectivos_mode.code == 'requests' %}<strong>Flujo:</strong> cliente → póliza → generar enlace → respuesta.
+  {% else %}<strong>Flujo:</strong> cliente → póliza → plantillas disponibles → descarga.
+  {% endif %}
 </div>
-<p class="muted">Busque, abra una póliza y genere el enlace para el cliente directamente desde ella.</p>
 {% endblock %}

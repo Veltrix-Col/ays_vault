@@ -2,12 +2,12 @@
 
 ## 1. Alcance y estado
 
-Este documento registra el análisis técnico y funcional de las tres maestras ubicadas en `cotizacion_colectivos/invitation_templates/source/`. El análisis se hizo sobre copias de lectura; los binarios originales no se modifican. La generación usa únicamente el Policy Workspace/Snapshot cifrado vigente y no inicializa la fachada Zoho.
+Este documento registra el análisis técnico y funcional de las cuatro maestras ubicadas, por ramo y aseguradora, en `cotizacion_colectivos/invitation_templates/source/`. El análisis se hizo en modo lectura; los binarios originales no se modifican. La generación usa únicamente el Policy Workspace/Snapshot cifrado vigente y no inicializa la fachada Zoho.
 
 Estado de implementación:
 
 - Movilidad colectivo (`40`): SURA y Allianz activas; se descargan juntas en ZIP.
-- Vida grupo deudores (`83`): maestra SURA analizada, pero generación desactivada porque el `.xls` BIFF8 no puede editarse con preservación demostrable usando las dependencias portables del proyecto.
+- Vida grupo deudores (`83`): Allianz activa; SURA analizada pero desactivada porque el `.xls` BIFF8 no puede editarse con preservación demostrable usando las dependencias portables del proyecto.
 - Otros ramos: sin maestra registrada; el preview lo informa sin inventar mappings.
 
 ## 2. Matriz consolidada de las maestras
@@ -17,8 +17,16 @@ Estado de implementación:
 | Plantilla Carga Masiva Sura_VG.xls | SURA | Vida grupo deudores | Carga masiva de asegurados, coberturas, extraprimas y beneficiarios | XLS BIFF8 | Plantilla Cargas Masivas; Plantilla Solo Beneficiarios | Fila 14 a 53 en la hoja principal | Analizada; no generable de forma segura |
 | Plantilla cotizacion Autos_Sura.xlsx | SURA | Movilidad colectivo | Cotización de automóviles | XLSX | Riesgos; Ayudas; Riesgos_Cotizador | Riesgos, filas 2 a 22 | Activa |
 | Plantilla Solicitud Cotizaciones_Autos colectivo.xlsx | Allianz | Movilidad colectivo | Solicitud de cotización colectiva y relación de vehículos | XLSX | Formato Solicitud Cotización; Datos Vehículos a cotizar; Observaciones | B3:B17 y vehículos filas 2 a 300 | Activa |
+| Formato Vida Grupo Colectiva_Allianz_EDM.xlsx | Allianz | Vida grupo deudores | Solicitud de cotización colectiva | XLSX | FORMATO | A1:P93; captura principal en columna B y siniestralidad A85:C87 | Activa con precarga conservadora |
 
-La tercera maestra se clasifica como Allianz por propiedades internas del libro. No se dedujo por el filename. Esas propiedades también contenían metadatos históricos sensibles; el generador vacía **solo en la copia descargable** todas las propiedades personalizadas. El original permanece intacto y los demás componentes del paquete se conservan.
+Las maestras Allianz se clasifican con evidencia interna del libro, no solo por el nombre del archivo. Cuando existen propiedades personalizadas históricas, el generador las vacía **solo en la copia descargable**. El original permanece intacto y los demás componentes del paquete se conservan.
+
+Rutas físicas confirmadas:
+
+- `movilidad/sura/Plantilla cotizacion Autos_Sura.xlsx`;
+- `movilidad/allianz/Plantilla Solicitud Cotizaciones_Autos colectivo.xlsx`;
+- `vida/sura/Plantilla Carga Masiva Sura_VG.xls`;
+- `vida/allianz/Formato Vida Grupo Colectiva_Allianz_EDM.xlsx`.
 
 ## 3. SURA Vida Grupo — XLS antiguo
 
@@ -78,7 +86,36 @@ Campos marcados como obligatorios por la maestra: placa, modelo, Fasecolda, serv
 
 La hoja admite personas o empresas en la relación de vehículos, aunque el campo superior de identificación está rotulado como NIT. Para persona natural ese campo requiere validación manual y no se cambia la maestra.
 
-## 6. Matriz de parametrización implementada
+## 6. Allianz Vida Grupo
+
+### Estructura comprobada
+
+- Libro XLSX con una hoja visible `FORMATO`, rango usado `A1:P93`.
+- 165 celdas pobladas, 4 rangos combinados, 14 fórmulas y 16 validaciones.
+- Hoja protegida; no se desactiva la protección en la copia.
+- Sin comentarios ni hipervínculos observados.
+- Las fórmulas incluyen fecha del día y controles funcionales para procedimiento, clase, tamaño del grupo, comisión, valores asegurados y condiciones. Ninguna celda con fórmula forma parte del mapping de escritura.
+- Capacidad: una solicitud colectiva por copia; no es una tabla repetitiva de asegurados.
+
+La maestra contenía valores históricos en celdas de captura. La copia generada limpia la allowlist cerrada de celdas editables antes de precargar datos confirmados. Nunca se distribuye la maestra con esos valores y el archivo fuente permanece byte a byte intacto.
+
+### Precarga y trabajo manual
+
+| Campo destino | Posición | Origen | Modo | Obligatorio según maestra | Observación |
+|---|---|---|---|---|---|
+| Nombre del tomador | B10 | `PolicyDetail.holder` | Automático | Sí | Texto exacto del Workspace |
+| Identificación del tomador | B11 | documento del contacto origen | Automático | Sí | No se infiere desde otro asegurado |
+| Ubicación | B13 | ciudad del contacto origen | Automático | No | Puede quedar vacía |
+| Inicio de vigencia | B25 | `start_date` | Automático | No | Valor conservador del Workspace |
+| Fin de vigencia | B26 | `end_date` | Automático | No | Valor conservador del Workspace |
+| Compañía actual | B77 | aseguradora vigente | Automático | Condicional | No limita las aseguradoras invitadas |
+| Procedimiento y clase | B5:B6 | definición del analista | Manual | Sí | No existe equivalencia confirmada |
+| Actividad, grupo y demografía | B12; B17:B23 | analista/cliente | Manual | Mixto | No se aproxima desde el ramo |
+| Intermediario | B30:B34 | A&S | Manual | Sí | Información interna |
+| Valores asegurados y amparos | B38:B72 | decisión de cotización | Manual | Sí | No se trasladan valores sin mapping confirmado |
+| Condiciones y siniestralidad | B76:B82; A85:C87 | A&S | Manual | Mixto | Requiere validación funcional |
+
+## 7. Matriz de parametrización implementada
 
 | Plantilla | Aseguradora | Ramo | Campo destino | Hoja | Posición | Dato origen Workspace | Transformación | Modo | Obligatorio | Observación |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -119,10 +156,19 @@ La hoja admite personas o empresas en la relación de vehículos, aunque el camp
 | SURA VG | SURA | 83 | Datos bancarios | Plantilla Cargas Masivas | AJ:AM | no precargar | ninguna | Manual | Condicional | Dato sensible; validación A&S |
 | SURA VG | SURA | 83 | Contacto | Plantilla Cargas Masivas | AN:AP | contacto presente en Snapshot | texto | Potencial automático | No | — |
 | SURA VG | SURA | 83 | Diagnóstico a causa | Plantilla Cargas Masivas | AQ:AV | suscripción/A&S | ninguna | Manual | Condicional | — |
+| Allianz VG | Allianz | 83 | Tomador | FORMATO | B10 | `PolicyDetail.holder` | texto | Automático | Sí | — |
+| Allianz VG | Allianz | 83 | Identificación tomador | FORMATO | B11 | contacto origen del Workspace | exacto | Automático | Sí | Nunca se toma de otro integrante |
+| Allianz VG | Allianz | 83 | Ubicación | FORMATO | B13 | ciudad del contacto origen | texto | Automático | No | — |
+| Allianz VG | Allianz | 83 | Vigencias | FORMATO | B25:B26 | inicio y fin de póliza | texto fecha conservador | Automático | No | — |
+| Allianz VG | Allianz | 83 | Compañía actual | FORMATO | B77 | aseguradora actual | texto | Automático | Condicional | No filtra la invitación |
+| Allianz VG | Allianz | 83 | Procedimiento, clase, grupo y edades | FORMATO | B5:B6; B17:B23 | no confirmado | ninguna | Manual | Sí | Validar con Colectivos |
+| Allianz VG | Allianz | 83 | Intermediario | FORMATO | B30:B34 | A&S | ninguna | Manual | Sí | — |
+| Allianz VG | Allianz | 83 | Valores y amparos | FORMATO | B38:B72 | no confirmado | ninguna | Manual | Sí | No inventar equivalencias |
+| Allianz VG | Allianz | 83 | Condiciones y siniestralidad | FORMATO | B76:B82; A85:C87 | A&S | ninguna | Manual | Condicional | — |
 
 Los demás campos de ambas maestras permanecen manuales. Esto incluye sucursal, tipo de negocio, clave y nombre de agente, comisión, devolución, plazo, pagador, fecha de nacimiento, género, accesorios, blindaje, gas, datos técnicos no presentes, primas calculadas y observaciones.
 
-## 7. Flujo funcional
+## 8. Flujo funcional
 
 1. La ficha de póliza muestra **Descargar plantillas de invitación**.
 2. El preview valida el token firmado y restaura el Workspace local vigente.
@@ -133,7 +179,7 @@ Los demás campos de ambas maestras permanecen manuales. Esto incluye sucursal, 
 
 No se filtra por la aseguradora actual de la póliza. El ramo `40` produce SURA y Allianz.
 
-## 8. Preservación, seguridad y límites
+## 9. Preservación, seguridad y límites
 
 - Los `.xlsx` se modifican a nivel OOXML; no se cargan y rescriben con una librería que elimine partes no reconocidas.
 - Todas las piezas no objetivo se copian byte a byte. Solo cambian los XML de las hojas que reciben datos y `docProps/custom.xml`, que se vacía por seguridad.
@@ -142,9 +188,9 @@ No se filtra por la aseguradora actual de la póliza. El ramo `40` produce SURA 
 - No se persisten archivos generados ni previews.
 - Respuestas: `Cache-Control: no-store, private`; descarga con `nosniff`.
 - No se registra ningún valor de celda, documento, nombre, póliza o ID.
-- La capacidad es la de cada maestra: 21 filas SURA y 299 Allianz. Si una maestra no alcanza, se omite y se reporta como error; nunca se entrega truncada.
+- La capacidad es la de cada maestra: 21 vehículos SURA, 299 vehículos Allianz, 40 filas potenciales SURA Vida y una solicitud colectiva Allianz Vida. Si una maestra tabular activa no alcanza, se omite y se reporta como error; nunca se entrega truncada.
 - Falta QA funcional de A&S sobre equivalencias de servicio/uso, zona de circulación y el tratamiento de tomador persona natural.
 
-## 9. Actualización de maestras
+## 10. Actualización de maestras
 
 Una actualización requiere: reemplazo consciente del archivo fuente, nueva versión en el catálogo, reinspección de hojas/celdas/validaciones/metadatos, ajuste explícito de mappings y pruebas de preservación. No existe selección de archivo por request ni mapping basado en filename.

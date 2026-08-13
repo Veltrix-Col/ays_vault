@@ -4,7 +4,7 @@ import logging
 import time
 from collections.abc import Callable, Iterable
 
-from cotizacion_colectivos.dto import CompanySearchResult, PersonSearchResult
+from cotizacion_colectivos.dto import ClientSearchResult, CompanySearchResult, PersonSearchResult
 from integrations.zoho.exceptions import ZohoError
 
 from .common import (
@@ -249,6 +249,56 @@ class PersonSearchService(_BaseSearchService):
             masked_document=mask_document(record.get("N_mero_de_ID")),
             state=str(record.get("Estado") or "Sin estado"),
         )
+
+
+class UnifiedClientSearchService:
+    """Compose the two confirmed Contact searches behind one client concept.
+
+    Both services share one validated facade, so Organization is resolved once.
+    Results remain typed and are capped globally without relation lookups or N+1.
+    """
+
+    def __init__(self, zoho=None):
+        self.company_service = CompanySearchService(zoho=zoho)
+        self.person_service = PersonSearchService(zoho=self.company_service.zoho)
+        self.profile = self.company_service.profile
+        self.timings = dict(self.company_service.timings)
+
+    def search(self, query: str) -> tuple[ClientSearchResult, ...]:
+        company_results = self.company_service.search(query)
+        person_results = self.person_service.search(query)
+        self.timings = {
+            key: self.company_service.timings.get(key, 0) + self.person_service.timings.get(key, 0)
+            for key in self.company_service.timings
+        }
+        combined = [
+            ClientSearchResult(
+                detail_token=item.detail_token,
+                source_kind="company",
+                display_name=item.display_name,
+                entity_label="Empresa",
+                document_label="NIT",
+                masked_document=item.masked_document,
+                state=item.state,
+            )
+            for item in company_results
+        ]
+        combined.extend(
+            ClientSearchResult(
+                detail_token=item.detail_token,
+                source_kind="person",
+                display_name=item.full_name,
+                entity_label="Persona",
+                document_label="Documento",
+                masked_document=item.masked_document,
+                state=item.state,
+            )
+            for item in person_results
+        )
+        deduplicated = {}
+        for item in combined:
+            deduplicated.setdefault((item.source_kind, item.detail_token), item)
+        return tuple(deduplicated.values())[:SEARCH_LIMIT]
 
 
 def _validated_name(value: str) -> str:
