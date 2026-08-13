@@ -50,6 +50,22 @@ python manage.py zoho_export_schema --profile sandbox --module Polizas
 python manage.py zoho_diagnose_modules --profile sandbox --module Polizas
 ```
 
+## Discovery v2
+
+El inventario versionable de metadata, los snapshots por perfil y el
+comparador local se documentan en [../zoho/README.md](../zoho/README.md).
+
+```powershell
+python manage.py zoho_discover --profile sandbox
+python manage.py zoho_discover --profile production
+python manage.py zoho_compare --left sandbox --right production
+```
+
+`zoho_discover` exige perfil explícito y solo usa la fachada read-only.
+`zoho_compare` no inicializa Zoho. La primera ejecución real permanece
+pendiente hasta que el mantenedor publique la corrección de validación OAuth
+para Sandbox.
+
 Las pruebas automatizadas usan mocks y no llaman a Zoho. Los comandos
 anteriores sí realizan lecturas reales cuando un operador los ejecuta
 manualmente con secretos autorizados.

@@ -239,6 +239,8 @@ python manage.py zoho_backend_info --profile sandbox
 python manage.py zoho_check_connection --profile sandbox
 python manage.py zoho_export_schema --profile sandbox --module Polizas
 python manage.py zoho_diagnose_modules --profile sandbox --module Polizas
+python manage.py zoho_discover --profile sandbox
+python manage.py zoho_compare --left sandbox --right production
 ```
 
 Los comandos muestran perfil, entorno, backend, modo solo lectura,
@@ -249,6 +251,12 @@ ejecutan manualmente; las pruebas siempre los simulan.
 `zoho_export_schema` genera solo metadatos, nunca registros. El diagnóstico
 consulta Organization, Modules y Fields, clasifica errores y su JSON opcional
 se limita a datos técnicos seguros. `artifacts/zoho/` permanece ignorado.
+
+Discovery v2 amplía el exportador histórico con snapshots deterministas,
+históricos sin duplicados, subformularios, picklists, comparación y
+`MODEL.md`. Layouts y related lists se extraen cuando la fachada pública los
+expone; en la versión actual se registran como capacidad no disponible y nunca
+se sustituyen con HTTP directo. Véase [../zoho/README.md](../zoho/README.md).
 
 ## Dokploy
 
