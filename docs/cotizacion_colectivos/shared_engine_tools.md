@@ -7,9 +7,8 @@ mantiene como `cotizacion_colectivos` para preservar imports, migraciones,
 tablas, tokens, Workspace y compatibilidad.
 
 Las entradas funcionales son **Solicitudes y Renovaciones**, **Invitaciones a
-Aseguradoras** y **Cotización Individual**. La tercera reutiliza branding,
-búsqueda opcional y cifrado, pero su captura local por ramo no duplica cliente,
-póliza, Workspace ni integración Zoho.
+Aseguradoras** y **Cotización Individual**. Las tres comienzan en el buscador
+común y reutilizan cliente, póliza, Workspace, Snapshot y perfil Zoho.
 
 ## Arquitectura
 
@@ -91,12 +90,12 @@ Estado inicial del catálogo:
 
 ### Cotización Individual
 
-El usuario selecciona Movilidad, Salud, Vida, Exequial o SOAT y diligencia un
-esquema declarativo con grupos repetibles y adjuntos. Puede partir de un cliente
-mediante contexto opaco, firmado y cifrado, pero no necesita una póliza previa.
-El resultado se persiste localmente cifrado y termina en una confirmación
-temporal; no crea registros ni tareas en Zoho. Campos, adjuntos y reglas
-definitivas siguen marcados para validación con Colectivos.
+El usuario busca una empresa o persona, abre una póliza y selecciona un afiliado
+confirmado por referencia HMAC. El ramo de la póliza determina el esquema
+declarativo; no se acepta selección libre desde el navegador. El enlace externo
+contiene contexto opaco, firmado, cifrado y temporal. La respuesta se persiste
+localmente cifrada, genera una notificación simple y no crea registros ni tareas
+en Zoho. Con Workspace vigente, ficha, enlace y formulario externo son locales.
 
 ## Persona y empresa
 

@@ -116,11 +116,18 @@ MEMBER = GroupMember(
     plan="Plan A",
     relationship="Titular",
     risk_summary="",
+    insured_name="Persona interna",
+    insured_id_type="CC",
+    insured_document="100000890",
+    insured_masked_document="••••890",
+    insured_key="insured-hmac-key",
 )
 
 
 class FakePolicyService:
     profile = "sandbox"
+    preparation_status = "hit"
+    timings = {"remote_queries": 0}
 
     def __init__(self, detail=None):
         self.policy = detail or _policy()
@@ -289,12 +296,29 @@ class PolicyNavigationTests(TestCase):
             invitations_page = self.client.get(reverse(
                 "cotizacion_colectivos:invitations_policy_detail", args=[TOKEN]
             ))
+            individual_page = self.client.get(reverse(
+                "cotizacion_colectivos:individual_policy_detail", args=[TOKEN]
+            ))
         self.assertContains(requests_page, "Solicitudes y Renovaciones")
         self.assertContains(requests_page, "Generar enlace")
         self.assertContains(invitations_page, "Invitaciones a Aseguradoras")
         self.assertContains(invitations_page, "Descargar plantillas de invitación")
+        self.assertContains(individual_page, "Cotización individual")
+        self.assertContains(individual_page, "Generar enlace")
         self.assertContains(requests_page, "Salud colectivo")
         self.assertContains(invitations_page, "Salud colectivo")
+        self.assertContains(individual_page, "Salud colectivo")
+
+    @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
+    def test_individual_link_is_generated_from_policy_and_hmac_affiliate_without_zoho_id(self, _service):
+        response = self.client.post(reverse(
+            "cotizacion_colectivos:policy_individual_access", args=[TOKEN],
+        ))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Enlace listo para compartir")
+        self.assertContains(response, "/solicitudes/colectivos/externa/cotizacion-individual/")
+        self.assertNotContains(response, POLICY_ID)
+        self.assertNotContains(response, "100000890")
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_legacy_single_policy_endpoint_remains_compatible_and_reuses_request(self, _service):
@@ -702,7 +726,7 @@ class PolicyNavigationTests(TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "cotizacion_colectivos/detail.html")
-        self.assertContains(response, "Abra una póliza para generar")
+        self.assertContains(response, "Abra una póliza para continuar")
         self.assertNotContains(response, "Solicitud creada correctamente")
         self.assertNotContains(response, generated.url)
         self.assertNotContains(response, "Abrir solicitud")

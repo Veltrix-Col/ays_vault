@@ -126,6 +126,12 @@ BRANCH_SCHEMAS = (
 )
 
 _BY_SLUG = {item.slug: item for item in BRANCH_SCHEMAS}
+_POLICY_BRANCH_TO_SCHEMA = {
+    "40": "movilidad",
+    "83": "vida",
+    "86": "exequial",
+    "91": "salud",
+}
 
 
 def get_branch_schema(slug: str) -> BranchSchema:
@@ -133,3 +139,14 @@ def get_branch_schema(slug: str) -> BranchSchema:
         return _BY_SLUG[slug]
     except KeyError as exc:
         raise Http404("Ramo no disponible") from exc
+
+
+def get_policy_branch_schema(branch_code: str, branch_name: str = "") -> BranchSchema:
+    """Resolve the form from the already-open policy; never from browser input."""
+
+    slug = _POLICY_BRANCH_TO_SCHEMA.get(str(branch_code or "").strip())
+    if slug is None and "soat" in str(branch_name or "").strip().casefold():
+        slug = "soat"
+    if slug is None:
+        raise Http404("El ramo de esta póliza todavía no tiene cotización individual.")
+    return get_branch_schema(slug)

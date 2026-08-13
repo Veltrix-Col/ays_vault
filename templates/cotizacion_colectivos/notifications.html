@@ -2,4 +2,7 @@
 {% block title %}Notificaciones{% endblock %}
 {% block content %}<header class="page-heading page-heading--compact"><h1>Respuestas de clientes</h1><p>Avisos informativos; no requieren aprobación ni cierre.</p></header>
 <form method="post" action="{% url 'cotizacion_colectivos:notifications_read_all' %}" class="policy-actions">{% csrf_token %}<button type="submit">Marcar todas como leídas</button></form>
-<section class="relation-card">{% for item in page %}<article class="relation-row"><strong>{{ item.title }}{% if not item.is_read %} · Nueva{% endif %}</strong><span>{{ item.message }}</span><form method="post" action="{% url 'cotizacion_colectivos:notification_read' item.pk %}">{% csrf_token %}<button type="submit">Ver respuesta</button></form></article>{% empty %}<p>No hay respuestas nuevas.</p>{% endfor %}</section>{% endblock %}
+<section class="relation-card">
+{% for item in individual_notifications %}<article class="relation-row"><strong>{{ item.title }}{% if not item.is_read %} · Nueva{% endif %}</strong><span>{{ item.message }}</span><form method="post" action="{% url 'cotizacion_colectivos:individual_notification_read' item.pk %}">{% csrf_token %}<button type="submit">Ver respuesta</button></form></article>{% endfor %}
+{% for item in page %}<article class="relation-row"><strong>{{ item.title }}{% if not item.is_read %} · Nueva{% endif %}</strong><span>{{ item.message }}</span><form method="post" action="{% url 'cotizacion_colectivos:notification_read' item.pk %}">{% csrf_token %}<button type="submit">Ver respuesta</button></form></article>{% empty %}{% if not individual_notifications %}<p>No hay respuestas nuevas.</p>{% endif %}{% endfor %}
+</section>{% endblock %}

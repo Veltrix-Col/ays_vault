@@ -42,6 +42,29 @@ Con un snapshot vigente, detalle, grupo, Excel, enlace y portal externo deben
 tener `remote_queries=0`. Solo la acción explícita **Actualizar información
 desde Zoho** invalida L1 y reconstruye el snapshot.
 
+La identidad de esa copia local no incluye el modo funcional. Solicitudes,
+Invitaciones y Cotización Individual restauran el mismo Workspace de póliza.
+El preview y la generación de plantillas, el enlace individual, el formulario
+externo y la lectura de su respuesta no inicializan la fachada cuando la copia
+es válida.
+
+## Cotización individual contextual
+
+La entrada libre por ramo fue retirada del recorrido. El contrato actual exige
+cliente, póliza y afiliado confirmado. La referencia del afiliado es HMAC; el
+ramo se deriva de la póliza y determina el esquema. El contexto externo está
+firmado, cifrado y tiene expiración. La respuesta y su notificación son locales,
+sin escritura ni nueva lectura Zoho.
+
+## Plantillas voluminosas
+
+Las maestras tabulares declaradas como repetibles se generan por lotes de la
+capacidad física de cada archivo. Los campos manuales quedan vacíos y no
+bloquean la descarga. No se recortan filas ni se reutilizan valores residuales
+del maestro: las celdas mapeadas de cada bloque se limpian antes de poblar el
+lote actual. Las plantillas no verificadas para repetición fallan antes de
+producir una salida parcial.
+
 ## Organization API
 
 La validación conserva cierre por ambiente y se almacena por perfil y backend
@@ -81,4 +104,5 @@ Acepta solo Production, una póliza de la allowlist y la confirmación explícit
 - confirmar en el despliegue el backend de caché compartido y su TTL;
 - retirar físicamente las rutas históricas únicamente después de definir la
   política de retención y compatibilidad de URLs.
-
+- validar en navegador con una póliza autorizada de cada ramo la terminología y
+  el prellenado contextual; no se realizó lectura Production en esta iteración.

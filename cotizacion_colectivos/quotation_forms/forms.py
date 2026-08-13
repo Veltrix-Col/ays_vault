@@ -36,12 +36,14 @@ class IndividualQuotationForm(forms.Form):
         self.schema = schema
         self.context = context or {}
         super().__init__(*args, **kwargs)
+        locked_fields = set(self.context.get("locked_fields") or ())
         for definition in schema.fields:
             self.fields[definition.key] = forms.CharField(
                 label=definition.label,
                 required=definition.required,
                 max_length=180,
-                initial=self.context.get("label", "") if definition.key == "collective_context" else None,
+                initial=self.context.get(definition.key, ""),
+                disabled=definition.key in locked_fields,
             )
             if definition.kind == "email":
                 self.fields[definition.key].widget = forms.EmailInput()
@@ -56,6 +58,8 @@ class IndividualQuotationForm(forms.Form):
                     label=definition.label,
                     required=definition.required,
                     choices=(("", "Seleccione"),) + tuple((item, item) for item in definition.choices),
+                    initial=self.context.get(definition.key, ""),
+                    disabled=definition.key in locked_fields,
                 )
 
     @staticmethod

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import math
 import re
 import time
 import zipfile
@@ -37,6 +38,7 @@ class TemplatePreview:
     capacity: int
     missing_required: tuple[str, ...]
     message: str = ""
+    output_files: int = 1
 
 
 @dataclass(frozen=True)
@@ -136,17 +138,30 @@ def preview_invitation_templates(token: str):
             values = template_rows if "{row}" in field.position else (fixed,)
             if not values or any(not row.get(field.source) for row in values):
                 missing.append(field.destination)
+        output_files = 1
         status = "ready"
-        message = "Lista para descargar y completar."
+        message = "Lista para descargar."
         if len(template_rows) > capacity:
-            status, message = "error", "La maestra no tiene filas suficientes para el grupo completo."
-        elif missing:
-            status, message = "incomplete", "Se generará con campos obligatorios pendientes de completar."
+            if template.supports_chunking:
+                output_files = math.ceil(len(template_rows) / capacity)
+                if missing or any(not field.automatic for field in template.fields):
+                    status = "ready_manual"
+                message = (
+                    f"Lista: se generarán {output_files} archivos sin truncar "
+                    f"los {len(template_rows)} registros; los datos no disponibles quedan vacíos."
+                )
+            else:
+                status = "validation"
+                message = "El formato requiere ajuste manual por capacidad; no se entregarán datos parciales."
+        elif missing or any(not field.automatic for field in template.fields):
+            status = "ready_manual"
+            message = "Lista para descargar; los datos no disponibles quedan vacíos para completar."
         previews.append(TemplatePreview(
             template, status,
             sum(field.automatic for field in template.fields),
             sum(not field.automatic for field in template.fields),
             len(template_rows), capacity, tuple(dict.fromkeys(missing)), message,
+            output_files,
         ))
     logger.info(
         "colectivos_invitation_templates application=cotizacion_colectivos operation=preview "
@@ -189,6 +204,36 @@ def _set_cell(root: ET.Element, coordinate: str, value: str) -> None:
     text.text = str(value or "")
 
 
+def _column_number(value: str) -> int:
+    result = 0
+    for character in value:
+        result = result * 26 + ord(character) - 64
+    return result
+
+
+def _column_name(value: int) -> str:
+    result = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _coordinates(position: str) -> tuple[str, ...]:
+    match = re.fullmatch(r"([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?", position)
+    if not match:
+        raise ValueError(f"position:{position}")
+    start_column, start_row, end_column, end_row = match.groups()
+    if end_column is None:
+        return (position,)
+    if start_row != end_row:
+        raise ValueError(f"range:{position}")
+    return tuple(
+        f"{_column_name(column)}{start_row}"
+        for column in range(_column_number(start_column), _column_number(end_column) + 1)
+    )
+
+
 def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
     original = template.path.read_bytes()
     source_buffer = io.BytesIO(original)
@@ -196,12 +241,26 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
     changes: dict[str, dict[str, str]] = {}
     for coordinate in template.clear_cells:
         changes.setdefault(template.data_sheet, {})[coordinate] = ""
+    # A generated chunk must never inherit rows from a previous quote stored
+    # in the master. Clear every mapped row, including fields that are manual,
+    # then write only the current chunk's confirmed automatic values.
+    for field in template.fields:
+        if "{row}" not in field.position:
+            continue
+        for row_number in range(template.start_row, template.end_row + 1):
+            for coordinate in _coordinates(field.position.format(row=row_number)):
+                changes.setdefault(field.sheet, {})[coordinate] = ""
     for field in template.fields:
         if not field.automatic:
             continue
         if "{row}" in field.position:
             for offset, row_data in enumerate(rows):
-                changes.setdefault(field.sheet, {})[field.position.format(row=template.start_row + offset)] = row_data.get(field.source, "")
+                coordinates = _coordinates(
+                    field.position.format(row=template.start_row + offset)
+                )
+                value = row_data.get(field.source, "")
+                if len(coordinates) == 1:
+                    changes.setdefault(field.sheet, {})[coordinates[0]] = value
         else:
             value = fixed.get(field.source, "")
             if field.source == "policy.payment_mode" and value not in {"Contado", "Financiado", "Mensual", "Anual"}:
@@ -237,21 +296,34 @@ def generate_invitation_templates(token: str):
     generated, errors = [], []
     for template in templates_for_branch(detail.branch_code, active_only=True):
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
-        if len(template_rows) > template.end_row - template.start_row + 1:
+        capacity = template.end_row - template.start_row + 1
+        if len(template_rows) > capacity and not template.supports_chunking:
             errors.append((template.insurer_name, "capacidad"))
             continue
-        try:
-            content = _patch_xlsx(template, fixed, template_rows)
-        except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError):
-            logger.exception(
-                "colectivos_invitation_templates application=cotizacion_colectivos operation=generate "
-                "profile=%s backend=%s template=%s category=template_error",
-                profile, backend, template.code,
+        chunks = (
+            tuple(
+                template_rows[offset : offset + capacity]
+                for offset in range(0, len(template_rows), capacity)
             )
-            errors.append((template.insurer_name, "estructura"))
-            continue
-        safe = SAFE_NAME.sub("_", f"Invitacion_{template.insurer_code}_{detail.branch_code}").strip("_")
-        generated.append(GeneratedTemplate(template, f"{safe}.xlsx", content))
+            if template_rows else ((),)
+        )
+        for position, chunk in enumerate(chunks, start=1):
+            try:
+                content = _patch_xlsx(template, fixed, chunk)
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError):
+                logger.exception(
+                    "colectivos_invitation_templates application=cotizacion_colectivos operation=generate "
+                    "profile=%s backend=%s template=%s category=template_error",
+                    profile, backend, template.code,
+                )
+                errors.append((template.insurer_name, "estructura"))
+                break
+            branch = "movilidad" if detail.branch_code == "40" else detail.branch_code
+            safe = SAFE_NAME.sub(
+                "_", f"{template.insurer_code.casefold()}_{branch}"
+            ).strip("_")
+            suffix = f"_{position:02d}" if len(chunks) > 1 else ""
+            generated.append(GeneratedTemplate(template, f"{safe}{suffix}.xlsx", content))
     logger.info(
         "colectivos_invitation_templates application=cotizacion_colectivos operation=generate "
         "profile=%s backend=%s cache=hit templates=%d errors=%d records=%d total_ms=%d",

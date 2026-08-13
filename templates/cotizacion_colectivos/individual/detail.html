@@ -1,0 +1,8 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Respuesta de cotización individual{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'cotizacion_colectivos:notification_list' %}">Respuestas</a><span>/</span><span>Cotización individual</span></nav>
+<header class="page-heading page-heading--compact"><span class="eyebrow">{{ schema.name }}</span><h1>Respuesta de cotización individual</h1><p>Información recibida del cliente y almacenada localmente.</p></header>
+<section class="workspace-card"><div class="section-heading"><h2>Datos generales</h2><span>{{ quotation.submitted_at|date:"d/m/Y H:i" }}</span></div><div class="detail-grid">{% for label, value in display_fields %}<div><span>{{ label }}</span><strong>{{ value|default:"Sin información" }}</strong></div>{% endfor %}</div></section>
+{% for group in display_groups %}<section class="workspace-card"><div class="section-heading"><h2>{{ group.label }}</h2><span>{{ group.rows|length }}</span></div>{% for row in group.rows %}<article class="relation-row">{% for label, value in row %}<span><strong>{{ label }}:</strong> {{ value|default:"Sin información" }}</span>{% endfor %}</article>{% endfor %}</section>{% endfor %}
+{% endblock %}

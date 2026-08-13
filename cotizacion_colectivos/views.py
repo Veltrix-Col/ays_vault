@@ -15,6 +15,7 @@ from django.db.models import Count, Prefetch, Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse
 from django.core.paginator import Paginator
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -52,11 +53,14 @@ from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
 from .modes import INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
-from .quotation_forms.catalog import BRANCH_SCHEMAS, get_branch_schema
-from .quotation_forms.forms import IndividualQuotationForm
-from .quotation_forms.security import sign_context, sign_receipt, unsign_context, unsign_receipt
-from .services.individual_quotations import create_individual_quotation
-from .models import CotizacionIndividual
+from .quotation_forms.catalog import get_branch_schema
+from .quotation_forms.security import sign_receipt, unsign_receipt
+from .services.individual_quotations import (
+    affiliate_options,
+    build_policy_context,
+)
+from .models import CotizacionIndividual, NotificacionCotizacionIndividual
+from .quotation_forms.catalog import get_policy_branch_schema
 
 
 logger = logging.getLogger("cotizacion_colectivos")
@@ -91,65 +95,19 @@ def index(request, mode=None):
 @never_cache
 @require_http_methods(["GET"])
 def individual_quotation_index(request):
-    tool_mode = resolve_tool_mode(request, INDIVIDUAL_MODE)
-    return render(request, "cotizacion_colectivos/individual/index.html", {
-        "branches": BRANCH_SCHEMAS,
-        "colectivos_mode": tool_mode,
-        **_environment_context(),
-    })
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    return redirect("cotizacion_colectivos:individual_client_search")
 
 
 @never_cache
 @require_http_methods(["GET", "POST"])
 def individual_quotation_form(request, branch_slug):
-    tool_mode = resolve_tool_mode(request, INDIVIDUAL_MODE)
-    schema = get_branch_schema(branch_slug)
-    context_token = str(request.GET.get("context") or request.POST.get("context_token") or "")
-    context = {}
-    if context_token:
-        try:
-            context = unsign_context(context_token)
-        except signing.BadSignature as exc:
-            raise Http404("Contexto no válido") from exc
-    initial_items = {group.key: [{} for _ in range(group.minimum)] for group in schema.repeatables}
-    form = IndividualQuotationForm(
-        request.POST or None,
-        request.FILES or None,
-        schema=schema,
-        context=context,
-        initial={"items_payload": json.dumps(initial_items)},
-    )
-    if request.method == "POST" and form.is_valid():
-        try:
-            quotation = create_individual_quotation(
-                schema=schema,
-                cleaned_data=form.cleaned_data,
-                actor=get_internal_actor(request, create=True),
-                context=context,
-            )
-        except ValidationError as exc:
-            form.add_error("attachments", exc.message)
-        else:
-            logger.info(
-                "colectivos_individual application=cotizacion_colectivos operation=submit "
-                "branch=%s items=%d attachments=%d actor=%s",
-                schema.slug, quotation.item_count, quotation.attachment_count,
-                "technical" if public_internal_access_enabled() else "authenticated",
-            )
-            return redirect("cotizacion_colectivos:individual_confirmation", token=sign_receipt(quotation.public_id))
-    schema_payload = {
-        "repeatables": [asdict(item) for item in schema.repeatables],
-        "initial": initial_items,
-    }
-    return render(request, "cotizacion_colectivos/individual/form.html", {
-        "schema": schema,
-        "schema_payload": schema_payload,
-        "form": form,
-        "field_rows": tuple((field, form[field.key]) for field in schema.fields),
-        "context_token": context_token,
-        "colectivos_mode": tool_mode,
-        **_environment_context(),
-    })
+    # Compatibility route: an individual quotation must now start from a
+    # client, policy and confirmed affiliate. It never accepts a loose ramo.
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    if request.method == "POST":
+        raise Http404("La cotización individual requiere una póliza.")
+    return redirect("cotizacion_colectivos:individual_client_search")
 
 
 @never_cache
@@ -374,12 +332,6 @@ def _client_requests(request, *, token, entity_kind, environment):
 def _render_client_detail(request, *, detail, token, entity_kind, environment=None, **extra):
     environment = environment or get_colectivos_environment()
     mode = resolve_tool_mode(request)
-    individual_context = ""
-    if mode.code == INDIVIDUAL_MODE:
-        label = getattr(detail, "display_name", "") or getattr(detail, "full_name", "")
-        individual_context = sign_context(
-            entity_kind=entity_kind, entity_token=token, label=label,
-        )
     return render(request, "cotizacion_colectivos/detail.html", {
         "detail": detail, "entity_kind": entity_kind, "entity_token": token,
         "related_requests": _client_requests(
@@ -387,8 +339,6 @@ def _render_client_detail(request, *, detail, token, entity_kind, environment=No
         ),
         "zoho_environment": environment,
         "colectivos_mode": mode,
-        "individual_branches": BRANCH_SCHEMAS,
-        "individual_context_token": individual_context,
         **extra,
     })
 
@@ -709,6 +659,16 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
             ), None)
     if token_context.get("source_id") and source_kind in {"company", "person"}:
         builder_token = sign_record_id(token_context["source_id"], source_kind)
+    mode = resolve_tool_mode(request)
+    individual_schema = None
+    individual_affiliates = ()
+    if mode.code == INDIVIDUAL_MODE:
+        try:
+            individual_schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
+        except Http404:
+            pass
+        else:
+            individual_affiliates = affiliate_options(members)
     context = {
         "detail": detail,
         # Signed record tokens are short-lived capabilities and must come from
@@ -741,7 +701,9 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "functional_groups": getattr(service, "preparation_metadata", {}).get(
             "functional_groups", (),
         ),
-        "colectivos_mode": resolve_tool_mode(request),
+        "colectivos_mode": mode,
+        "individual_schema": individual_schema,
+        "individual_affiliates": individual_affiliates,
     }
     context.update(extra_context or {})
     if hasattr(service, "timings"):
@@ -839,6 +801,78 @@ def policy_detail(request, token, mode=None):
     return _render_policy_workspace(
         request, token=token, service=service, detail=detail, members=members,
         started=total_started,
+    )
+
+
+@never_cache
+@require_http_methods(["POST"])
+def policy_individual_access(request, token):
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    if not has_internal_permission(request, "create_individual_quotation"):
+        return permission_denied_response()
+    started = time.monotonic()
+    service = PolicyService()
+    try:
+        token_context = unsign_record_context(token, "policy")
+        detail, members = service.group(
+            token, source_kind=token_context.get("source_kind"),
+        )
+        options = affiliate_options(members)
+        affiliate_key = str(request.POST.get("affiliate_key") or "")
+        if not affiliate_key and len(options) == 1:
+            affiliate_key = options[0].key
+        actor = get_internal_actor(request, create=True)
+        schema, context_token, _payload = build_policy_context(
+            policy_token=token,
+            detail=detail,
+            members=members,
+            affiliate_key=affiliate_key,
+            creator_id=actor.pk,
+        )
+    except (ColectivosServiceError, ValidationError, Http404) as exc:
+        if isinstance(exc, ColectivosServiceError) and exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Póliza no encontrada") from exc
+        if getattr(service, "last_detail", None) is not None:
+            return _render_policy_workspace(
+                request,
+                token=token,
+                service=service,
+                detail=service.last_detail,
+                members=service.last_members,
+                started=started,
+                extra_context={
+                    "individual_access_error": str(getattr(exc, "message", exc)),
+                },
+            )
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": "No fue posible generar el enlace de cotización individual.",
+            **_environment_context(request, INDIVIDUAL_MODE),
+        }, status=400)
+    external_url = request.build_absolute_uri(reverse(
+        "colectivos_external:individual_quotation", args=[context_token],
+    ))
+    logger.info(
+        "colectivos_individual application=cotizacion_colectivos operation=generate_link "
+        "profile=%s branch=%s cache=%s remote_queries=%d total_ms=%d",
+        service.profile,
+        schema.slug,
+        service.preparation_status,
+        service.timings.get("remote_queries", 0),
+        round((time.monotonic() - started) * 1000),
+    )
+    return _render_policy_workspace(
+        request,
+        token=token,
+        service=service,
+        detail=detail,
+        members=members,
+        started=started,
+        extra_context={
+            "individual_generated_url": external_url,
+            "individual_generated_affiliate": next(
+                (item for item in options if item.key == affiliate_key), None,
+            ),
+        },
     )
 
 
@@ -1083,7 +1117,7 @@ def policy_invitation_preview(request, token):
         }, status=409)
     return render(request, "cotizacion_colectivos/invitation_preview.html", {
         "detail": detail, "previews": previews, "policy_token": token,
-        "has_generable": any(item.status in {"ready", "incomplete"} for item in previews),
+        "has_generable": any(item.status in {"ready", "ready_manual"} for item in previews),
         "preparation_metadata": metadata,
         "colectivos_mode": tool_mode,
         **_environment_context(),
@@ -1592,7 +1626,18 @@ def notification_list(request):
     )
     queryset = queryset.order_by("-created_at", "-pk")
     page = Paginator(queryset, 25).get_page(request.GET.get("page"))
-    return render(request, "cotizacion_colectivos/notifications.html", {"page": page, **_environment_context()})
+    individual_notifications = (
+        NotificacionCotizacionIndividual.objects.none()
+        if actor is None
+        else NotificacionCotizacionIndividual.objects.filter(user=actor)
+        .select_related("quotation")
+        .order_by("-created_at", "-pk")[:25]
+    )
+    return render(request, "cotizacion_colectivos/notifications.html", {
+        "page": page,
+        "individual_notifications": individual_notifications,
+        **_environment_context(),
+    })
 
 
 @never_cache
@@ -1631,6 +1676,69 @@ def notification_read(request, notification_id):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def individual_notification_read(request, notification_id):
+    if not has_internal_permission(request, "manage_notifications"):
+        return permission_denied_response()
+    item = get_object_or_404(
+        NotificacionCotizacionIndividual,
+        pk=notification_id,
+        user=get_internal_actor(request, create=True),
+    )
+    if item.read_at is None:
+        item.read_at = timezone.now()
+        item.save(update_fields=("read_at",))
+    return redirect(
+        "cotizacion_colectivos:individual_quotation_detail",
+        token=sign_receipt(item.quotation.public_id),
+    )
+
+
+@never_cache
+@require_http_methods(["GET"])
+def individual_quotation_detail(request, token):
+    if not has_internal_permission(request, "view_individual_quotation"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.prefetch_related("attachments").get(
+            public_id=public_id,
+        )
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError) as exc:
+        raise Http404("Respuesta no encontrada") from exc
+    schema = get_branch_schema(quotation.branch_slug)
+    field_labels = {item.key: item.label for item in schema.fields}
+    group_schemas = {item.key: item for item in schema.repeatables}
+    display_fields = tuple(
+        (field_labels.get(key, "Información"), value)
+        for key, value in payload.get("fields", {}).items()
+    )
+    display_groups = []
+    for group_key, rows in payload.get("groups", {}).items():
+        group_schema = group_schemas.get(group_key)
+        labels = (
+            {item.key: item.label for item in group_schema.fields}
+            if group_schema else {}
+        )
+        display_groups.append({
+            "label": group_schema.plural if group_schema else "Información relacionada",
+            "rows": tuple(
+                tuple((labels.get(key, "Información"), value) for key, value in row.items())
+                for row in rows
+            ),
+        })
+    return render(request, "cotizacion_colectivos/individual/detail.html", {
+        "quotation": quotation,
+        "schema": schema,
+        "display_fields": display_fields,
+        "display_groups": tuple(display_groups),
+        "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
+        **_environment_context(),
+    })
+
+
+@never_cache
 @require_http_methods(["GET"])
 def response_detail(request, public_id, version):
     if not has_internal_permission(request, "view_responses"):
@@ -1664,5 +1772,9 @@ def notifications_read_all(request):
         user=get_internal_actor(request, create=True),
         read_at__isnull=True,
         notification_type="CLIENT_RESPONSE",
+    ).update(read_at=timezone.now())
+    NotificacionCotizacionIndividual.objects.filter(
+        user=get_internal_actor(request, create=True),
+        read_at__isnull=True,
     ).update(read_at=timezone.now())
     return redirect("cotizacion_colectivos:notification_list")

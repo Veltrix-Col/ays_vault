@@ -19,6 +19,8 @@ urlpatterns = [
     path("invitaciones-aseguradoras/clientes/<str:entity_kind>/<str:token>/", views.client_detail, {"mode": "invitations"}, name="invitations_client_detail"),
     path("solicitudes-renovaciones/polizas/<str:token>/", views.policy_detail, {"mode": "requests"}, name="requests_policy_detail"),
     path("invitaciones-aseguradoras/polizas/<str:token>/", views.policy_detail, {"mode": "invitations"}, name="invitations_policy_detail"),
+    path("cotizacion-individual/polizas/<str:token>/", views.policy_detail, {"mode": "individual"}, name="individual_policy_detail"),
+    path("cotizacion-individual/polizas/<str:token>/enlace/", views.policy_individual_access, name="policy_individual_access"),
     path("empresas/buscar/", views.company_search, name="company_search"),
     path("empresas/<str:token>/", views.company_detail, name="company_detail"),
     path("individuos/buscar/", views.person_search, name="person_search"),
@@ -53,5 +55,7 @@ urlpatterns = [
     path("solicitudes/<str:public_id>/adjuntos/<int:attachment_id>/", views.attachment_download, name="attachment_download"),
     path("notificaciones/", views.notification_list, name="notification_list"),
     path("notificaciones/<int:notification_id>/leer/", views.notification_read, name="notification_read"),
+    path("notificaciones/cotizacion-individual/<int:notification_id>/leer/", views.individual_notification_read, name="individual_notification_read"),
+    path("cotizacion-individual/respuestas/<str:token>/", views.individual_quotation_detail, name="individual_quotation_detail"),
     path("notificaciones/leer-todas/", views.notifications_read_all, name="notifications_read_all"),
 ]

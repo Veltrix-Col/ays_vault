@@ -1,11 +1,10 @@
-{% extends "cotizacion_colectivos/base.html" %}
+{% extends "cotizacion_colectivos/external/base.html" %}
 {% load static %}
 {% block title %}{{ schema.name }} · Cotización Individual{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/colectivos.css' %}">{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'cotizacion_colectivos:individual_index' %}">Cotización Individual</a><span>/</span><span>{{ schema.name }}</span></nav>
-<header class="page-heading"><span class="eyebrow">Paso 2 · {{ schema.name }}</span><h1>Información para cotizar</h1><p>{{ schema.description }}</p></header>
+<header class="page-heading page-heading--compact"><span class="eyebrow">Cotización Individual · {{ schema.name }}</span><h1>Información para cotizar</h1><p>{{ context.policy_label }} · Afiliado principal: {{ context.affiliate_label }}</p><p>{{ schema.description }}</p></header>
 <form method="post" enctype="multipart/form-data" class="individual-form" data-individual-form novalidate>{% csrf_token %}
-  <input type="hidden" name="context_token" value="{{ context_token }}">
   {{ form.items_payload }}
   {% if form.non_field_errors %}<div class="form-alert" role="alert">{{ form.non_field_errors }}</div>{% endif %}
   <section class="workspace-card" aria-labelledby="requester-heading"><div class="section-heading"><div><span class="eyebrow">Solicitante</span><h2 id="requester-heading">Datos de contacto y contexto</h2></div></div>
@@ -17,7 +16,7 @@
   </section>{% endfor %}
   {% if form.items_payload.errors %}<div class="form-alert" role="alert">{{ form.items_payload.errors }}</div>{% endif %}
   <section class="workspace-card"><div class="section-heading"><div><span class="eyebrow">Documentos</span><h2>Adjuntos</h2></div></div><p>Formatos permitidos: PDF, JPG y PNG. Máximo 10 archivos y {{ schema.documents|length }} categorías orientativas.</p><ul class="compact-list">{% for document in schema.documents %}<li>{{ document }}</li>{% endfor %}</ul><div class="field"><label for="{{ form.attachments.id_for_label }}">{{ form.attachments.label }}</label>{{ form.attachments }}{{ form.attachments.errors }}</div></section>
-  <section class="workspace-card review-panel"><div class="section-heading"><div><span class="eyebrow">Paso 3</span><h2>Revisar y enviar</h2></div></div><p data-review-summary>Revise los elementos agregados antes de enviar.</p><p class="muted">La información se guarda localmente cifrada. Esta acción no crea ni actualiza registros en Zoho.</p><button type="submit" class="button-primary">Enviar cotización</button></section>
+  <section class="workspace-card review-panel"><div class="section-heading"><div><span class="eyebrow">Finalizar</span><h2>Revisar y enviar</h2></div></div><p data-review-summary>Revise los elementos agregados antes de enviar.</p><p class="muted">La información se guarda localmente cifrada.</p><button type="submit" class="button-primary">Enviar cotización</button></section>
 </form>
 <dialog class="individual-dialog" data-item-dialog><form method="dialog" data-dialog-form><header><h2 data-dialog-title>Agregar elemento</h2><button type="button" data-close-dialog aria-label="Cerrar">×</button></header><div class="individual-field-grid" data-dialog-fields></div><footer><button type="button" class="button-secondary" data-close-dialog>Cancelar</button><button type="submit" class="button-primary">Guardar</button></footer></form></dialog>
 {{ schema_payload|json_script:"individual-schema" }}

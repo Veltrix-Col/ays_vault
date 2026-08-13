@@ -1,5 +1,7 @@
-{% extends "cotizacion_colectivos/base.html" %}
+{% extends "cotizacion_colectivos/external/base.html" %}
+{% load static %}
 {% block title %}Solicitud recibida{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/colectivos.css' %}">{% endblock %}
 {% block content %}
-<section class="confirmation-card" aria-labelledby="confirmation-title"><span class="confirmation-icon" aria-hidden="true">✓</span><span class="eyebrow">Cotización Individual · {{ schema.name }}</span><h1 id="confirmation-title">Solicitud recibida</h1><p>La información fue guardada de forma segura para revisión de A&S.</p><dl class="confirmation-summary"><div><dt>Elementos registrados</dt><dd>{{ quotation.item_count }}</dd></div><div><dt>Adjuntos recibidos</dt><dd>{{ quotation.attachment_count }}</dd></div><div><dt>Fecha</dt><dd>{{ quotation.submitted_at|date:"d/m/Y H:i" }}</dd></div></dl><a class="button-secondary" href="{% url 'cotizacion_colectivos:individual_index' %}">Crear otra cotización</a></section>
+<section class="confirmation-card" aria-labelledby="confirmation-title"><span class="confirmation-icon" aria-hidden="true">✓</span><span class="eyebrow">Cotización Individual · {{ schema.name }}</span><h1 id="confirmation-title">Solicitud recibida</h1><p>La información fue guardada de forma segura y A&S fue notificado.</p><dl class="confirmation-summary"><div><dt>Elementos registrados</dt><dd>{{ quotation.item_count }}</dd></div><div><dt>Adjuntos recibidos</dt><dd>{{ quotation.attachment_count }}</dd></div><div><dt>Fecha</dt><dd>{{ quotation.submitted_at|date:"d/m/Y H:i" }}</dd></div></dl></section>
 {% endblock %}

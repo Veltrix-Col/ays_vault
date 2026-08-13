@@ -188,7 +188,9 @@ No se filtra por la aseguradora actual de la póliza. El ramo `40` produce SURA 
 - No se persisten archivos generados ni previews.
 - Respuestas: `Cache-Control: no-store, private`; descarga con `nosniff`.
 - No se registra ningún valor de celda, documento, nombre, póliza o ID.
-- La capacidad es la de cada maestra: 21 vehículos SURA, 299 vehículos Allianz, 40 filas potenciales SURA Vida y una solicitud colectiva Allianz Vida. Si una maestra tabular activa no alcanza, se omite y se reporta como error; nunca se entrega truncada.
+- La capacidad física se respeta por archivo: 21 vehículos SURA y 299 vehículos Allianz. Las maestras tabulares verificadas como repetibles se dividen en archivos numerados cuando el grupo excede su capacidad; nunca se truncan. Por ejemplo, 136 vehículos en SURA producen 7 archivos completos dentro del ZIP.
+- Una plantilla con campos manuales faltantes continúa disponible y los deja vacíos para diligenciamiento posterior; el preview los informa como trabajo manual no bloqueante.
+- Si una maestra no ha sido verificada como repetible, exceder su capacidad sigue siendo un error de integridad y no genera una salida parcial.
 - Falta QA funcional de A&S sobre equivalencias de servicio/uso, zona de circulación y el tratamiento de tomador persona natural.
 
 ## 10. Actualización de maestras

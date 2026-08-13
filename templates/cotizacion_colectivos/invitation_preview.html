@@ -11,8 +11,9 @@
   {% for preview in previews %}
     <article class="relation-row">
       <div><strong>{{ preview.template.insurer_name }}</strong><span>{{ preview.template.purpose }} · .{{ preview.template.extension }}</span><small>Versión {{ preview.template.version }} · {{ preview.rows }} registros · capacidad {{ preview.capacity }}</small></div>
-      <span class="state-chip">{% if preview.status == 'ready' %}Lista{% elif preview.status == 'incomplete' %}Completar manualmente{% elif preview.status == 'error' %}No generable{% else %}No disponible{% endif %}</span>
+      <span class="state-chip">{% if preview.status == 'ready' %}Lista para descargar{% elif preview.status == 'ready_manual' %}Lista · completar manualmente{% elif preview.status == 'validation' %}Requiere validación{% else %}No disponible{% endif %}</span>
       <p>{{ preview.message }}</p>
+      {% if preview.output_files > 1 %}<small>{{ preview.output_files }} archivos · sin registros truncados</small>{% endif %}
       <small>{{ preview.automatic_fields }} campos parametrizados automáticamente · {{ preview.manual_fields }} manuales</small>
       {% if preview.missing_required %}<details><summary>Campos obligatorios pendientes</summary><ul>{% for field in preview.missing_required %}<li>{{ field }}</li>{% endfor %}</ul></details>{% endif %}
       {% if preview.template.limitation %}<p class="muted">{{ preview.template.limitation }}</p>{% endif %}

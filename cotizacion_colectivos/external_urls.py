@@ -4,6 +4,8 @@ from . import external_views
 
 app_name = "colectivos_external"
 urlpatterns = [
+    path("cotizacion-individual/confirmacion/<str:token>/", external_views.individual_confirmation, name="individual_confirmation"),
+    path("cotizacion-individual/<str:token>/", external_views.individual_quotation, name="individual_quotation"),
     path("portal/", external_views.portal, name="portal"),
     path("portal/guardar/", external_views.save_draft, name="save_draft"),
     path("portal/enviar/", external_views.submit, name="submit"),

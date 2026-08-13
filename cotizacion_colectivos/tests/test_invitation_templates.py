@@ -140,9 +140,9 @@ class InvitationTemplateGenerationTests(TestCase):
         self.assertEqual(errors, ())
         with zipfile.ZipFile(io.BytesIO(content)) as bundle:
             names = set(bundle.namelist())
-            self.assertEqual(names, {"Invitacion_SURA_40.xlsx", "Invitacion_ALLIANZ_40.xlsx"})
-            sura = bundle.read("Invitacion_SURA_40.xlsx")
-            general = bundle.read("Invitacion_ALLIANZ_40.xlsx")
+            self.assertEqual(names, {"sura_movilidad.xlsx", "allianz_movilidad.xlsx"})
+            sura = bundle.read("sura_movilidad.xlsx")
+            general = bundle.read("allianz_movilidad.xlsx")
         self.assertEqual(inline_value(sura, "xl/worksheets/sheet1.xml", "A2"), "ABC001")
         self.assertEqual(inline_value(sura, "xl/worksheets/sheet1.xml", "Q2"), "100000001")
         self.assertEqual(inline_value(general, "xl/worksheets/sheet1.xml", "B5"), "Empresa de prueba")
@@ -161,7 +161,7 @@ class InvitationTemplateGenerationTests(TestCase):
         workspace.return_value = local_workspace()
         content, _filename, _content_type, _errors = generate_invitation_templates(TOKEN)
         with zipfile.ZipFile(io.BytesIO(content)) as bundle:
-            generated = bundle.read("Invitacion_ALLIANZ_40.xlsx")
+            generated = bundle.read("allianz_movilidad.xlsx")
         source_path = next(item.path for item in INVITATION_TEMPLATE_CATALOG if item.code == "allianz_autos_collective")
         with zipfile.ZipFile(source_path) as before, zipfile.ZipFile(io.BytesIO(generated)) as after:
             self.assertEqual(set(before.namelist()), set(after.namelist()))
@@ -178,19 +178,51 @@ class InvitationTemplateGenerationTests(TestCase):
             self.assertEqual(list(custom), [])
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
-    def test_capacity_error_does_not_create_partial_workbook(self, workspace):
+    def test_large_group_is_chunked_without_truncation(self, workspace):
         workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 302)))
-        with self.assertRaisesMessage(Exception, "No hay plantillas generables"):
-            generate_invitation_templates(TOKEN)
+        content, _filename, content_type, errors = generate_invitation_templates(TOKEN)
+        self.assertEqual(content_type, "application/zip")
+        self.assertEqual(errors, ())
+        with zipfile.ZipFile(io.BytesIO(content)) as bundle:
+            self.assertEqual(len([name for name in bundle.namelist() if name.startswith("sura_")]), 15)
+            self.assertEqual(len([name for name in bundle.namelist() if name.startswith("allianz_")]), 2)
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
-    def test_one_template_capacity_error_does_not_block_other_insurer(self, workspace):
+    def test_sura_capacity_creates_multiple_files_instead_of_blocking(self, workspace):
         workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 31)))
         content, filename, content_type, errors = generate_invitation_templates(TOKEN)
-        self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        self.assertEqual(filename, "Invitacion_ALLIANZ_40.xlsx")
-        self.assertTrue(content.startswith(b"PK"))
-        self.assertEqual(errors, (("SURA", "capacidad"),))
+        self.assertEqual(content_type, "application/zip")
+        self.assertTrue(filename.endswith(".zip"))
+        self.assertEqual(errors, ())
+        with zipfile.ZipFile(io.BytesIO(content)) as bundle:
+            self.assertEqual(set(bundle.namelist()), {
+                "sura_movilidad_01.xlsx", "sura_movilidad_02.xlsx",
+                "allianz_movilidad.xlsx",
+            })
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_sura_136_over_21_produces_seven_complete_files(self, workspace):
+        workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 137)))
+        _detail, previews, _metadata = preview_invitation_templates(TOKEN)
+        sura_preview = next(item for item in previews if item.template.insurer_code == "SURA")
+        self.assertEqual(sura_preview.output_files, 7)
+        self.assertEqual(sura_preview.status, "ready_manual")
+        content, _filename, _content_type, errors = generate_invitation_templates(TOKEN)
+        self.assertEqual(errors, ())
+        with zipfile.ZipFile(io.BytesIO(content)) as bundle:
+            sura_names = sorted(name for name in bundle.namelist() if name.startswith("sura_"))
+            self.assertEqual(len(sura_names), 7)
+            counts = []
+            for name in sura_names:
+                with zipfile.ZipFile(io.BytesIO(bundle.read(name))) as workbook:
+                    root = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+                counts.append(sum(
+                    1 for cell in root.findall(f".//{{{NS}}}c")
+                    if cell.get("r", "").startswith("A")
+                    and cell.find(f"{{{NS}}}is/{{{NS}}}t") is not None
+                    and cell.find(f"{{{NS}}}is/{{{NS}}}t").text
+                ))
+            self.assertEqual(sum(counts), 136)
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
     def test_sensitive_values_are_never_logged(self, workspace):
@@ -209,7 +241,7 @@ class InvitationTemplateGenerationTests(TestCase):
         self.assertEqual(len(previews), 2)
         self.assertEqual({item.template.insurer_code: item.status for item in previews}["SURA"], "unavailable")
         content, filename, content_type, errors = generate_invitation_templates(TOKEN)
-        self.assertEqual(filename, "Invitacion_ALLIANZ_83.xlsx")
+        self.assertEqual(filename, "allianz_83.xlsx")
         self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         self.assertEqual(errors, ())
         self.assertEqual(inline_value(content, "xl/worksheets/sheet1.xml", "B10"), "Empresa de prueba")

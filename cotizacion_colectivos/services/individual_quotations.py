@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
 from django.conf import settings
@@ -13,7 +14,112 @@ from django.db import transaction
 
 from vault.crypto import encrypt
 
-from ..models import AdjuntoCotizacionIndividual, CotizacionIndividual
+from ..models import (
+    AdjuntoCotizacionIndividual,
+    CotizacionIndividual,
+    NotificacionCotizacionIndividual,
+)
+from ..quotation_forms.catalog import get_policy_branch_schema
+from ..quotation_forms.security import sign_policy_context
+
+
+@dataclass(frozen=True)
+class AffiliateOption:
+    key: str
+    label: str
+    role: str
+    id_type: str = ""
+    masked_document: str = ""
+
+
+def affiliate_options(members) -> tuple[AffiliateOption, ...]:
+    """Return deduplicated HMAC-backed principals; names are display only."""
+
+    options: dict[str, AffiliateOption] = {}
+    for member in members:
+        candidates = (
+            (
+                member.associate_key,
+                member.associate_name,
+                "Afiliado",
+                member.associate_id_type,
+                member.associate_masked_document,
+            ),
+            (
+                member.insured_key,
+                member.insured_name,
+                "Asegurado",
+                member.insured_id_type,
+                member.insured_masked_document,
+            ),
+        )
+        for key, label, role, id_type, masked_document in candidates:
+            key = str(key or "")
+            if key and key not in options:
+                options[key] = AffiliateOption(
+                    key=key,
+                    label=str(label or "Información protegida"),
+                    role=role,
+                    id_type=str(id_type or ""),
+                    masked_document=str(masked_document or ""),
+                )
+        if member.associate_key:
+            # A confirmed affiliate is the principal for this relationship.
+            continue
+    affiliates = tuple(item for item in options.values() if item.role == "Afiliado")
+    return affiliates or tuple(options.values())
+
+
+def build_policy_context(*, policy_token, detail, members, affiliate_key, creator_id):
+    schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
+    options = {item.key: item for item in affiliate_options(members)}
+    selected = options.get(str(affiliate_key or ""))
+    if selected is None:
+        raise ValidationError("Seleccione un afiliado válido para esta póliza.")
+
+    matching = next((
+        member for member in members
+        if selected.key in {member.associate_key, member.insured_key}
+    ), None)
+    is_associate = bool(matching and matching.associate_key == selected.key)
+    requester_name = (
+        matching.associate_name if is_associate and matching else
+        matching.insured_name if matching else selected.label
+    )
+    requester_id_type = (
+        matching.associate_id_type if is_associate and matching else
+        matching.insured_id_type if matching else selected.id_type
+    )
+    requester_document = (
+        matching.associate_document if is_associate and matching else
+        matching.insured_document if matching else ""
+    )
+    values = {
+        "requester_name": str(requester_name or selected.label),
+        "requester_id_type": str(requester_id_type or selected.id_type),
+        "requester_document": str(requester_document or ""),
+        "requester_email": str(getattr(matching, "email", "") or ""),
+        "requester_phone": str(
+            getattr(matching, "mobile", "") or getattr(matching, "phone", "") or ""
+        ),
+        "collective_context": str(detail.holder or detail.source_name or ""),
+    }
+    payload = {
+        "context_version": 1,
+        "policy_token": str(policy_token),
+        "source_kind": str(detail.source_kind or "company"),
+        "affiliate_key": selected.key,
+        "affiliate_role": selected.role,
+        "branch_slug": schema.slug,
+        "schema_version": schema.version,
+        "creator_id": int(creator_id),
+        "policy_label": str(detail.masked_reference or "Póliza colectiva"),
+        "branch_name": str(detail.branch_name),
+        "affiliate_label": selected.label,
+        **values,
+    }
+    payload["locked_fields"] = tuple(key for key, value in values.items() if value)
+    return schema, sign_policy_context(payload), payload
 
 
 MIME_BY_EXTENSION = {
@@ -72,9 +178,11 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     }
     serialized = json.dumps(public_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     protected = encrypt(serialized)
-    context_hash = hashlib.sha256(
-        str((context or {}).get("entity_token") or "").encode()
-    ).hexdigest() if context else ""
+    context_material = ":".join((
+        str((context or {}).get("policy_token") or (context or {}).get("entity_token") or ""),
+        str((context or {}).get("affiliate_key") or ""),
+    ))
+    context_hash = hashlib.sha256(context_material.encode()).hexdigest() if context else ""
     quotation = CotizacionIndividual.objects.create(
         branch_code=schema.code,
         branch_slug=schema.slug,
@@ -114,6 +222,18 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 checksum=hashlib.sha256(content).hexdigest(),
                 stored_path=internal_name,
                 safe_metadata={"encrypted": True, "antivirus": "not_configured"},
+            )
+        if actor is not None:
+            NotificacionCotizacionIndividual.objects.get_or_create(
+                user=actor,
+                deduplication_key=f"individual:{quotation.public_id}",
+                defaults={
+                    "quotation": quotation,
+                    "message": (
+                        "El cliente respondió la cotización individual de "
+                        f"{str((context or {}).get('policy_label') or 'una póliza colectiva')[:120]}."
+                    ),
+                },
             )
     except Exception:
         for path in created_paths:

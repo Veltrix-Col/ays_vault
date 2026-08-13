@@ -91,6 +91,39 @@ class AdjuntoCotizacionIndividual(models.Model):
     safe_metadata = models.JSONField(default=dict, blank=True)
 
 
+class NotificacionCotizacionIndividual(models.Model):
+    """Aviso local de respuesta; no representa una tarea ni se sincroniza con Zoho."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notificaciones_cotizacion_individual",
+    )
+    quotation = models.ForeignKey(
+        CotizacionIndividual,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    title = models.CharField(max_length=120, default="Cotización individual recibida")
+    message = models.CharField(max_length=240)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    deduplication_key = models.CharField(max_length=120)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        constraints = (
+            models.UniqueConstraint(
+                fields=("user", "deduplication_key"),
+                name="colect_individual_notification_dedup",
+            ),
+        )
+
+    @property
+    def is_read(self) -> bool:
+        return self.read_at is not None
+
+
 class SolicitudColectivo(models.Model):
     class Status(models.TextChoices):
         DRAFT = "BORRADOR", "Borrador"

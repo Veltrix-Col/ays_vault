@@ -3,18 +3,22 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import json
+from dataclasses import asdict
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core import signing
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.http import Http404, HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .branches import COLLECTIVE_BRANCH_CONFIG
 from .forms import AttachmentUploadForm, ExternalSubmitForm
-from .models import CambioSolicitudColectivo, RespuestaSolicitudColectivo
+from .models import CambioSolicitudColectivo, CotizacionIndividual, RespuestaSolicitudColectivo
 from .services.attachments import store_attachment
 from .services.excel_roundtrip import build_novelties_template
 from .services.excel_previews import cancel_preview, confirm_preview, create_preview, resolve_preview
@@ -36,9 +40,116 @@ from .services.mappings import (
     RELATIONSHIP_CHOICES,
 )
 from .filenames import download_filename
+from .quotation_forms.catalog import get_branch_schema, get_policy_branch_schema
+from .quotation_forms.forms import IndividualQuotationForm
+from .quotation_forms.security import (
+    sign_receipt,
+    unsign_policy_context,
+    unsign_receipt,
+)
+from .services.individual_quotations import affiliate_options, create_individual_quotation
+from .services.preparations import load_policy_preparation
+from .zoho import get_colectivos_profile
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _individual_workspace(context):
+    profile = get_colectivos_profile()
+    backend = str(getattr(settings, "ZOHO_BACKEND", "sdk")).strip().lower()
+    loaded = load_policy_preparation(
+        token=str(context["policy_token"]),
+        profile=profile,
+        backend=backend,
+        source_kind=str(context["source_kind"]),
+    )
+    if loaded is None:
+        raise signing.BadSignature("El Workspace ya no está disponible.")
+    detail, members, metadata = loaded
+    schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
+    if schema.slug != context.get("branch_slug") or schema.version != context.get("schema_version"):
+        raise signing.BadSignature("El formulario ya no corresponde a la póliza.")
+    if str(context.get("affiliate_key")) not in {
+        option.key for option in affiliate_options(members)
+    }:
+        raise signing.BadSignature("El afiliado ya no pertenece al contexto.")
+    return detail, members, metadata, schema
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def individual_quotation(request, token):
+    try:
+        context = unsign_policy_context(token)
+        detail, _members, metadata, schema = _individual_workspace(context)
+    except (signing.BadSignature, Http404, KeyError, ValueError):
+        return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+
+    initial_items = {
+        group.key: [{} for _ in range(group.minimum)] for group in schema.repeatables
+    }
+    form = IndividualQuotationForm(
+        request.POST or None,
+        request.FILES or None,
+        schema=schema,
+        context=context,
+        initial={"items_payload": json.dumps(initial_items)},
+    )
+    if request.method == "POST" and form.is_valid():
+        creator = get_user_model().objects.filter(
+            pk=context.get("creator_id"), is_active=True,
+        ).first()
+        try:
+            quotation = create_individual_quotation(
+                schema=schema,
+                cleaned_data=form.cleaned_data,
+                actor=creator,
+                context=context,
+            )
+        except ValidationError as exc:
+            form.add_error("attachments", exc.message)
+        else:
+            logger.info(
+                "colectivos_individual application=cotizacion_colectivos operation=external_submit "
+                "branch=%s items=%d attachments=%d workspace=%s",
+                schema.slug,
+                quotation.item_count,
+                quotation.attachment_count,
+                metadata.get("storage", "local"),
+            )
+            return redirect(
+                "colectivos_external:individual_confirmation",
+                token=sign_receipt(quotation.public_id),
+            )
+    return render(request, "cotizacion_colectivos/individual/form.html", {
+        "schema": schema,
+        "schema_payload": {
+            "repeatables": [asdict(item) for item in schema.repeatables],
+            "initial": initial_items,
+        },
+        "form": form,
+        "field_rows": tuple((field, form[field.key]) for field in schema.fields),
+        "context": context,
+        "detail": detail,
+    })
+
+
+@never_cache
+@require_http_methods(["GET"])
+def individual_confirmation(request, token):
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.only(
+            "public_id", "branch_slug", "branch_code", "item_count",
+            "attachment_count", "submitted_at",
+        ).get(public_id=public_id)
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError) as exc:
+        raise Http404("Confirmación no encontrada") from exc
+    return render(request, "cotizacion_colectivos/individual/confirmation.html", {
+        "quotation": quotation,
+        "schema": get_branch_schema(quotation.branch_slug),
+    })
 
 
 def _set_external_cookie(response, value: str):
