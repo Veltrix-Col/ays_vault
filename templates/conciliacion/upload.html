@@ -54,11 +54,30 @@
         </div>
 
         <div class="conc-slot-group">
-          <h3>Datos de Zoho <span class="conc-temporal-badge">temporal</span></h3>
-          <p class="conc-muted">Estos archivos se cargan manualmente por ahora. Se reemplazarán por conexión directa por API a Zoho.</p>
-          <div class="conc-slots">
+          <h3>Datos de Zoho: Relación de asegurados, Personas y Novedades</h3>
+          <p class="conc-muted">En modo Zoho API, la póliza indicada arriba filtra la consulta. Novedades solo se resuelve por API en los ramos que lo soportan; en los demás (p. ej. VG Deudores, cuya novedad la reporta el banco) se sigue subiendo a mano.</p>
+          <div class="conc-fields" data-fuente-fields>
+            <div class="conc-field">
+              <span>Fuente</span>
+              <div class="conc-radio-group" data-fuente-radios>
+                {% for radio in form.fuente %}
+                  <label class="conc-radio">{{ radio.tag }} {{ radio.choice_label }}</label>
+                {% endfor %}
+              </div>
+              {% if form.fuente.errors %}<p class="conc-error" role="alert">{{ form.fuente.errors|striptags }}</p>{% endif %}
+              <p class="conc-slot-help" data-fuente-api-nota hidden>Este ramo aún no soporta consulta directa a Zoho; use Excel.</p>
+            </div>
+            <div class="conc-field" data-perfil-zoho-field hidden>
+              <label for="{{ form.perfil_zoho.id_for_label }}">Perfil Zoho</label>
+              {{ form.perfil_zoho }}
+              {% if form.perfil_zoho.errors %}<p class="conc-error" role="alert">{{ form.perfil_zoho.errors|striptags }}</p>{% endif %}
+            </div>
+          </div>
+          <div class="conc-slots" data-fuente-excel-slots>
             {% include "conciliacion/_slot.html" with field=form.relacion slot="relacion" slotdata=slots_iniciales_map.relacion %}
             {% include "conciliacion/_slot.html" with field=form.personas slot="personas" slotdata=slots_iniciales_map.personas %}
+          </div>
+          <div class="conc-slots">
             {% include "conciliacion/_slot.html" with field=form.novedades slot="novedades" slotdata=slots_iniciales_map.novedades %}
           </div>
         </div>
@@ -92,13 +111,14 @@
 
   <div class="conc-modal" data-facturar-modal hidden role="dialog" aria-modal="true" aria-labelledby="facturar-modal-title">
     <div class="conc-modal-card">
-      <h2 id="facturar-modal-title">Facturación (próximamente)</h2>
-      <p>Esta acción es un marcador de posición. La facturación automática se ejecutará
-         más adelante como una acción directa sobre Zoho. Por ahora no realiza ninguna operación.</p>
+      <h2 id="facturar-modal-title">No fue posible generar el enlace</h2>
+      <p>No se pudo resolver el enlace a la póliza en Zoho CRM (Producción). Verifique que el
+         número de póliza exista en Producción y vuelva a intentar la conciliación.</p>
       <button class="conc-button" type="button" data-facturar-close>Entendido</button>
     </div>
   </div>
 
   <script type="application/json" id="conc-slots-catalog">{{ slots_catalog_json|safe }}</script>
+  <script type="application/json" id="conc-fuentes-catalog">{{ fuentes_catalog_json|safe }}</script>
 </body>
 </html>

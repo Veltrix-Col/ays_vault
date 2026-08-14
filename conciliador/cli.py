@@ -9,6 +9,10 @@ Uso:
     python -m conciliador.cli salud --carpeta Salud
     python -m conciliador.cli vg_voluntario --carpeta "VG Voluntaria"
     python -m conciliador.cli vg_deudores --carpeta "VG Deudor" --zscore 3
+
+Para probar la fuente Zoho API (en desarrollo, junto al modo Excel legado):
+    python -m conciliador.cli movilidad --carpeta Movilidad \
+        --fuente-asegurados api --poliza 1080893 --perfil-zoho sandbox
 """
 
 from __future__ import annotations
@@ -40,12 +44,16 @@ def _encontrar_archivo(carpeta: str, patron: str) -> str | None:
     return coincidencias[0] if coincidencias else None
 
 
-def _resolver_archivos(ramo, carpeta: str, overrides: dict[str, str | None]) -> dict[str, str | None]:
+def _resolver_archivos(
+    ramo, carpeta: str, overrides: dict[str, str | None], *, fuente_asegurados: str
+) -> dict[str, str | None]:
     resueltos = {
         rol: overrides.get(rol) or _encontrar_archivo(carpeta, patron)
         for rol, patron in ramo.patrones_archivo.items()
     }
-    for rol in ("personas", "cobro", "relacion"):
+    # En modo api, personas/relacion no vienen de archivo: se consultan a Zoho.
+    obligatorios = ("cobro",) if fuente_asegurados == "api" else ("personas", "cobro", "relacion")
+    for rol in obligatorios:
         if not resueltos.get(rol):
             patron = ramo.patrones_archivo[rol]
             raise ArchivoNoEncontradoError(
@@ -54,15 +62,36 @@ def _resolver_archivos(ramo, carpeta: str, overrides: dict[str, str | None]) -> 
     return resueltos
 
 
+def _zoho_facade(perfil: str):
+    """Construye un ZohoFacade fuera de Django, leyendo `.env` del cwd si existe
+    (misma convencion de python-dotenv que usa `config.settings`)."""
+    from dotenv import load_dotenv
+
+    from ays_zoho_sdk import ZohoSettings
+    from ays_zoho_sdk.factory import get_zoho as _get_zoho_sdk
+
+    load_dotenv()
+    return _get_zoho_sdk(config=ZohoSettings.from_env(profile=perfil))
+
+
 def _ejecutar(codigo_ramo: str, args: argparse.Namespace) -> None:
     ramo = obtener_ramo(codigo_ramo)
+    fuente_asegurados = args.fuente_asegurados
+    if fuente_asegurados == "api" and (not ramo.cargar_personas_api or not ramo.cargar_relacion_api):
+        raise ConciliadorError(f"El ramo '{codigo_ramo}' todavia no soporta --fuente-asegurados api.")
+    if fuente_asegurados == "api" and not args.poliza:
+        raise ConciliadorError("--fuente-asegurados api requiere --poliza.")
+
     overrides = {"personas": args.personas, "cobro": args.cobro, "relacion": args.relacion,
                  "novedades": args.novedades, "recibo": args.recibo}
-    archivos = _resolver_archivos(ramo, args.carpeta, overrides)
+    archivos = _resolver_archivos(ramo, args.carpeta, overrides, fuente_asegurados=fuente_asegurados)
 
     mes, anio = ramo.inferir_periodo(archivos["cobro"], args.mes, args.anio)
     print(f"Periodo detectado: {etiqueta_periodo(mes, anio)}")
+    print(f"Fuente asegurados/personas: {fuente_asegurados}" + (f" (poliza {args.poliza})" if fuente_asegurados == "api" else ""))
     for rol, ruta in archivos.items():
+        if fuente_asegurados == "api" and rol in ("personas", "relacion"):
+            continue
         print(f"  {rol:10s}: {ruta or 'NO DISPONIBLE (placeholder)'}")
 
     if getattr(args, "zscore", None) is not None:
@@ -71,10 +100,21 @@ def _ejecutar(codigo_ramo: str, args: argparse.Namespace) -> None:
                 regla.zscore_umbral = args.zscore
                 print(f"  umbral z-score sobreescrito a {args.zscore}")
 
-    personas = ramo.cargar_personas(archivos["personas"])
-    relacion = ramo.cargar_relacion(archivos["relacion"])
     cobro = ramo.cargar_cobro(archivos["cobro"])
-    novedades = ramo.cargar_novedades(archivos["novedades"])
+    if fuente_asegurados == "api":
+        zoho = _zoho_facade(args.perfil_zoho)
+        relacion = ramo.cargar_relacion_api(zoho, poliza=args.poliza)
+        documentos = set(relacion["documento"]) | set(relacion["documento_titular"]) | set(cobro.get("documento", []))
+        personas = ramo.cargar_personas_api(zoho, documentos=documentos)
+        novedades = (
+            ramo.cargar_novedades_api(zoho, poliza=args.poliza)
+            if ramo.cargar_novedades_api
+            else ramo.cargar_novedades(archivos["novedades"])
+        )
+    else:
+        personas = ramo.cargar_personas(archivos["personas"])
+        relacion = ramo.cargar_relacion(archivos["relacion"])
+        novedades = ramo.cargar_novedades(archivos["novedades"])
     datos_extra = ramo.construir_datos_extra(archivos["cobro"]) if ramo.construir_datos_extra else {}
     if ramo.servicio_cu:
         datos_extra = {**datos_extra, "recibo_cu": analizar_recibo(archivos.get("recibo"), ramo.servicio_cu)}
@@ -112,6 +152,10 @@ def _armar_parser() -> argparse.ArgumentParser:
         sub.add_argument("--mes", type=int, default=None)
         sub.add_argument("--anio", type=int, default=None)
         sub.add_argument("--salida", default=None)
+        sub.add_argument("--fuente-asegurados", choices=("excel", "api"), default="excel",
+                          help="excel (legado, por defecto) o api (consulta directa a Zoho).")
+        sub.add_argument("--poliza", default=None, help="Numero de poliza; requerido con --fuente-asegurados api.")
+        sub.add_argument("--perfil-zoho", choices=("sandbox", "production"), default="sandbox")
         if any(isinstance(r, ComparacionEstadisticaRule) for r in ramo.reglas):
             sub.add_argument("--zscore", type=float, default=None,
                               help="Desviaciones estandar fuera del promedio de variacion %% para marcar incidente")

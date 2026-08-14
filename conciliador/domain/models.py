@@ -16,7 +16,10 @@ from typing import TYPE_CHECKING, Callable
 import pandas as pd
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from os import PathLike
+
+    from ays_zoho_sdk import ZohoFacade
 
     from conciliador.rules.base import IncidentRule
 
@@ -129,3 +132,14 @@ class RamoConfig:
     # Servicio de Content Understanding a usar para validar el recibo (PDF):
     # "salud", "vida" o "movilidad". None => el ramo no valida recibo.
     servicio_cu: str | None = None
+    # Equivalentes por API de cargar_relacion/cargar_personas (consulta directa a
+    # Zoho en vez de leer el Excel exportado). None => el ramo aun no la soporta
+    # y ConciliacionService debe exigir los archivos legado para el.
+    # cargar_personas_api recibe `documentos` (union de relacion + cobro): busca
+    # solo esos documentos en Contacts en vez de traer el modulo completo.
+    cargar_relacion_api: Callable[["ZohoFacade", str], pd.DataFrame] | None = None
+    cargar_personas_api: Callable[["ZohoFacade", "Iterable[str]"], set[str]] | None = None
+    # None => el ramo no tiene equivalente de novedades por API (p.ej. vg_deudores,
+    # cuyas novedades vienen del banco, no de Zoho) y ConciliacionService debe usar
+    # cargar_novedades (archivo) incluso en modo API.
+    cargar_novedades_api: Callable[["ZohoFacade", str], pd.DataFrame] | None = None

@@ -24,8 +24,15 @@ from conciliador.rules.recibo import ReciboConciliacionRule
 from conciliador.rules.valor import ComparacionEstadisticaRule, ComparacionExactaRule
 from conciliador.sources.movilidad import cargar_cobro_movilidad
 from conciliador.sources.salud import cargar_cobro_salud, periodo_desde_porchat
-from conciliador.sources.vg import cargar_cobro_vg, cargar_novedades_cliente_deudor, cargar_relacion_vg, datos_extra_vg
+from conciliador.sources.vg import (
+    cargar_cobro_vg,
+    cargar_novedades_cliente_deudor,
+    cargar_relacion_vg,
+    cargar_relacion_vg_api,
+    datos_extra_vg,
+)
 from conciliador.sources.zoho import cargar_novedades_vacio, cargar_novedades_zoho, cargar_personas_zoho, cargar_relacion_zoho
+from conciliador.sources.zoho_api import cargar_novedades_api, cargar_personas_api, cargar_relacion_api
 
 _REGLAS_PRESENCIA = [
     DatoIncompletoExcluidoConCobroRule(),
@@ -63,6 +70,9 @@ RAMOS: dict[str, RamoConfig] = {
             "recibo": "*Recibo*Movilidad*.PDF",
         },
         servicio_cu="movilidad",
+        cargar_relacion_api=cargar_relacion_api,
+        cargar_personas_api=cargar_personas_api,
+        cargar_novedades_api=cargar_novedades_api,
     ),
     "salud": RamoConfig(
         codigo="salud",
@@ -83,6 +93,9 @@ RAMOS: dict[str, RamoConfig] = {
             "recibo": "*Recibo*Salud*.PDF",
         },
         servicio_cu="salud",
+        cargar_relacion_api=cargar_relacion_api,
+        cargar_personas_api=cargar_personas_api,
+        cargar_novedades_api=cargar_novedades_api,
     ),
     "vg_voluntario": RamoConfig(
         codigo="vg_voluntario",
@@ -104,6 +117,9 @@ RAMOS: dict[str, RamoConfig] = {
         },
         construir_datos_extra=datos_extra_vg,
         servicio_cu="vida",
+        cargar_relacion_api=cargar_relacion_vg_api,
+        cargar_personas_api=cargar_personas_api,
+        cargar_novedades_api=cargar_novedades_api,
     ),
     "vg_deudores": RamoConfig(
         codigo="vg_deudores",
@@ -125,6 +141,8 @@ RAMOS: dict[str, RamoConfig] = {
         },
         construir_datos_extra=datos_extra_vg,
         servicio_cu="vida",
+        cargar_relacion_api=cargar_relacion_vg_api,
+        cargar_personas_api=cargar_personas_api,
     ),
 }
 

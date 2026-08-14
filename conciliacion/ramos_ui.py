@@ -11,6 +11,8 @@ coincidir con las claves registradas en `conciliador.ramos.RAMOS`.
 
 from __future__ import annotations
 
+from conciliador.ramos import RAMOS
+
 # Nota estándar de los archivos que hoy se cargan a mano y mañana llegarán por API.
 NOTA_TEMPORAL_ZOHO = (
     "Temporal: por ahora se sube manualmente; se reemplazará por conexión "
@@ -139,3 +141,31 @@ def slots_de_ramo(codigo: str) -> list[dict]:
 def catalogo_slots() -> dict[str, list[dict]]:
     """Mapa {codigo_ramo: [slots]} — se serializa a JSON para el frontend."""
     return {codigo: slots_de_ramo(codigo) for codigo in RAMO_CODIGOS}
+
+
+def ramo_soporta_api(codigo: str) -> bool:
+    """True si el ramo ya tiene loaders de Zoho API (ver `conciliador.ramos`),
+    no solo el archivo Excel. Se deriva de `RAMOS` en vez de mantenerse a mano
+    para que nunca quede desincronizado con lo que el motor realmente soporta."""
+    ramo = RAMOS.get(codigo)
+    return bool(ramo and ramo.cargar_relacion_api and ramo.cargar_personas_api)
+
+
+def ramo_soporta_novedades_api(codigo: str) -> bool:
+    """True si, ademas de asegurados/personas, el ramo tambien resuelve
+    novedades por API (no todos: vg_deudores la recibe del banco, no de
+    Zoho, y sigue exigiendo el archivo aunque el resto venga de la API)."""
+    ramo = RAMOS.get(codigo)
+    return bool(ramo and ramo.cargar_novedades_api)
+
+
+def catalogo_fuentes() -> dict[str, dict[str, bool]]:
+    """Mapa {codigo_ramo: {"asegurados": bool, "novedades": bool}} — se
+    serializa a JSON para el frontend."""
+    return {
+        codigo: {
+            "asegurados": ramo_soporta_api(codigo),
+            "novedades": ramo_soporta_novedades_api(codigo),
+        }
+        for codigo in RAMO_CODIGOS
+    }

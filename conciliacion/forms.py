@@ -15,7 +15,16 @@ from zipfile import BadZipFile, ZipFile
 from django import forms
 from django.conf import settings
 
-from .ramos_ui import RAMO_CHOICES, slots_de_ramo
+from .ramos_ui import RAMO_CHOICES, ramo_soporta_api, slots_de_ramo
+
+FUENTE_CHOICES = [
+    ("excel", "Excel (legado)"),
+    ("api", "Zoho API"),
+]
+PERFIL_ZOHO_CHOICES = [
+    ("sandbox", "Sandbox"),
+    ("production", "Producción"),
+]
 
 _EXT_POR_ACCEPT = {
     ".xlsx": {".xlsx"},
@@ -78,10 +87,19 @@ class ConciliacionUploadForm(forms.Form):
         strip=True,
         widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}),
     )
+    fuente = forms.ChoiceField(
+        choices=FUENTE_CHOICES, label="Fuente de asegurados/personas",
+        initial="excel", widget=forms.RadioSelect,
+    )
+    perfil_zoho = forms.ChoiceField(
+        choices=PERFIL_ZOHO_CHOICES, label="Perfil Zoho", initial="sandbox", required=False,
+    )
     cobro = forms.FileField(label="Archivo de cobro", required=True)
     recibo = forms.FileField(label="PDF de cobro", required=True)
-    relacion = forms.FileField(label="Relación de asegurados (Zoho)", required=True)
-    personas = forms.FileField(label="Personas (Zoho)", required=True)
+    # relacion/personas son obligatorios solo en modo Excel; se valida en clean()
+    # porque la obligatoriedad depende de `fuente`, no es fija por campo.
+    relacion = forms.FileField(label="Relación de asegurados (Zoho)", required=False)
+    personas = forms.FileField(label="Personas (Zoho)", required=False)
     novedades = forms.FileField(label="Novedades", required=False)
 
     def clean_poliza(self):
@@ -95,6 +113,15 @@ class ConciliacionUploadForm(forms.Form):
         ramo = cleaned.get("ramo")
         if ramo not in dict(RAMO_CHOICES):
             return cleaned
+
+        fuente = cleaned.get("fuente") or "excel"
+        if fuente == "api":
+            if not ramo_soporta_api(ramo):
+                self.add_error("fuente", "Este ramo todavía no soporta consulta directa a Zoho.")
+        else:
+            for campo, etiqueta in (("relacion", "Relación de asegurados"), ("personas", "Personas")):
+                if not cleaned.get(campo):
+                    self.add_error(campo, f"{etiqueta} es obligatorio en modo Excel.")
 
         accept_por_campo = {slot["campo"]: slot["accept"] for slot in slots_de_ramo(ramo)}
         for campo, accept in accept_por_campo.items():

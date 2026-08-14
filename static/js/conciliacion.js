@@ -6,7 +6,15 @@ document.addEventListener("DOMContentLoaded", () => {
   let catalog = {};
   try { catalog = JSON.parse(catalogEl?.textContent || "{}"); } catch (_) { catalog = {}; }
 
+  const fuentesCatalogEl = document.getElementById("conc-fuentes-catalog");
+  let fuentesCatalog = {};
+  try { fuentesCatalog = JSON.parse(fuentesCatalogEl?.textContent || "{}"); } catch (_) { fuentesCatalog = {}; }
+
   const ramoSelect = form.querySelector('select[name="ramo"]');
+  const fuenteRadios = form.querySelectorAll('input[name="fuente"]');
+  const fuenteApiNota = form.querySelector("[data-fuente-api-nota]");
+  const excelSlots = form.querySelector("[data-fuente-excel-slots]");
+  const perfilZohoField = form.querySelector("[data-perfil-zoho-field]");
   const submit = form.querySelector("[data-conc-submit]");
   const progress = form.querySelector("[data-conc-progress]");
 
@@ -24,6 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let objectUrl = null;
   let outputName = "Reporte_Conciliacion.xlsx";
+  let facturarUrl = null;
 
   // --- Slots dinámicos por ramo -------------------------------------------
   function updateSlots(ramo) {
@@ -50,8 +59,55 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  ramoSelect?.addEventListener("change", () => updateSlots(ramoSelect.value));
+  ramoSelect?.addEventListener("change", () => { updateSlots(ramoSelect.value); updateFuente(); });
   if (ramoSelect) updateSlots(ramoSelect.value);
+
+  // --- Fuente de asegurados/personas: Excel (legado) vs Zoho API -----------
+  function fuenteSeleccionada() {
+    return [...fuenteRadios].find((r) => r.checked)?.value || "excel";
+  }
+
+  function updateFuente() {
+    const ramo = ramoSelect?.value;
+    const soporte = fuentesCatalog[ramo] || {};
+    const soportaApi = !!soporte.asegurados;
+    fuenteRadios.forEach((radio) => {
+      if (radio.value === "api") {
+        radio.disabled = !soportaApi;
+        if (!soportaApi && radio.checked) {
+          radio.checked = false;
+          const excelRadio = [...fuenteRadios].find((r) => r.value === "excel");
+          if (excelRadio) excelRadio.checked = true;
+        }
+      }
+    });
+    if (fuenteApiNota) fuenteApiNota.hidden = soportaApi;
+
+    const fuente = fuenteSeleccionada();
+    const esApi = fuente === "api";
+    if (excelSlots) {
+      excelSlots.hidden = esApi;
+      excelSlots.querySelectorAll("input[type=\"file\"]").forEach((input) => {
+        if (esApi) input.value = "";
+      });
+    }
+    if (perfilZohoField) perfilZohoField.hidden = !esApi;
+
+    // Novedades: se oculta solo si el ramo tambien resuelve novedades por API
+    // (vg_deudores no: su novedad viene del banco, sigue pidiendo el archivo).
+    const novedadesZone = form.querySelector('.conc-slot[data-slot="novedades"]');
+    if (novedadesZone) {
+      const ocultarNovedades = esApi && !!soporte.novedades;
+      novedadesZone.hidden = ocultarNovedades;
+      if (ocultarNovedades) {
+        const input = novedadesZone.querySelector('input[type="file"]');
+        if (input) input.value = "";
+      }
+    }
+  }
+
+  fuenteRadios.forEach((radio) => radio.addEventListener("change", updateFuente));
+  updateFuente();
 
   // --- Nombre de archivo seleccionado -------------------------------------
   form.querySelectorAll('input[type="file"]').forEach((input) => {
@@ -103,6 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
       metaItem("Ramo", summary.ramo),
       metaItem("Periodo", summary.periodo),
       metaItem("Póliza", summary.poliza),
+      metaItem("Fuente", summary.fuente === "api" ? "Zoho API" : "Excel"),
       metaItem("Incidentes", String(summary.total_incidentes ?? 0)),
     );
 
@@ -125,6 +182,7 @@ document.addEventListener("DOMContentLoaded", () => {
       incidentsBox.hidden = true;
     }
 
+    facturarUrl = summary.facturar_url || null;
     btnFacturar.hidden = !sinIncidentes;
     btnDownload.hidden = sinIncidentes;
     result.hidden = false;
@@ -150,13 +208,22 @@ document.addEventListener("DOMContentLoaded", () => {
     result.hidden = true;
     form.querySelectorAll("[data-file-name]").forEach((el) => { el.textContent = "Ningún archivo seleccionado"; });
     if (ramoSelect) updateSlots(ramoSelect.value);
+    updateFuente();
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
-  // --- Modal Facturar (placeholder) ---------------------------------------
+  // --- Facturar: enlace real a la poliza en Zoho CRM (Produccion) ----------
+  // Si no se pudo resolver el enlace (poliza no encontrada en Produccion,
+  // Zoho no disponible, etc.), se cae al modal explicando por que.
   function openModal() { if (modal) { modal.hidden = false; modalClose?.focus(); } }
   function closeModal() { if (modal) modal.hidden = true; }
-  btnFacturar?.addEventListener("click", openModal);
+  btnFacturar?.addEventListener("click", () => {
+    if (facturarUrl) {
+      window.open(facturarUrl, "_blank", "noopener");
+    } else {
+      openModal();
+    }
+  });
   modalClose?.addEventListener("click", closeModal);
   modal?.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });

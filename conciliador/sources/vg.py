@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ays_zoho_sdk import ZohoFacade
+
 from conciliador.parsing.normalizadores import normalize_doc
 from conciliador.sources.zoho import cargar_relacion_zoho
+from conciliador.sources.zoho_api import cargar_relacion_api
 
 COBERTURA_COLUMNAS = [
     "PRIMA VID", "PRIMA INV", "PRIMA IAM", "PRIMA EFG O EGI", "PRIMA BON", "PRIMA AP",
@@ -75,13 +78,21 @@ def cargar_cobro_vg(ruta) -> pd.DataFrame:
     return out[(out["documento"] != "") & (out["subriesgo"] != "")]
 
 
-def cargar_relacion_vg(ruta) -> pd.DataFrame:
-    """Relacion de Zoho + llave compuesta ID_Afiliado_ID_Asegurado_Subriesgo,
-    lista para cruzar contra cargar_cobro_vg()."""
-    relacion = cargar_relacion_zoho(ruta)
+def _con_clave_compuesta(relacion: pd.DataFrame) -> pd.DataFrame:
     relacion["clave"] = (relacion["documento_titular"] + "_" + relacion["documento"]
                           + "_" + relacion["subriesgo"].astype(str))
     return relacion
+
+
+def cargar_relacion_vg(ruta) -> pd.DataFrame:
+    """Relacion de Zoho + llave compuesta ID_Afiliado_ID_Asegurado_Subriesgo,
+    lista para cruzar contra cargar_cobro_vg()."""
+    return _con_clave_compuesta(cargar_relacion_zoho(ruta))
+
+
+def cargar_relacion_vg_api(zoho: ZohoFacade, *, poliza: str) -> pd.DataFrame:
+    """Equivalente API de `cargar_relacion_vg()`."""
+    return _con_clave_compuesta(cargar_relacion_api(zoho, poliza=poliza))
 
 
 def datos_extra_vg(ruta) -> dict[str, pd.DataFrame]:
