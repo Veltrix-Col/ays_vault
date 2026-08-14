@@ -20,6 +20,7 @@ def render_comparison_markdown(comparison: dict[str, Any]) -> str:
         f"- Layouts diferentes: {summary['layouts_added'] + summary['layouts_removed'] + summary['layouts_changed']}",
         f"- Valores picklist diferentes: {summary['picklists_changed']}",
         f"- Cambios críticos: {summary['critical_changes']}",
+        f"- Comparaciones inconclusas: {summary.get('comparisons_inconclusive', 0)}",
         "",
         "## Cambios críticos",
         "",
@@ -48,7 +49,13 @@ def render_comparison_markdown(comparison: dict[str, Any]) -> str:
         )
     for item in comparison["fields"]:
         module, field = item["identity"]
-        by_module[module].append(f"Campo `{field}`: {item['change']}.")
+        if item["change"] == "comparison_inconclusive":
+            by_module[module].append(
+                f"No comparable: metadata `{item['capability']}` no disponible "
+                f"({item['reason']})."
+            )
+        else:
+            by_module[module].append(f"Campo `{field}`: {item['change']}.")
     for category in ("added", "removed", "changed"):
         for item in comparison["relationships"][category]:
             if category == "changed":
@@ -95,6 +102,7 @@ def render_model_markdown(snapshot: dict[str, Any]) -> str:
     lines = [
         "# Modelo Maestro Zoho A&S",
         "",
+        f"- Estado del snapshot: **{str(manifest.get('status', 'success')).upper()}**",
         f"- Perfil fuente: `{manifest.get('profile', '')}`",
         f"- Entorno confirmado: `{manifest.get('environment', '')}`",
         f"- Snapshot: `{manifest.get('semantic_digest', '')}`",
@@ -113,6 +121,21 @@ def render_model_markdown(snapshot: dict[str, Any]) -> str:
             f"| {layouts_count[api_name]} | {outgoing[api_name]} | {incoming[api_name]} "
             f"| {subforms[api_name]} | {related[api_name]} |"
         )
+
+    unavailable_fields = [
+        str(module.get("api_name") or "") for module in modules
+        if str(module.get("fields_status") or module.get("fields_metadata_status") or "").casefold()
+        in {"error", "unavailable", "failed"}
+    ]
+    if unavailable_fields:
+        lines.extend([
+            "",
+            "## Metadata incompleta",
+            "",
+            "No se inventaron campos para los siguientes módulos; su metadata Fields no estuvo disponible:",
+            "",
+        ])
+        lines.extend(f"- `{api_name}`" for api_name in sorted(unavailable_fields, key=str.casefold))
 
     lines.extend(["", "## Dominios funcionales clave", ""])
     functional_names = (

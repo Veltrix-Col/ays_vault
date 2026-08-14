@@ -5,7 +5,10 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from integrations.zoho.discovery import DiscoveryService, SnapshotStore
-from integrations.zoho.discovery.service import DiscoveryConfigurationError
+from integrations.zoho.discovery.service import (
+    DiscoveryConfigurationError,
+    DiscoveryFatalError,
+)
 from integrations.zoho.exceptions import ZohoError
 
 
@@ -27,6 +30,8 @@ class Command(BaseCommand):
             result = SnapshotStore(target).save(snapshot)
         except DiscoveryConfigurationError as exc:
             raise CommandError(str(exc)) from exc
+        except DiscoveryFatalError as exc:
+            raise CommandError(str(exc)) from exc
         except ZohoError as exc:
             raise CommandError(
                 f"No fue posible completar el discovery ({exc.category})."
@@ -40,8 +45,12 @@ class Command(BaseCommand):
                 "No fue posible completar el discovery de metadata."
             ) from exc
         manifest = snapshot["manifest"]
-        self.stdout.write("Zoho discovery v2")
+        if manifest["status"] == "partial":
+            self.stdout.write(self.style.WARNING("Zoho discovery completed with warnings"))
+        else:
+            self.stdout.write(self.style.SUCCESS("Zoho discovery completed"))
         self.stdout.write(f"Profile: {manifest['profile']}")
+        self.stdout.write(f"Status: {manifest['status']}")
         self.stdout.write(f"Environment: {manifest['environment']}")
         self.stdout.write(f"Backend: {manifest['backend']}")
         self.stdout.write("Mode: read-only metadata")
@@ -52,6 +61,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Relationships: {manifest['relationships_total']}")
         self.stdout.write(f"Subforms: {manifest['subforms_total']}")
         self.stdout.write(f"Layouts: {manifest['layouts_total']}")
+        self.stdout.write(f"Errors: {manifest['errors_total']}")
         self.stdout.write("")
         self.stdout.write("Snapshot unchanged:" if not result["changed"] else "Snapshot written:")
         self.stdout.write(str(result["path"]))

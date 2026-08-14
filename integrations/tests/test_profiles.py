@@ -5,6 +5,7 @@ import time
 from io import StringIO
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from urllib.parse import parse_qs
 from unittest.mock import Mock, patch
 
 import httpx
@@ -16,7 +17,7 @@ from zohocrmsdk.src.com.zoho.crm.api.util.choice import Choice
 
 from ays_zoho_sdk.facade import ZohoFacade
 from ays_zoho_sdk.backends.sdk import SDKBackend
-from ays_zoho_sdk.oauth import CANDIDATE_ORGANIZATION_URL, ZohoOAuthService
+from ays_zoho_sdk.oauth import CANDIDATE_ORGANIZATION_PATH, ZohoOAuthService
 from ays_zoho_sdk.sdk.initializer import initialize_sdk, reset_sdk_for_tests
 
 from integrations.tests.helpers import VALID_SETTINGS, client_factory
@@ -74,13 +75,39 @@ MULTI = {
 }
 
 
-def profile_oauth_handler(token_payload, *, environment, organization_id):
+def profile_oauth_handler(
+    token_payload, *, profile, organization_environment, organization_id,
+):
+    api_base_url = {
+        "production": "https://www.zohoapis.com",
+        "sandbox": "https://sandbox.zohoapis.com",
+    }[profile]
+    token_url = "https://accounts.zoho.com/oauth/v2/token"
+    organization_url = f"{api_base_url}{CANDIDATE_ORGANIZATION_PATH}"
+    observed_requests = []
+
     def handler(request):
         if request.method == "POST":
+            if str(request.url) != token_url:
+                raise AssertionError(f"Endpoint OAuth inesperado: {request.url}")
+            form = parse_qs(request.content.decode("utf-8"))
+            if form.get("grant_type") != ["authorization_code"]:
+                raise AssertionError(f"Grant OAuth inesperado: {form.get('grant_type')}")
+            if not form.get("code"):
+                raise AssertionError("El intercambio OAuth no incluyó authorization_code.")
+            if not token_payload.get("access_token") or not token_payload.get("refresh_token"):
+                raise AssertionError("El mock OAuth debe entregar access y refresh token.")
+            observed_requests.append((request.method, str(request.url)))
             return httpx.Response(200, json=token_payload)
         if request.method == "GET":
-            if str(request.url) != CANDIDATE_ORGANIZATION_URL:
+            if str(request.url) != organization_url:
                 raise AssertionError(f"Endpoint inesperado: {request.url}")
+            expected_authorization = (
+                f"Zoho-oauthtoken {token_payload['access_token']}"
+            )
+            if request.headers.get("Authorization") != expected_authorization:
+                raise AssertionError("Organization no usó el access token candidato.")
+            observed_requests.append((request.method, str(request.url)))
             return httpx.Response(
                 200,
                 json={
@@ -88,13 +115,15 @@ def profile_oauth_handler(token_payload, *, environment, organization_id):
                         {
                             "id": organization_id,
                             "company_name": "Test organization",
-                            "type": environment,
+                            "type": organization_environment,
                         }
                     ]
                 },
             )
         raise AssertionError(f"Metodo inesperado: {request.method}")
 
+    handler.observed_requests = observed_requests
+    handler.expected_organization_url = organization_url
     return handler
 
 
@@ -269,7 +298,8 @@ class ZohoProfileOAuthTests(TestCase):
                 "expires_in": 3600,
                 "api_domain": "https://www.zohoapis.com",
             },
-            environment="production",
+            profile="sandbox",
+            organization_environment="production",
             organization_id="production-org",
         )
 
@@ -343,7 +373,8 @@ class ZohoProfileOAuthTests(TestCase):
                 "expires_in": 3600,
                 "api_domain": "https://www.zohoapis.com",
             },
-            environment="sandbox",
+            profile="production",
+            organization_environment="sandbox",
             organization_id="sandbox-org",
         )
 
@@ -378,7 +409,8 @@ class ZohoProfileOAuthTests(TestCase):
                 "expires_in": 3600,
                 "api_domain": "https://www.zohoapis.com",
             },
-            environment="sandbox",
+            profile="sandbox",
+            organization_environment="sandbox",
             organization_id="sandbox-org",
         )
 
@@ -388,6 +420,14 @@ class ZohoProfileOAuthTests(TestCase):
             client_factory(handler),
         )
         oauth.exchange_code("accepted-sandbox-code")
+
+        self.assertEqual(
+            handler.observed_requests,
+            [
+                ("POST", "https://accounts.zoho.com/oauth/v2/token"),
+                ("GET", "https://sandbox.zohoapis.com/crm/v8/org"),
+            ],
+        )
 
         self.assertEqual(
             sandbox_store.get_refresh_token(),
@@ -414,7 +454,8 @@ class ZohoProfileOAuthTests(TestCase):
                 "expires_in": 3600,
                 "api_domain": "https://www.zohoapis.com",
             },
-            environment="production",
+            profile="production",
+            organization_environment="production",
             organization_id="production-org",
         )
 
@@ -424,6 +465,14 @@ class ZohoProfileOAuthTests(TestCase):
             client_factory(handler),
         )
         oauth.exchange_code("accepted-production-code")
+
+        self.assertEqual(
+            handler.observed_requests,
+            [
+                ("POST", "https://accounts.zoho.com/oauth/v2/token"),
+                ("GET", "https://www.zohoapis.com/crm/v8/org"),
+            ],
+        )
 
         self.assertEqual(
             production_store.get_refresh_token(),

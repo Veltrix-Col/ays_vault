@@ -48,6 +48,7 @@ class FormularioTests(TestCase):
         return {
             "ramo": "salud",
             "poliza": "12345",
+            "fuente": "excel",
         }, {
             "cobro": _archivo("Porchat.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             "recibo": _archivo("Recibo.pdf", b"%PDF-1.7\n%%EOF", "application/pdf"),
@@ -124,7 +125,7 @@ class VistaTests(TestCase):
                 ext = os.path.splitext(ruta)[1].lower()
                 files[slot] = _archivo(os.path.basename(ruta), fh.read(), tipos.get(ext, "application/octet-stream"))
         response = self.client.post(reverse("conciliacion:index"),
-                                    {"ramo": "salud", "poliza": "12345", **files})
+                                    {"ramo": "salud", "poliza": "12345", "fuente": "excel", **files})
         self.assertEqual(response.status_code, 200, getattr(response, "content", b"")[:300])
         self.assertIn("X-Conciliacion-Summary", response)
         self.assertEqual(

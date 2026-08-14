@@ -22,7 +22,10 @@ from integrations.zoho.discovery import (
     render_model_markdown,
 )
 from integrations.zoho.discovery.normalization import safe_value
-from integrations.zoho.discovery.service import DiscoveryConfigurationError
+from integrations.zoho.discovery.service import (
+    DiscoveryConfigurationError,
+    DiscoveryFatalError,
+)
 from integrations.zoho.exceptions import ZohoAPIError
 from integrations.zoho.schemas import FieldMetadata, ModuleMetadata
 
@@ -117,6 +120,48 @@ def snapshot(profile="sandbox"):
 
 
 class DiscoveryServiceTests(SimpleTestCase):
+    def test_real_scale_partial_snapshot_has_explicit_coverage_and_safe_errors(self):
+        discovered_modules = tuple(
+            SimpleNamespace(
+                api_name=f"Module_{index:02d}", module_name=f"Module_{index:02d}",
+                plural_label=f"Modules {index}", singular_label=f"Module {index}",
+                id=f"m{index}", api_supported=True,
+            )
+            for index in range(89)
+        )
+        failure = ZohoAPIError(
+            "raw response with secret", status_code=500,
+            zoho_code="INTERNAL_ERROR", backend="sdk",
+        )
+
+        def list_fields(api_name):
+            index = int(api_name.rsplit("_", 1)[1])
+            if index >= 63:
+                raise failure
+            return ()
+
+        facade = fake_facade(with_capabilities=False)
+        facade.metadata.list_modules.return_value = discovered_modules
+        facade.metadata.list_fields.side_effect = list_fields
+        result = DiscoveryService(profile="sandbox", facade=facade).discover()
+        manifest = result["manifest"]
+        self.assertEqual(manifest["status"], "partial")
+        self.assertEqual(manifest["modules_total"], 89)
+        self.assertEqual(manifest["modules_fields_ok"], 63)
+        self.assertEqual(manifest["modules_fields_failed"], 26)
+        self.assertEqual(manifest["errors_total"], 28)
+        self.assertNotIn("raw response", json.dumps(result))
+        self.assertEqual(
+            sum(item["fields_status"] == "error" for item in result["modules"]), 26
+        )
+        with TemporaryDirectory() as directory:
+            publication = SnapshotStore(Path(directory)).save(result)
+            self.assertTrue(publication["changed"])
+            self.assertTrue((publication["path"] / "errors.json").is_file())
+            persisted = load_snapshot(publication["path"])
+            self.assertEqual(persisted["manifest"]["status"], "partial")
+            self.assertEqual(len(persisted["errors"]), 28)
+
     def test_installed_sdk_dataclasses_are_normalized_without_invented_values(self):
         facade = fake_facade()
         facade.metadata.list_modules.return_value = (
@@ -166,6 +211,36 @@ class DiscoveryServiceTests(SimpleTestCase):
         self.assertEqual(restricted["fields_metadata_status"], "unavailable")
         self.assertEqual(restricted["fields_metadata_error"], "permission_denied")
         self.assertNotIn("secret response", json.dumps(result))
+        self.assertEqual(result["manifest"]["status"], "partial")
+
+    def test_server_error_after_sdk_retries_is_partial_and_next_modules_survive(self):
+        failure = ZohoAPIError(
+            "server body", status_code=500, zoho_code="INTERNAL_ERROR", backend="sdk"
+        )
+        facade = fake_facade(fields_failure=failure)
+        result = DiscoveryService(profile="sandbox", facade=facade).discover()
+        self.assertEqual(facade.metadata.list_fields.call_count, 3)
+        self.assertEqual(result["manifest"]["modules_fields_ok"], 2)
+        self.assertEqual(result["manifest"]["modules_fields_failed"], 1)
+        self.assertEqual(result["manifest"]["status"], "partial")
+        error = next(item for item in result["errors"] if item["module"] == "Restricted")
+        self.assertEqual(error["status_code"], 500)
+        self.assertNotIn("server body", json.dumps(result))
+
+    def test_organization_and_modules_root_failures_are_fatal(self):
+        organization_failure = fake_facade()
+        organization_failure.organization.get.side_effect = ZohoAPIError(
+            "secret", status_code=401, zoho_code="AUTHENTICATION_FAILURE", backend="sdk"
+        )
+        with self.assertRaisesMessage(DiscoveryFatalError, "organización"):
+            DiscoveryService(profile="sandbox", facade=organization_failure).discover()
+
+        modules_failure = fake_facade()
+        modules_failure.metadata.list_modules.side_effect = ZohoAPIError(
+            "secret", status_code=500, zoho_code="INTERNAL_ERROR", backend="sdk"
+        )
+        with self.assertRaisesMessage(DiscoveryFatalError, "módulos"):
+            DiscoveryService(profile="sandbox", facade=modules_failure).discover()
 
     def test_unsupported_fields_api_is_safely_classified(self):
         failure = ZohoAPIError(
@@ -255,11 +330,59 @@ class SnapshotStoreTests(SimpleTestCase):
             store.save(first)
             changed = copy.deepcopy(first)
             changed["modules"].append({"api_name": "New", "module_name": "New", "label": "New"})
+            changed["manifest"]["modules_total"] += 1
             changed["manifest"]["generated_at"] = "2026-08-14T12:00:00+00:00"
             result = store.save(changed)
             self.assertTrue(result["changed"])
             self.assertTrue(result["history_path"].is_dir())
             self.assertEqual(load_snapshot(Path(directory) / "sandbox" / "latest")["modules"][-1]["api_name"], "New")
+
+    def test_failure_before_publish_preserves_latest_and_history_byte_for_byte(self):
+        with TemporaryDirectory() as directory:
+            store = SnapshotStore(Path(directory))
+            store.save(snapshot())
+            profile_root = Path(directory) / "sandbox"
+
+            def tree_bytes():
+                return {
+                    str(path.relative_to(profile_root)): path.read_bytes()
+                    for path in profile_root.rglob("*") if path.is_file()
+                }
+
+            before = tree_bytes()
+            changed = snapshot()
+            changed["errors"].append({
+                "module": "X", "endpoint_type": "fields", "category": "server_error",
+                "status_code": 500, "safe_message": "Metadata no disponible.",
+            })
+            changed["manifest"]["errors_total"] += 1
+            with patch.object(store, "_write_directory", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    store.save(changed)
+            self.assertEqual(tree_bytes(), before)
+
+    def test_partial_then_success_archives_partial_and_identical_partial_does_not(self):
+        with TemporaryDirectory() as directory:
+            store = SnapshotStore(Path(directory))
+            partial = snapshot()
+            self.assertEqual(partial["manifest"]["status"], "partial")
+            store.save(partial)
+            duplicate = copy.deepcopy(partial)
+            duplicate["manifest"]["generated_at"] = "2026-08-14T00:00:00+00:00"
+            self.assertFalse(store.save(duplicate)["changed"])
+            complete = copy.deepcopy(partial)
+            complete["errors"] = []
+            complete["manifest"]["status"] = "success"
+            complete["manifest"]["errors_total"] = 0
+            for module in complete["modules"]:
+                module["fields_status"] = "ok"
+                module["fields_metadata_status"] = "available"
+                module.pop("fields_error_category", None)
+                module.pop("fields_metadata_error", None)
+            result = store.save(complete)
+            self.assertTrue(result["changed"])
+            self.assertEqual(load_snapshot(result["path"])["manifest"]["status"], "success")
+            self.assertEqual(load_snapshot(result["history_path"])["manifest"]["status"], "partial")
 
 
 class ComparatorTests(SimpleTestCase):
@@ -322,8 +445,30 @@ class ComparatorTests(SimpleTestCase):
         markdown = render_comparison_markdown(result)
         self.assertIn("semánticamente iguales", markdown)
         model = render_model_markdown(value)
+        self.assertIn("Estado del snapshot: **PARTIAL**", model)
         self.assertIn("pendiente de confirmación funcional", model)
         self.assertIn("No se asumió", model)
+
+    def test_unavailable_fields_make_comparison_inconclusive_not_removed_or_added(self):
+        left, right = self.changed_pair()
+        module = next(item for item in left["modules"] if item["api_name"] == "Polizas")
+        module["fields_status"] = "error"
+        module["fields_metadata_status"] = "unavailable"
+        left["fields"] = [item for item in left["fields"] if item["module_api_name"] != "Polizas"]
+        left["relationships"] = [
+            item for item in left["relationships"] if item["source_module"] != "Polizas"
+        ]
+        result = compare_snapshots(left, right)
+        polizas = [item for item in result["fields"] if item["identity"][0] == "Polizas"]
+        self.assertEqual({item["change"] for item in polizas}, {"comparison_inconclusive"})
+        self.assertEqual(polizas[0]["reason"], "metadata_unavailable_left")
+        self.assertNotIn("field_added", {item["change"] for item in polizas})
+        reverse = compare_snapshots(right, left)
+        self.assertNotIn(
+            "field_removed",
+            {item["change"] for item in reverse["fields"] if item["identity"][0] == "Polizas"},
+        )
+        self.assertIn("No comparable", render_comparison_markdown(result))
 
 
 class DiscoverySecurityAndCommandTests(SimpleTestCase):
@@ -360,6 +505,8 @@ class DiscoverySecurityAndCommandTests(SimpleTestCase):
             output = StringIO()
             call_command("zoho_discover", profile="sandbox", output_dir=directory, stdout=output)
             self.assertIn("Profile: sandbox", output.getvalue())
+            self.assertIn("Status: partial", output.getvalue())
+            self.assertIn("completed with warnings", output.getvalue())
             self.assertIn("No records", output.getvalue())
         with self.assertRaises((CommandError, TypeError)):
             call_command("zoho_discover", stdout=StringIO())
@@ -379,3 +526,23 @@ class DiscoverySecurityAndCommandTests(SimpleTestCase):
             self.assertTrue((Path(directory) / "comparison" / "sandbox_vs_production.json").exists())
             self.assertTrue((Path(directory) / "MODEL.md").exists())
             self.assertIn("No Zoho facade", output.getvalue())
+
+    @patch("integrations.management.commands.zoho_discover.DiscoveryService")
+    def test_fatal_discovery_does_not_touch_existing_latest(self, service):
+        for label, message in (
+            ("organización", "No fue posible obtener la organización Zoho."),
+            ("módulos", "No fue posible obtener los módulos Zoho."),
+        ):
+            with self.subTest(label=label), TemporaryDirectory() as directory:
+                service.return_value.discover.side_effect = DiscoveryFatalError(message)
+                latest = Path(directory) / "sandbox" / "latest"
+                latest.mkdir(parents=True)
+                marker = latest / ".gitkeep"
+                marker.write_bytes(b"keep-me")
+                with self.assertRaisesMessage(CommandError, label):
+                    call_command(
+                        "zoho_discover", profile="sandbox", output_dir=directory,
+                        stdout=StringIO(), stderr=StringIO(),
+                    )
+                self.assertEqual(marker.read_bytes(), b"keep-me")
+                self.assertFalse((Path(directory) / "sandbox" / "history").exists())

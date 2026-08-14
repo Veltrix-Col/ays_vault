@@ -2,10 +2,10 @@
 
 ## Estado
 
-Discovery v2 implementado y probado exclusivamente con mocks y snapshots
-sintéticos. No se ha ejecutado contra Sandbox ni Producción debido al defecto
-conocido de validación OAuth Sandbox en la versión instalada de
-`ays_zoho_sdk`.
+Discovery v2 implementado y probado durante este cambio exclusivamente con
+mocks y snapshots sintéticos. La ejecución real anterior contra Sandbox
+demostró que Fields puede estar disponible solo para parte de los módulos; esa
+cobertura parcial ahora se conserva como un snapshot útil.
 
 Los discoveries históricos bajo `docs/cotizacion_colectivos/` y
 `artifacts/zoho/` son evidencia anterior, no la fuente de verdad vigente.
@@ -46,7 +46,7 @@ inicializa la fachada.
 Cada `latest/` contiene:
 
 - `manifest.json`: perfil, entorno confirmado, versión, backend, conteos,
-  digest semántico y timestamp principal.
+  estado `success`/`partial`, digest semántico y timestamp principal.
 - `organization.json`: identidad y configuración general no sensible.
 - `modules.json`: inventario completo de módulos recibido.
 - `fields.json`: campos normalizados y ordenados por módulo/API name.
@@ -58,15 +58,41 @@ Cada `latest/` contiene:
 - `picklists.json`: valores, estado, secuencia y dependencias disponibles.
 - `errors.json`: fallos saneados por módulo y endpoint.
 
+Cada módulo declara el estado de sus capacidades (`fields_status`,
+`layouts_status` y `related_lists_status`). Un error solo conserva API name,
+tipo de endpoint, categoría, código HTTP cuando existe y mensaje seguro.
+
 Ningún archivo contiene registros CRM, tokens, secretos, headers o respuestas
 HTTP crudas.
 
 ## Determinismo e históricos
 
 Los JSON usan orden de claves y colecciones estable. El timestamp aparece solo
-en el manifest. Un snapshot semánticamente idéntico no reemplaza `latest` ni
-crea otro histórico. Cuando cambia, el `latest` anterior se mueve a
-`history/<timestamp>/` antes de publicar el nuevo.
+en el manifest. El estado y la cobertura técnica forman parte del digest: un
+`partial` no equivale a un `success` con otra cobertura. Un snapshot
+semánticamente idéntico no reemplaza `latest` ni crea otro histórico.
+
+Antes de tocar `latest` o `history`, SnapshotStore valida el esquema mínimo,
+escribe todos los JSON en un directorio temporal, vuelve a cargarlos y verifica
+el digest. Solo entonces entra en la fase de publicación mediante renombres del
+mismo filesystem, con restauración del `latest` previo si el reemplazo falla.
+Un fallo durante construcción o validación deja ambos árboles intactos.
+
+## Clasificación y mínimo publicable
+
+- `fatal`: configuración/autenticación global, Organization inválida o no
+  alineada con el perfil, Modules ausente/inválido o violación de aislamiento.
+  No se llama a SnapshotStore.
+- `partial`: fallo por módulo o capacidad (Fields 403/500 tras los retries del
+  SDK, layouts/related lists no disponibles, lookup o subform no resoluble).
+  Se publica el snapshot, se escribe `errors.json` y el comando termina con
+  advertencias pero exit code normal.
+- `success`: no quedó ningún error de metadata.
+
+La condición mínima para publicar es Organization válida, entorno igual al
+perfil explícito y una respuesta Modules válida y no vacía. Fields y las
+capacidades opcionales pueden quedar parciales. La política de retries sigue
+siendo exclusivamente la de `ays_zoho_sdk`; Discovery no agrega HTTP directo.
 
 ## Capacidades de la fachada
 
@@ -88,6 +114,10 @@ Detecta:
   de presentación.
 
 La salida humana evita clasificar cambios puramente cosméticos como críticos.
+Si una capacidad está marcada como no disponible para un módulo en cualquiera
+de los lados, el comparador emite `comparison_inconclusive` con
+`metadata_unavailable_left` o `metadata_unavailable_right`; no convierte esa
+ausencia en campos, relaciones, picklists o layouts agregados/eliminados.
 
 ## Seguridad
 

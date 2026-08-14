@@ -39,13 +39,25 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def _semantic_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         key: snapshot[key]
         for key in (
             "organization", "modules", "fields", "layouts", "relationships",
             "related_lists", "subforms", "picklists", "errors",
         )
     }
+    manifest = snapshot["manifest"]
+    payload["manifest_technical"] = {
+        key: manifest.get(key)
+        for key in (
+            "schema_version", "profile", "environment", "status", "sdk_version",
+            "api_version", "backend", "organization_id", "modules_total",
+            "modules_fields_ok", "modules_fields_failed", "relationships_total",
+            "subforms_total", "layouts_total", "related_lists_total", "errors_total",
+            "read_only", "source",
+        )
+    }
+    return payload
 
 
 def semantic_digest(snapshot: dict[str, Any]) -> str:
@@ -71,6 +83,7 @@ class SnapshotStore:
         self.root = Path(root).expanduser().resolve()
 
     def save(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        self._validate_snapshot(snapshot)
         profile = str(snapshot["manifest"].get("profile") or "")
         if profile not in ALLOWED_PROFILES:
             raise ValueError("Perfil de snapshot no permitido.")
@@ -91,6 +104,12 @@ class SnapshotStore:
         history_path = None
         try:
             self._write_directory(staging, snapshot)
+            # Prove that every JSON is complete and loadable before latest/history
+            # are touched. This is the minimum publish boundary.
+            staged = load_snapshot(staging)
+            self._validate_snapshot(staged)
+            if semantic_digest(staged) != digest:
+                raise ValueError("El snapshot temporal no conserva su digest semántico.")
             if has_current_snapshot:
                 generated = str(
                     json.loads((latest / "manifest.json").read_text(encoding="utf-8"))
@@ -108,9 +127,16 @@ class SnapshotStore:
                     counter += 1
                 os.replace(latest, history_path)
             elif latest.exists():
-                # A repository may track the documented empty structure with
-                # a .gitkeep. It is not a semantic snapshot and is not archived.
-                shutil.rmtree(latest)
+                # Keep the tracked placeholder recoverable until publication.
+                placeholder_backup = profile_root / f".previous.{uuid.uuid4().hex}.tmp"
+                os.replace(latest, placeholder_backup)
+                try:
+                    os.replace(staging, latest)
+                except BaseException:
+                    os.replace(placeholder_backup, latest)
+                    raise
+                shutil.rmtree(placeholder_backup, ignore_errors=True)
+                return {"path": latest, "changed": True, "history_path": None}
             try:
                 os.replace(staging, latest)
             except BaseException:
@@ -121,6 +147,32 @@ class SnapshotStore:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
         return {"path": latest, "changed": True, "history_path": history_path}
+
+    @staticmethod
+    def _validate_snapshot(snapshot: dict[str, Any]) -> None:
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("manifest"), dict):
+            raise ValueError("Snapshot sin manifest válido.")
+        manifest = snapshot["manifest"]
+        required_manifest = {
+            "schema_version", "profile", "environment", "status", "modules_total",
+            "modules_fields_ok", "modules_fields_failed", "errors_total", "read_only",
+        }
+        if required_manifest - manifest.keys():
+            raise ValueError("Manifest incompleto.")
+        if manifest.get("status") not in {"success", "partial"}:
+            raise ValueError("Estado de snapshot no publicable.")
+        if manifest.get("profile") != manifest.get("environment"):
+            raise ValueError("Perfil y entorno del snapshot no coinciden.")
+        if manifest.get("read_only") is not True:
+            raise ValueError("El snapshot no declara modo read-only.")
+        for filename in SNAPSHOT_FILES:
+            key = filename.removesuffix(".json")
+            if key not in snapshot or not isinstance(snapshot[key], (list, dict)):
+                raise ValueError(f"Snapshot sin colección válida: {key}.")
+        if manifest.get("modules_total") != len(snapshot["modules"]):
+            raise ValueError("El conteo de módulos no coincide.")
+        if manifest.get("errors_total") != len(snapshot["errors"]):
+            raise ValueError("El conteo de errores no coincide.")
 
     @staticmethod
     def _write_directory(path: Path, snapshot: dict[str, Any]) -> None:

@@ -28,6 +28,14 @@ class DiscoveryConfigurationError(ValueError):
     pass
 
 
+class DiscoveryFatalError(RuntimeError):
+    """A root discovery failure that makes a snapshot unsafe to publish."""
+
+    def __init__(self, safe_message: str, *, category: str = "fatal"):
+        super().__init__(safe_message)
+        self.category = category
+
+
 def normalize_discovery_profile(value: object) -> str:
     profile = str(value or "").strip().casefold()
     if profile not in ALLOWED_PROFILES:
@@ -103,8 +111,25 @@ class DiscoveryService:
         return self._facade
 
     def discover(self) -> dict[str, Any]:
-        facade = self.facade
-        organization = facade.organization.get()
+        try:
+            facade = self.facade
+        except Exception as exc:
+            raise DiscoveryFatalError(
+                "No fue posible inicializar la configuración o autenticación Zoho.",
+                category="authentication",
+            ) from exc
+        try:
+            organization = facade.organization.get()
+        except Exception as exc:
+            raise DiscoveryFatalError(
+                "No fue posible obtener la organización Zoho.",
+                category="organization",
+            ) from exc
+        if organization is None:
+            raise DiscoveryFatalError(
+                "La respuesta raíz de Organization no es válida.",
+                category="invalid_response",
+            )
         reported_environment = _environment(
             getattr(organization, "environment", None)
             or getattr(facade, "environment", None)
@@ -113,10 +138,27 @@ class DiscoveryService:
             raise DiscoveryConfigurationError(
                 "La organización no coincide con el perfil solicitado."
             )
-        modules = sorted(
-            (normalize_module(item) for item in facade.metadata.list_modules()),
-            key=lambda item: (item.get("api_name", "").casefold(), str(item.get("id", ""))),
-        )
+        if not str(getattr(organization, "organization_id", "") or "").strip():
+            raise DiscoveryFatalError(
+                "La respuesta raíz de Organization no es válida.",
+                category="invalid_response",
+            )
+        try:
+            raw_modules = facade.metadata.list_modules()
+            modules = sorted(
+                (normalize_module(item) for item in raw_modules),
+                key=lambda item: (item.get("api_name", "").casefold(), str(item.get("id", ""))),
+            )
+        except Exception as exc:
+            raise DiscoveryFatalError(
+                "No fue posible obtener los módulos Zoho.",
+                category="modules",
+            ) from exc
+        if not modules or any(not str(item.get("api_name") or "").strip() for item in modules):
+            raise DiscoveryFatalError(
+                "La respuesta raíz de Modules no es válida.",
+                category="invalid_response",
+            )
         fields: list[dict[str, Any]] = []
         layouts: list[dict[str, Any]] = []
         related_lists: list[dict[str, Any]] = []
@@ -143,40 +185,51 @@ class DiscoveryService:
 
         for module in modules:
             api_name = str(module.get("api_name") or "")
-            if not api_name:
-                errors.append({
-                    "module": "*", "endpoint_type": "modules",
-                    "category": "invalid_response", "status_code": None,
-                    "safe_message": "Un módulo no incluyó API name.",
-                })
-                continue
             try:
                 discovered = facade.metadata.list_fields(api_name)
-                fields.extend(normalize_field(module, item) for item in discovered)
+                normalized_fields = [normalize_field(module, item) for item in discovered]
+                fields.extend(normalized_fields)
+                module["fields_status"] = "ok"
                 module["fields_metadata_status"] = "available"
                 fields_ok += 1
             except Exception as exc:
                 failure = _error(api_name, "fields", exc)
                 errors.append(failure)
+                module["fields_status"] = "error"
+                module["fields_error_category"] = failure["category"]
                 module["fields_metadata_status"] = "unavailable"
                 module["fields_metadata_error"] = failure["category"]
                 fields_failed += 1
 
             if layout_reader is not None:
                 try:
-                    layouts.extend(
+                    normalized_layouts = [
                         normalize_layout(module, item) for item in layout_reader(api_name)
-                    )
+                    ]
+                    layouts.extend(normalized_layouts)
+                    module["layouts_status"] = "ok"
                 except Exception as exc:
-                    errors.append(_error(api_name, "layouts", exc))
+                    failure = _error(api_name, "layouts", exc)
+                    errors.append(failure)
+                    module["layouts_status"] = "error"
+                    module["layouts_error_category"] = failure["category"]
+            else:
+                module["layouts_status"] = "unavailable"
             if related_reader is not None:
                 try:
-                    related_lists.extend(
+                    normalized_related = [
                         normalize_related_list(module, item)
                         for item in related_reader(api_name)
-                    )
+                    ]
+                    related_lists.extend(normalized_related)
+                    module["related_lists_status"] = "ok"
                 except Exception as exc:
-                    errors.append(_error(api_name, "related_lists", exc))
+                    failure = _error(api_name, "related_lists", exc)
+                    errors.append(failure)
+                    module["related_lists_status"] = "error"
+                    module["related_lists_error_category"] = failure["category"]
+            else:
+                module["related_lists_status"] = "unavailable"
 
         fields.sort(key=lambda item: (
             item.get("module_api_name", "").casefold(),
@@ -197,6 +250,24 @@ class DiscoveryService:
             str(item.get("actual_value", "")).casefold(),
         ))
         subforms = self._subforms(fields)
+        for relation in relationships:
+            if not relation.get("resolved"):
+                errors.append({
+                    "module": relation["source_module"],
+                    "endpoint_type": "lookup",
+                    "category": "metadata_target_missing",
+                    "status_code": None,
+                    "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+                })
+        for subform in subforms:
+            if not subform.get("resolved"):
+                errors.append({
+                    "module": subform["parent_module"],
+                    "endpoint_type": "subforms",
+                    "category": "metadata_target_missing",
+                    "status_code": None,
+                    "safe_message": "El destino del subform no pudo resolverse con metadata.",
+                })
         layouts.sort(key=lambda item: (
             item["module_api_name"].casefold(), item["layout_name"].casefold(), item["layout_id"]
         ))
@@ -207,6 +278,7 @@ class DiscoveryService:
         errors.sort(key=lambda item: (
             item["module"].casefold(), item["endpoint_type"], item["category"]
         ))
+        status = "partial" if errors else "success"
 
         generated_at = self.clock().astimezone(UTC).isoformat()
         org_data = {
@@ -228,6 +300,7 @@ class DiscoveryService:
                 "backend": str(getattr(facade, "backend_name", "unknown")),
                 "organization_id": org_data["organization_id"],
                 "organization_name": org_data["company_name"],
+                "status": status,
                 "modules_total": len(modules),
                 "modules_fields_ok": fields_ok,
                 "modules_fields_failed": fields_failed,
@@ -235,6 +308,7 @@ class DiscoveryService:
                 "subforms_total": len(subforms),
                 "layouts_total": len(layouts),
                 "related_lists_total": len(related_lists),
+                "errors_total": len(errors),
                 "read_only": True,
                 "source": "zoho_metadata",
             },
