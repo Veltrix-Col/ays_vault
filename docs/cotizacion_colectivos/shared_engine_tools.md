@@ -6,7 +6,7 @@ Implementado en la interfaz web. El nombre técnico de la aplicación Django se
 mantiene como `cotizacion_colectivos` para preservar imports, migraciones,
 tablas, tokens, Workspace y compatibilidad.
 
-Las entradas funcionales son **Solicitudes y Renovaciones**, **Invitaciones a
+Las entradas funcionales son **Novedades**, **Invitaciones a
 Aseguradoras** y **Cotización Individual**. Las tres comienzan en el buscador
 común y reutilizan cliente, póliza, Workspace, Snapshot y perfil Zoho.
 
@@ -14,7 +14,7 @@ común y reutilizan cliente, póliza, Workspace, Snapshot y perfil Zoho.
 
 ```text
 Banco de Herramientas
-├── Solicitudes y Renovaciones
+├── Novedades (Ingreso y Retiro)
 ├── Invitaciones a Aseguradoras
 └── Cotización Individual
              │
@@ -35,16 +35,17 @@ la identidad del Workspace y no altera el perfil Zoho.
 
 ## Puntos de entrada
 
-- `/cotizacion-colectivos/solicitudes-renovaciones/`
+- `/cotizacion-colectivos/novedades/`
 - `/cotizacion-colectivos/invitaciones-aseguradoras/`
 - `/cotizacion-colectivos/cotizacion-individual/`
 
 El modo se fija mediante rutas declaradas en servidor y se conserva en sesión
-con una allowlist cerrada (`requests`, `invitations`, `individual`). No se acepta un modo
+con una allowlist cerrada (`novelties`, `invitations`, `individual`). No se acepta un modo
 libre desde formulario, query string, cookie personalizada o identificador CRM.
 
 Las rutas históricas se conservan para compatibilidad. La entrada histórica
-usa por defecto Solicitudes y Renovaciones.
+usa por defecto Novedades. La ruta anterior de solicitudes/renovaciones es
+compatibilidad legacy y no se enlaza desde el Banco.
 
 ## Buscador común
 
@@ -64,11 +65,11 @@ existentes. Los tokens siguen siendo opacos, firmados y ligados al tipo.
 
 ## Comportamiento por herramienta
 
-### Solicitudes y Renovaciones
+### Novedades
 
-La acción primaria en la misma ficha de póliza es generar el enlace de
-actualización o renovación. Se mantienen expiración, regeneración, revocación,
-miniportal, respuesta local y notificación.
+La acción primaria es generar un enlace contextualizado para capturar solo un
+Ingreso o Retiro. Se mantienen expiración, regeneración, revocación,
+miniportal, respuesta local y notificación. Renovaciones está fuera de alcance.
 
 ### Invitaciones a Aseguradoras
 

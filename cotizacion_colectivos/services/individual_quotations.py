@@ -73,30 +73,31 @@ def affiliate_options(members) -> tuple[AffiliateOption, ...]:
 def build_policy_context(*, policy_token, detail, members, affiliate_key, creator_id):
     schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
     options = {item.key: item for item in affiliate_options(members)}
-    selected = options.get(str(affiliate_key or ""))
-    if selected is None:
+    normalized_key = str(affiliate_key or "")
+    selected = options.get(normalized_key)
+    if normalized_key and selected is None:
         raise ValidationError("Seleccione un afiliado válido para esta póliza.")
 
     matching = next((
         member for member in members
-        if selected.key in {member.associate_key, member.insured_key}
-    ), None)
-    is_associate = bool(matching and matching.associate_key == selected.key)
+        if selected and selected.key in {member.associate_key, member.insured_key}
+    ), None) if selected else None
+    is_associate = bool(selected and matching and matching.associate_key == selected.key)
     requester_name = (
         matching.associate_name if is_associate and matching else
-        matching.insured_name if matching else selected.label
+        matching.insured_name if matching else selected.label if selected else ""
     )
     requester_id_type = (
         matching.associate_id_type if is_associate and matching else
-        matching.insured_id_type if matching else selected.id_type
+        matching.insured_id_type if matching else selected.id_type if selected else ""
     )
     requester_document = (
         matching.associate_document if is_associate and matching else
         matching.insured_document if matching else ""
     )
     values = {
-        "requester_name": str(requester_name or selected.label),
-        "requester_id_type": str(requester_id_type or selected.id_type),
+        "requester_name": str(requester_name or (selected.label if selected else "")),
+        "requester_id_type": str(requester_id_type or (selected.id_type if selected else "")),
         "requester_document": str(requester_document or ""),
         "requester_email": str(getattr(matching, "email", "") or ""),
         "requester_phone": str(
@@ -108,14 +109,14 @@ def build_policy_context(*, policy_token, detail, members, affiliate_key, creato
         "context_version": 1,
         "policy_token": str(policy_token),
         "source_kind": str(detail.source_kind or "company"),
-        "affiliate_key": selected.key,
-        "affiliate_role": selected.role,
+        "affiliate_key": selected.key if selected else "",
+        "affiliate_role": selected.role if selected else "Persona nueva",
         "branch_slug": schema.slug,
         "schema_version": schema.version,
         "creator_id": int(creator_id),
         "policy_label": str(detail.masked_reference or "Póliza colectiva"),
         "branch_name": str(detail.branch_name),
-        "affiliate_label": selected.label,
+        "affiliate_label": selected.label if selected else "Persona nueva",
         **values,
     }
     payload["locked_fields"] = tuple(key for key, value in values.items() if value)

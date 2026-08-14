@@ -153,7 +153,7 @@ class ExternalWorkflowTests(TestCase):
         notification = NotificacionColectivos.objects.get(
             notification_type="CLIENT_RESPONSE"
         )
-        self.assertEqual(notification.title, "Respuesta recibida")
+        self.assertEqual(notification.title, "Novedad recibida")
         self.assertNotIn("revisión interna", notification.message.lower())
 
     def test_legacy_otp_endpoint_is_not_part_of_current_flow(self):
@@ -167,13 +167,7 @@ class ExternalWorkflowTests(TestCase):
         self.assertFalse(generated.access.otp_hash)
 
     def test_all_confirmed_branches_have_editable_portal(self):
-        expected_field = {
-            "91": "include_parentesco",
-            "86": "include_parentesco",
-            "28": "include_direccion",
-            "83": "include_valor_asegurado",
-            "40": "include_placa",
-        }
+        expected_field = {code: "include_fecha_nacimiento" for code in ("91", "86", "28", "83", "40")}
         for index, branch_code in enumerate(expected_field):
             with self.subTest(branch=branch_code):
                 self.request.branch_code = branch_code
@@ -192,25 +186,25 @@ class ExternalWorkflowTests(TestCase):
                 saved = self.client.post(reverse("colectivos_external:save_draft"), {})
                 self.assertEqual(saved.status_code, 302)
 
-    def test_portal_uses_metadata_backed_selects_and_keeps_plan_as_text(self):
+    def test_portal_uses_metadata_backed_identification_and_minimal_ingress(self):
         generated = self.access()
         self.request.status = self.request.Status.SENT
         self.request.save(update_fields=("status",))
         self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
         portal = self.client.get(reverse("colectivos_external:portal"))
-        self.assertContains(portal, '<select name="include_rol">', html=False)
-        self.assertContains(portal, '<option value="Afiliado">Afiliado</option>', html=False)
-        self.assertContains(portal, '<option value="Cónyuge">Cónyuge</option>', html=False)
-        self.assertContains(portal, '<option value="Activo">Activo</option>', html=False)
-        self.assertContains(portal, '<input name="include_plan" maxlength="120">', html=False)
+        self.assertContains(portal, 'name="include_rol" value="Asegurado"', html=False)
+        self.assertContains(portal, '<select name="include_tipo_id">', html=False)
+        self.assertContains(portal, 'name="include_fecha_nacimiento"', html=False)
+        self.assertContains(portal, 'name="include_fecha_ingreso"', html=False)
+        self.assertNotContains(portal, 'name="include_plan"', html=False)
 
     def test_external_entities_render_structured_rows_and_drawers(self):
         cases = {
-            "91": ("Nombre", "Rol", "Nuevo plan"),
-            "86": ("Nombre", "Parentesco", "Nuevo parentesco"),
-            "28": ("Inmueble 1", "Calle 10 # 20-30", "Nueva dirección"),
-            "83": ("Asegurado", "Valor asegurado", "Nuevo valor asegurado"),
-            "40": ("Vehículo 1", "ABC123", "Nueva placa"),
+            "91": ("Nombre", "Rol", "Solicitar retiro"),
+            "86": ("Nombre", "Parentesco", "Solicitar retiro"),
+            "28": ("Inmueble 1", "Calle 10 # 20-30", "Solicitar retiro"),
+            "83": ("Asegurado", "Valor asegurado", "Solicitar retiro"),
+            "40": ("Vehículo 1", "ABC123", "Solicitar retiro"),
         }
         member = {
             "display_name": "Persona de prueba",
@@ -251,7 +245,7 @@ class ExternalWorkflowTests(TestCase):
                 self.assertContains(portal, "data-edit-panel", html=False)
                 self.assertContains(portal, "data-edit-panel hidden", html=False)
                 self.assertContains(portal, 'role="dialog"', html=False)
-                self.assertContains(portal, "Modificar")
+                self.assertNotContains(portal, ">Modificar<")
                 self.assertNotContains(portal, "data-edit-disclosure", html=False)
                 self.assertNotContains(portal, "Titular o principal")
                 self.assertNotContains(portal, "Ver familia, beneficiarios y coberturas")
@@ -270,8 +264,8 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
         functional_key = "a" * 64
         self.assertContains(portal, f'name="action_entity_{functional_key}"', html=False)
-        self.assertContains(portal, f'name="estado_entity_{functional_key}"', html=False)
-        self.assertContains(portal, f'name="plan_entity_{functional_key}"', html=False)
+        self.assertContains(portal, f'name="fecha_retiro_entity_{functional_key}"', html=False)
+        self.assertNotContains(portal, f'name="plan_entity_{functional_key}"', html=False)
         self.assertContains(portal, f'name="source_records_{functional_key}"', html=False)
 
     def test_drawer_posts_the_unchanged_payload_contract(self):
@@ -288,14 +282,13 @@ class ExternalWorkflowTests(TestCase):
         self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
         saved = self.client.post(reverse("colectivos_external:save_draft"), {
             f"source_records_{functional_key}": str(self.record.public_key),
-            f"action_entity_{functional_key}": "MODIFICAR",
-            f"plan_entity_{functional_key}": "Plan solicitado",
-            f"fecha_efectiva_entity_{functional_key}": "2026-09-01",
+            f"action_entity_{functional_key}": "RETIRAR",
+            f"fecha_retiro_entity_{functional_key}": "2026-09-01",
         })
         self.assertEqual(saved.status_code, 302)
         response = self.request.responses.get(status=RespuestaSolicitudColectivo.Status.DRAFT)
-        change = response.changes.get(functional_field="plan")
-        self.assertEqual(decrypt(change.encrypted_new_value), "Plan solicitado")
+        change = response.changes.get(functional_field="fecha_retiro")
+        self.assertEqual(decrypt(change.encrypted_new_value), "2026-09-01")
 
     def test_external_table_keeps_final_save_and_local_pagination_controls(self):
         generated = self.access()
@@ -443,15 +436,14 @@ class ExternalWorkflowTests(TestCase):
             access=access,
             rows=[{
                 "record": str(self.record.public_key),
-                "action": "MODIFICAR",
-                "plan": "Plan solicitado",
-                "fecha_efectiva": "2026-09-01",
+                "action": "RETIRAR",
+                "fecha_retiro": "2026-09-01",
             }],
             observations="Observación del cliente",
         )
         self.assertEqual(response.origin, RespuestaSolicitudColectivo.Origin.WEB)
         self.assertNotIn("Observación del cliente", response.encrypted_client_observations)
-        self.assertTrue(response.changes.filter(functional_field="plan").exists())
+        self.assertTrue(response.changes.filter(functional_field="fecha_retiro").exists())
         submitted = submit_response(access=access, response=response, declaration=True)
         again = submit_response(access=access, response=submitted, declaration=True)
         self.assertEqual(again.pk, submitted.pk)
@@ -475,6 +467,38 @@ class ExternalWorkflowTests(TestCase):
                 }],
                 observations="",
             )
+
+    def test_novelties_use_requested_dates_without_effective_date(self):
+        access = self.verified_access()
+        ingress = save_response(
+            access=access,
+            rows=[{
+                "record": "",
+                "action": "INCLUIR",
+                "tipo_id": "CC",
+                "documento": "12345678",
+                "nombre": "Persona de prueba",
+                "rol": "Asegurado",
+                "fecha_nacimiento": "1990-01-01",
+                "fecha_ingreso": "2026-09-01",
+            }],
+            observations="",
+        )
+        self.assertTrue(ingress.changes.filter(functional_field="fecha_ingreso").exists())
+        self.assertTrue(ingress.changes.filter(functional_field="fecha_nacimiento").exists())
+        self.assertFalse(ingress.changes.filter(functional_field="fecha_efectiva").exists())
+
+        retirement = save_response(
+            access=access,
+            rows=[{
+                "record": str(self.record.public_key),
+                "action": "RETIRAR",
+                "fecha_retiro": "2026-10-01",
+            }],
+            observations="",
+        )
+        self.assertTrue(retirement.changes.filter(functional_field="fecha_retiro").exists())
+        self.assertFalse(retirement.changes.filter(functional_field="fecha_efectiva").exists())
 
     def test_template_round_trip_and_formula_rejection(self):
         content = build_novelties_template(self.request)

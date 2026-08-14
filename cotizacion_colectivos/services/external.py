@@ -44,7 +44,7 @@ ACTION_TO_ADJUSTMENT = {
 }
 EDITABLE_FIELDS = {
     "tipo_id", "documento", "nombre", "rol", "plan", "parentesco",
-    "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo",
+    "fecha_nacimiento", "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo",
     "observaciones", "ciudad", "direccion", "tipo_uso",
     "anio_construccion", "descripcion", "valor_asegurado", "vehiculo",
     "placa", "marca", "modelo", "estado",
@@ -395,8 +395,12 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
         fields = {key: str(row.get(key, "")).strip()[:500] for key in EDITABLE_FIELDS}
         if action == CambioSolicitudColectivo.Action.UNCHANGED:
             fields = {key: "" for key in EDITABLE_FIELDS}
-        if action in {CambioSolicitudColectivo.Action.MODIFY, CambioSolicitudColectivo.Action.RETIRE, CambioSolicitudColectivo.Action.INCLUDE} and not fields["fecha_efectiva"]:
-            raise ExternalAccessError("La fecha efectiva es obligatoria para la novedad.")
+        if action == CambioSolicitudColectivo.Action.MODIFY and not fields["fecha_efectiva"]:
+            raise ExternalAccessError("La fecha efectiva es obligatoria para la modificación histórica.")
+        if action == CambioSolicitudColectivo.Action.RETIRE and not (fields["fecha_retiro"] or fields["fecha_efectiva"]):
+            raise ExternalAccessError("La fecha solicitada de retiro es obligatoria.")
+        if action == CambioSolicitudColectivo.Action.INCLUDE and not (fields["fecha_ingreso"] or fields["fecha_efectiva"]):
+            raise ExternalAccessError("La fecha solicitada de ingreso es obligatoria.")
         if action == CambioSolicitudColectivo.Action.INCLUDE:
             if (
                 fields["tipo_id"] not in CONTACT_ID_TYPE_CHOICES
@@ -404,7 +408,7 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 or not fields["documento"].isdigit()
                 or not fields["nombre"]
             ):
-                raise ExternalAccessError("La inclusión requiere identificación y nombre válidos.")
+                raise ExternalAccessError("El ingreso requiere identificación y nombre válidos.")
         if fields["parentesco"] and fields["parentesco"] not in RELATIONSHIP_CHOICES:
             raise ExternalAccessError("El parentesco seleccionado no es válido.")
         if fields["estado"] and fields["estado"] not in INSURED_STATE_CHOICES:
@@ -463,8 +467,8 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     _notify(
         request,
         "CLIENT_RESPONSE",
-        "Respuesta recibida",
-        f"El cliente respondió la revisión de la póliza {request.masked_policy_reference}.",
+        "Novedad recibida",
+        f"El cliente respondió una novedad de la póliza {request.masked_policy_reference}.",
         str(locked.version),
     )
     transaction.on_commit(lambda: _send_submission_receipt(access.pk, request.public_id))

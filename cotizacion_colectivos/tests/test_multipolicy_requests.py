@@ -175,7 +175,7 @@ class MultiPolicyRequestTests(TestCase):
         initial = MultiPolicyRequestForm(policies=(option,))
         self.assertEqual(
             tuple(initial.fields["adjustments_0"].initial),
-            ("SIN_CAMBIOS", "INCLUSION", "RETIRO", "MODIFICACION"),
+            ("SIN_CAMBIOS", "INCLUSION", "RETIRO"),
         )
         bound = MultiPolicyRequestForm(
             {
@@ -271,7 +271,7 @@ class MultiPolicyRequestTests(TestCase):
         )
         item = create_request_from_policies(
             selections=(
-                {"token": tokens[0], "adjustments": ("MODIFICACION",)},
+                {"token": tokens[0], "adjustments": ("RETIRO",)},
                 {"token": tokens[1], "adjustments": ("INCLUSION",)},
             ),
             source_kind="person",
@@ -288,7 +288,7 @@ class MultiPolicyRequestTests(TestCase):
         self.assertEqual(len(request_snapshot(item)["policies"]), 2)
         self.assertEqual(
             set(item.policies.values_list("enabled_adjustments", flat=True)[0]),
-            {"SIN_CAMBIOS", "MODIFICACION"},
+            {"SIN_CAMBIOS", "RETIRO"},
         )
         self.assertNotEqual(decrypt(item.policies.first().encrypted_policy_token), tokens[0])
         regenerated = regenerate_request_snapshot(request=item, actor=self.actor, service=service)

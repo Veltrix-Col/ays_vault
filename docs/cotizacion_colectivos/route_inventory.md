@@ -2,7 +2,7 @@
 
 ## Puntos de entrada visibles
 
-- `/cotizacion-colectivos/solicitudes-renovaciones/`.
+- `/cotizacion-colectivos/novedades/`.
 - `/cotizacion-colectivos/invitaciones-aseguradoras/`.
 - `/cotizacion-colectivos/cotizacion-individual/`.
 - Cada entrada tiene una ruta de búsqueda de cliente con modo fijado por el
@@ -10,7 +10,7 @@
 
 ## Motor compartido
 
-- `/cotizacion-colectivos/`: entrada histórica; usa Solicitudes y Renovaciones.
+- `/cotizacion-colectivos/`: entrada histórica; usa Novedades.
 - `/cotizacion-colectivos/clientes/buscar/`: compatibilidad de búsqueda común.
 - `/empresas/<token>/` e `/individuos/<token>/`: selección de póliza.
 - `/polizas/<token>/`: detalle de póliza y centro operativo.
@@ -35,6 +35,7 @@
 
 Se conservan temporalmente para datos y URLs históricas:
 
+- `/cotizacion-colectivos/solicitudes-renovaciones/` y sus rutas anidadas;
 - `solicitudes/construir/...`;
 - `solicitudes/` y `solicitudes/<public_id>/`;
 - edición, transición y regeneración de snapshot;

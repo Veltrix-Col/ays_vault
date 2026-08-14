@@ -3,7 +3,7 @@
 {% block title %}{{ schema.name }} · Cotización Individual{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{% static 'css/colectivos.css' %}">{% endblock %}
 {% block content %}
-<header class="page-heading page-heading--compact"><span class="eyebrow">Cotización Individual · {{ schema.name }}</span><h1>Información para cotizar</h1><p>{{ context.policy_label }} · Afiliado principal: {{ context.affiliate_label }}</p><p>{{ schema.description }}</p></header>
+<header class="page-heading page-heading--compact"><span class="eyebrow">Cotización Individual · {{ schema.name }}</span><h1>Información para cotizar</h1><p>{{ context.policy_label }} · Contexto: {{ context.affiliate_label }}</p><p>{{ schema.description }}</p></header>
 <form method="post" enctype="multipart/form-data" class="individual-form" data-individual-form novalidate>{% csrf_token %}
   {{ form.items_payload }}
   {% if form.non_field_errors %}<div class="form-alert" role="alert">{{ form.non_field_errors }}</div>{% endif %}

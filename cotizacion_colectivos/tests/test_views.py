@@ -68,7 +68,7 @@ class ColectivosViewTests(TestCase):
     def test_each_entry_point_has_one_unified_client_search(self):
         client = self.authenticated_client(self.admin)
         for route, title in (
-            ("cotizacion_colectivos:requests_index", "Solicitudes y Renovaciones"),
+            ("cotizacion_colectivos:novelties_index", "Novedades"),
             ("cotizacion_colectivos:invitations_index", "Invitaciones a Aseguradoras"),
         ):
             response = client.get(reverse(route))
@@ -89,12 +89,12 @@ class ColectivosViewTests(TestCase):
         )
         client = self.authenticated_client(self.admin)
         response = client.post(
-            reverse("cotizacion_colectivos:requests_client_search"), {"query": "Segura"}
+            reverse("cotizacion_colectivos:novelties_client_search"), {"query": "Segura"}
         )
         self.assertContains(response, "Empresa Segura")
         self.assertContains(response, "Persona Segura")
         self.assertContains(response, reverse(
-            "cotizacion_colectivos:requests_client_detail", args=["company", "company-token"]
+            "cotizacion_colectivos:novelties_client_detail", args=["company", "company-token"]
         ))
 
     @override_settings(ZOHO_ACTIVE_PROFILE="production")
@@ -195,9 +195,10 @@ class ColectivosViewTests(TestCase):
 
     def test_portal_contains_authorized_link_and_soat_remains(self):
         response = self.client.get(reverse("public_home"))
-        self.assertContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, "Novedades")
         self.assertContains(response, "Invitaciones a Aseguradoras")
-        self.assertContains(response, reverse("cotizacion_colectivos:requests_index"))
+        self.assertContains(response, reverse("cotizacion_colectivos:novelties_index"))
+        self.assertNotContains(response, "Solicitudes y Renovaciones")
         self.assertContains(response, reverse("cotizacion_colectivos:invitations_index"))
         self.assertNotContains(response, "Cotización – Colectivos")
         self.assertContains(response, "Gestión SOAT")

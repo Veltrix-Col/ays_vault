@@ -47,8 +47,9 @@ REQUESTER_FIELDS = (
     FieldSchema("requester_name", "Nombre del solicitante"),
     FieldSchema("requester_id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("requester_document", "Identificación", "document"),
-    FieldSchema("requester_email", "Correo electrónico", "email"),
-    FieldSchema("requester_phone", "Teléfono", "tel"),
+    FieldSchema("requester_birth_date", "Fecha de nacimiento", "date", required=False),
+    FieldSchema("requester_email", "Correo electrónico", "email", required=False),
+    FieldSchema("requester_phone", "Teléfono", "tel", required=False),
     FieldSchema("collective_context", "Colectiva o tomador", required=False, help_text="Se precarga cuando el enlace se genera desde un cliente."),
 )
 
@@ -57,18 +58,22 @@ PERSON_FIELDS = (
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("document", "Identificación", "document"),
     FieldSchema("birth_date", "Fecha de nacimiento", "date"),
-    FieldSchema("gender", "Género", "choice", choices=GENDER_CHOICES),
+    FieldSchema("gender", "Género", "choice", required=False, choices=GENDER_CHOICES),
     FieldSchema("relationship", "Parentesco o relación"),
-    FieldSchema("role", "Rol", "choice", choices=ROLE_CHOICES),
+    FieldSchema("role", "Rol", "choice", required=False, choices=ROLE_CHOICES),
+    FieldSchema("plan_interest", "Plan o interés", required=False),
 )
 
 VEHICLE_FIELDS = (
-    FieldSchema("plate", "Placa"),
+    FieldSchema(
+        "plate", "Placa", required=False,
+        help_text="Opcional para vehículos nuevos o 0 km que todavía no tienen placa.",
+    ),
     FieldSchema("brand", "Marca", required=False),
     FieldSchema("line", "Línea o referencia", required=False),
     FieldSchema("model", "Modelo"),
-    FieldSchema("city", "Ciudad"),
-    FieldSchema("use", "Uso"),
+    FieldSchema("city", "Ciudad", required=False),
+    FieldSchema("use", "Uso", required=False),
     FieldSchema("insured_name", "Nombre del asegurado"),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),

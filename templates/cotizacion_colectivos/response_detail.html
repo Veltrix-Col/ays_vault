@@ -1,7 +1,7 @@
 {% extends "cotizacion_colectivos/base.html" %}
 {% block title %}Respuesta del cliente{% endblock %}
 {% block content %}
-<nav class="breadcrumbs"><a href="{% url 'cotizacion_colectivos:requests_index' %}">Solicitudes y Renovaciones</a><span>/</span><span>Respuesta del cliente</span></nav>
+<nav class="breadcrumbs"><a href="{% url 'cotizacion_colectivos:novelties_index' %}">Novedades</a><span>/</span><span>Respuesta del cliente</span></nav>
 <header class="page-heading page-heading--compact"><span class="eyebrow">Respuesta recibida</span><h1>{{ item.masked_policy_reference }}</h1><p>Recibida el {{ response.submitted_at }}.</p></header>
 <section class="relation-card"><h2>Resultado</h2><div class="detail-grid"><div><span>Tipo</span><strong>{{ item.get_request_type_display }}</strong></div><div><span>Cambios informados</span><strong>{{ response.changes.count }}</strong></div><div><span>Estado</span><strong>Respondido</strong></div></div>{% if observations %}<h3>Observaciones del cliente</h3><p>{{ observations }}</p>{% else %}<p>El cliente confirmó la información sin observaciones adicionales.</p>{% endif %}</section>
 <div class="policy-actions"><form method="post" action="{% url 'cotizacion_colectivos:response_export' item.public_id response.version %}">{% csrf_token %}<button type="submit">Descargar respuesta</button></form><form method="post" action="{% url 'cotizacion_colectivos:response_comparison' item.public_id response.version %}">{% csrf_token %}<button type="submit" class="button-link--secondary">Descargar comparativo</button></form></div>

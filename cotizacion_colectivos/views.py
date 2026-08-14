@@ -819,8 +819,6 @@ def policy_individual_access(request, token):
         )
         options = affiliate_options(members)
         affiliate_key = str(request.POST.get("affiliate_key") or "")
-        if not affiliate_key and len(options) == 1:
-            affiliate_key = options[0].key
         actor = get_internal_actor(request, create=True)
         schema, context_token, _payload = build_policy_context(
             policy_token=token,
@@ -872,6 +870,7 @@ def policy_individual_access(request, token):
             "individual_generated_affiliate": next(
                 (item for item in options if item.key == affiliate_key), None,
             ),
+            "individual_generated_for_new_person": not affiliate_key,
         },
     )
 

@@ -30,7 +30,7 @@
       <span role="cell" data-label="Ingreso">{{ entity.entry_date|default:"No informada" }}</span>
     {% endif %}
     <span role="cell" data-label="Acción" class="functional-table__action">
-      <button type="button" class="functional-edit-toggle" data-edit-toggle data-drawer-open="editor-{{ entity.key }}" aria-controls="editor-{{ entity.key }}" aria-haspopup="dialog" aria-expanded="false">Modificar</button>
+      <button type="button" class="functional-edit-toggle" data-edit-toggle data-drawer-open="editor-{{ entity.key }}" aria-controls="editor-{{ entity.key }}" aria-haspopup="dialog" aria-expanded="false">Solicitar retiro</button>
       <span class="functional-change-state" data-change-state hidden>✓ Cambio preparado</span>
     </span>
   </div>
@@ -40,7 +40,7 @@
 
   <aside class="functional-drawer" id="editor-{{ entity.key }}" role="dialog" aria-modal="true" aria-labelledby="editor-title-{{ entity.key }}" data-drawer data-edit-panel hidden>
     <div class="functional-drawer__header">
-      <div><p class="eyebrow">Modificar información</p><h4 id="editor-title-{{ entity.key }}" tabindex="-1" data-drawer-title>{% if section.branch_code == '28' %}Inmueble {{ entity_index }}{% elif section.branch_code == '40' %}Vehículo {{ risk.attributes.placa|default:entity_index }}{% else %}{{ entity.display_name|default:"Registro seleccionado" }}{% endif %}</h4></div>
+      <div><p class="eyebrow">Retiro</p><h4 id="editor-title-{{ entity.key }}" tabindex="-1" data-drawer-title>{% if section.branch_code == '28' %}Inmueble {{ entity_index }}{% elif section.branch_code == '40' %}Vehículo {{ risk.attributes.placa|default:entity_index }}{% else %}{{ entity.display_name|default:"Registro seleccionado" }}{% endif %}</h4></div>
       <button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button>
     </div>
 
@@ -68,42 +68,15 @@
       </section>
 
       <section class="functional-new-panel" aria-labelledby="new-title-{{ entity.key }}">
-        <div class="functional-new-panel__heading"><p class="eyebrow">Información nueva</p><h5 id="new-title-{{ entity.key }}">Indique únicamente lo que desea cambiar</h5></div>
-        <p>Los campos vacíos conservarán la información actual.</p>
+        <div class="functional-new-panel__heading"><p class="eyebrow">Novedad</p><h5 id="new-title-{{ entity.key }}">Solicitar retiro</h5></div>
+        <p>A&amp;S validará posteriormente la fecha aplicable y las condiciones del negocio.</p>
         <div class="functional-action-grid">
-          <label>Acción
-            <select name="action_entity_{{ entity.key }}" data-row-action>
-              {% if "SIN_CAMBIOS" in section.allowed_actions %}<option value="SIN_CAMBIOS">Sin cambios</option>{% endif %}
-              {% if "MODIFICAR" in section.allowed_actions %}<option value="MODIFICAR">Modificar</option>{% endif %}
-              {% if "RETIRAR" in section.allowed_actions %}<option value="RETIRAR">Retirar</option>{% endif %}
-            </select>
-          </label>
-          <label>Nuevo estado<select name="estado_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
-          <label>Nuevo plan<input name="plan_entity_{{ entity.key }}" maxlength="120" placeholder="Conservar actual"></label>
-          {% if section.branch_code == '91' or section.branch_code == '86' %}<label>Nuevo parentesco<select name="parentesco_entity_{{ entity.key }}"><option value="">Conservar actual</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
-          {% if section.branch_code == '28' %}
-            <label>Nueva ciudad<input name="ciudad_entity_{{ entity.key }}" maxlength="120"></label>
-            <label>Nueva dirección<input name="direccion_entity_{{ entity.key }}" maxlength="180"></label>
-            <label>Nuevo tipo de uso<input name="tipo_uso_entity_{{ entity.key }}" maxlength="120"></label>
-            <label>Nuevo año de construcción<input name="anio_construccion_entity_{{ entity.key }}" inputmode="numeric" maxlength="4"></label>
-            <label class="functional-action-grid__wide">Nueva descripción<textarea name="descripcion_entity_{{ entity.key }}" maxlength="300" rows="3"></textarea></label>
-            <label>Nuevo valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
-          {% elif section.branch_code == '83' %}
-            <label>Nuevo valor asegurado<input name="valor_asegurado_entity_{{ entity.key }}" inputmode="decimal" maxlength="30"></label>
-          {% elif section.branch_code == '40' %}
-            <label>Nuevo vehículo<input name="vehiculo_entity_{{ entity.key }}" maxlength="120"></label>
-            <label>Nueva placa<input name="placa_entity_{{ entity.key }}" maxlength="12"></label>
-            <label>Nueva marca o referencia<input name="marca_entity_{{ entity.key }}" maxlength="80"></label>
-            <label>Nuevo modelo<input name="modelo_entity_{{ entity.key }}" maxlength="40"></label>
-          {% endif %}
-          <label>Fecha de ingreso solicitada<input type="date" name="fecha_ingreso_entity_{{ entity.key }}"></label>
-          <label>Fecha de retiro solicitada<input type="date" name="fecha_retiro_entity_{{ entity.key }}"></label>
-          <label>Fecha efectiva del cambio<input type="date" name="fecha_efectiva_entity_{{ entity.key }}"></label>
-          <label>Motivo<input name="motivo_entity_{{ entity.key }}" maxlength="200"></label>
+          <input type="hidden" name="action_entity_{{ entity.key }}" value="RETIRAR" data-row-action>
+          <label>Fecha solicitada de retiro<input type="date" name="fecha_retiro_entity_{{ entity.key }}" required></label>
           <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3"></textarea></label>
         </div>
       </section>
     </div>
-    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-edit-done data-drawer-done>Preparar cambio</button></div>
+    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-edit-done data-drawer-done>Preparar retiro</button></div>
   </aside>
 </div>

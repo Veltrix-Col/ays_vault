@@ -5,7 +5,7 @@
 <header class="external-hero">
   <p class="eyebrow">Portal seguro de A&amp;S</p>
   <h1>Mi póliza</h1>
-  <p>Revise su grupo y cuéntenos únicamente qué necesita cambiar.</p>
+  <p>Revise su grupo y registre únicamente un ingreso o un retiro.</p>
   <div class="summary">
     <span>{{ policy_sections|length }} póliza{{ policy_sections|length|pluralize }}</span>
     <span>Fecha límite {{ item.deadline }}</span>
@@ -20,7 +20,7 @@
 </section>
 <section class="external-card external-card--steps">
   <h2>¿Qué debo hacer?</h2>
-  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Seleccione “Modificar” en el registro que necesite actualizar.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
+  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Solicite el retiro de un integrante existente o agregue un nuevo ingreso.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
   {% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
 </section>
 <form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card" data-external-response>
@@ -71,26 +71,20 @@
       <div><button type="button" class="functional-pagination__button" data-page-previous>Anterior</button><button type="button" class="functional-pagination__button" data-page-next>Siguiente</button></div>
     </nav>
   </div>
-  {% if section.allows_include or not section.policy %}<button type="button" class="external-add-button" data-drawer-open="include-drawer-{{ forloop.counter }}" aria-controls="include-drawer-{{ forloop.counter }}" aria-haspopup="dialog" aria-expanded="false">Agregar una persona, beneficiario o bien</button>
+  {% if section.allows_include or not section.policy %}<button type="button" class="external-add-button" data-drawer-open="include-drawer-{{ forloop.counter }}" aria-controls="include-drawer-{{ forloop.counter }}" aria-haspopup="dialog" aria-expanded="false">Registrar ingreso</button>
   <aside class="functional-drawer" id="include-drawer-{{ forloop.counter }}" role="dialog" aria-modal="true" aria-labelledby="include-drawer-title-{{ forloop.counter }}" data-drawer hidden>
-    <div class="functional-drawer__header"><div><p class="eyebrow">Nueva información</p><h4 id="include-drawer-title-{{ forloop.counter }}" tabindex="-1" data-drawer-title>Agregar a mi póliza</h4></div><button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button></div>
+    <div class="functional-drawer__header"><div><p class="eyebrow">Novedad</p><h4 id="include-drawer-title-{{ forloop.counter }}" tabindex="-1" data-drawer-title>Solicitar ingreso</h4></div><button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button></div>
     <div class="functional-drawer__content external-add-card">
-    <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero agregar esta información a mi póliza</label>
-    <label>Rol<select name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}"><option value="">Seleccione</option>{% for choice in relation_roles %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero solicitar este ingreso</label>
+    <input type="hidden" name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}" value="Asegurado">
     <label>Tipo de identificación<select name="{% if section.policy %}include_{{ section.policy.pk }}_tipo_id{% else %}include_tipo_id{% endif %}"><option value="">Seleccione</option>{% for choice in contact_id_types %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
     <label>Documento<input name="{% if section.policy %}include_{{ section.policy.pk }}_documento{% else %}include_documento{% endif %}" inputmode="numeric" maxlength="30"></label>
-    <label>Nombre o descripción<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombre{% else %}include_nombre{% endif %}" maxlength="180"></label>
-    <label>Estado<select name="{% if section.policy %}include_{{ section.policy.pk }}_estado{% else %}include_estado{% endif %}"><option value="">Seleccione</option>{% for choice in insured_state_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
-    {% if section.policy.branch_code == '91' or section.policy.branch_code == '86' or not section.policy %}<label>Plan<input name="{% if section.policy %}include_{{ section.policy.pk }}_plan{% else %}include_plan{% endif %}" maxlength="120"></label><label>Parentesco<select name="{% if section.policy %}include_{{ section.policy.pk }}_parentesco{% else %}include_parentesco{% endif %}"><option value="">Seleccione</option>{% for choice in relationship_choices %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>{% endif %}
-    {% if section.policy.branch_code == '28' %}<label>Ciudad<input name="include_{{ section.policy.pk }}_ciudad" maxlength="120"></label><label>Dirección<input name="include_{{ section.policy.pk }}_direccion" maxlength="180"></label><label>Tipo de uso<input name="include_{{ section.policy.pk }}_tipo_uso" maxlength="120"></label><label>Año de construcción<input name="include_{{ section.policy.pk }}_anio_construccion" inputmode="numeric" maxlength="4"></label><label>Descripción<input name="include_{{ section.policy.pk }}_descripcion" maxlength="300"></label><label>Valor asegurado<input name="include_{{ section.policy.pk }}_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif section.policy.branch_code == '83' %}<label>Valor asegurado<input name="include_{{ section.policy.pk }}_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif section.policy.branch_code == '40' %}<label>Vehículo<input name="include_{{ section.policy.pk }}_vehiculo" maxlength="120"></label><label>Placa<input name="include_{{ section.policy.pk }}_placa" maxlength="12"></label><label>Marca<input name="include_{{ section.policy.pk }}_marca" maxlength="80"></label><label>Modelo<input name="include_{{ section.policy.pk }}_modelo" maxlength="40"></label>{% endif %}
-    {% if not section.policy %}{% if item.branch_code == '28' %}<label>Ciudad<input name="include_ciudad" maxlength="120"></label><label>Dirección<input name="include_direccion" maxlength="180"></label><label>Tipo de uso<input name="include_tipo_uso" maxlength="120"></label><label>Año de construcción<input name="include_anio_construccion" inputmode="numeric" maxlength="4"></label><label>Descripción<input name="include_descripcion" maxlength="300"></label><label>Valor asegurado<input name="include_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif item.branch_code == '83' %}<label>Valor asegurado<input name="include_valor_asegurado" inputmode="decimal" maxlength="30"></label>{% elif item.branch_code == '40' %}<label>Vehículo<input name="include_vehiculo" maxlength="120"></label><label>Placa<input name="include_placa" maxlength="12"></label><label>Marca<input name="include_marca" maxlength="80"></label><label>Modelo<input name="include_modelo" maxlength="40"></label>{% endif %}{% endif %}
-    <label>Fecha de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}"></label>
-    <label>Fecha de retiro<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_retiro{% else %}include_fecha_retiro{% endif %}"></label>
-    <label>Fecha efectiva<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_efectiva{% else %}include_fecha_efectiva{% endif %}"></label>
-    <label>Motivo<input name="{% if section.policy %}include_{{ section.policy.pk }}_motivo{% else %}include_motivo{% endif %}" maxlength="200"></label>
+    <label>Nombre completo<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombre{% else %}include_nombre{% endif %}" maxlength="180"></label>
+    <label>Fecha de nacimiento<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_nacimiento{% else %}include_fecha_nacimiento{% endif %}"></label>
+    <label>Fecha solicitada de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}" required></label>
     <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>
     </div>
-    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-drawer-done>Preparar inclusión</button></div>
+    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-drawer-done>Preparar ingreso</button></div>
   </aside>
   {% endif %}
     {% else %}<p>Esta póliza no tiene ajustes editables habilitados.</p>{% endif %}

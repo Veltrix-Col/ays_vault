@@ -170,6 +170,20 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("100000001", token)
         self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
 
+    def test_policy_context_allows_a_new_person_without_losing_policy_context(self):
+        schema, token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(),
+            members=(affiliate(),),
+            affiliate_key="",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(schema.slug, "salud")
+        self.assertEqual(context["affiliate_key"], "")
+        self.assertEqual(context["affiliate_label"], "Persona nueva")
+        self.assertEqual(context["collective_context"], "Colectiva Demo")
+        self.assertNotIn("4234567890123456789", token)
+
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_health_multiple_people_submit_encrypted_notifies_and_never_calls_zoho(self, get_zoho, workspace):
@@ -212,6 +226,17 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn(b"private-demo", stored)
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_new_vehicle_can_be_quoted_without_a_fictitious_plate(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        vehicle = self.vehicle()
+        vehicle["plate"] = ""
+        response = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[self.context_token(schema_slug="movilidad")]),
+            {"items_payload": json.dumps({"vehicles": [vehicle]})},
+        )
+        self.assertEqual(response.status_code, 302)
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_soat_keeps_affiliate_and_insured_separate(self, workspace):
         workspace.return_value = self.workspace("soat")
         data = {
@@ -250,7 +275,7 @@ class IndividualQuotationTests(TestCase):
             args=[self.context_token(schema_slug="movilidad")],
         )
         response = self.client.get(url)
-        self.assertContains(response, "Afiliado principal: Afiliada Demo")
+        self.assertContains(response, "Contexto: Afiliada Demo")
         self.assertContains(response, "data-add-item")
         self.assertNotContains(response, "Seleccionar ramo")
         csrf_client = Client(enforce_csrf_checks=True)

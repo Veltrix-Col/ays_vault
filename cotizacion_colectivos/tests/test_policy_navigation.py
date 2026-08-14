@@ -222,12 +222,12 @@ class PolicyNavigationTests(TestCase):
         service.group = Mock(wraps=service.group)
         with patch("cotizacion_colectivos.views.EntityDetailService") as entity_service:
             response = self.policy_page(service)
-        self.assertContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, "Novedades")
         self.assertContains(response, "Fonconstruimos")
         self.assertContains(response, "← Volver a la ficha del cliente")
         href = anchor_href(response, "← Volver a la ficha del cliente")
         match = resolve(urlsplit(href).path)
-        self.assertEqual(match.view_name, "cotizacion_colectivos:requests_client_detail")
+        self.assertEqual(match.view_name, "cotizacion_colectivos:novelties_client_detail")
         self.assertEqual(match.kwargs["entity_kind"], "company")
         source_context = unsign_record_context(match.kwargs["token"], "company")
         self.assertEqual(source_context, {"id": SOURCE_ID, "type": "company"})
@@ -238,11 +238,11 @@ class PolicyNavigationTests(TestCase):
     def test_person_breadcrumb_and_back_action_resolve_to_signed_source(self):
         detail = _policy(source_name="Persona de prueba", source_kind="person")
         response = self.policy_page(AnyPolicyTokenService(detail), token=PERSON_TOKEN)
-        self.assertContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, "Novedades")
         self.assertContains(response, "Persona de prueba")
         href = anchor_href(response, "← Volver a la ficha del cliente")
         match = resolve(urlsplit(href).path)
-        self.assertEqual(match.view_name, "cotizacion_colectivos:requests_client_detail")
+        self.assertEqual(match.view_name, "cotizacion_colectivos:novelties_client_detail")
         self.assertEqual(match.kwargs["entity_kind"], "person")
         source_context = unsign_record_context(match.kwargs["token"], "person")
         self.assertEqual(source_context, {"id": SOURCE_ID, "type": "person"})
@@ -279,8 +279,8 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "Ver grupo")
         self.assertContains(response, "Descargar Excel actual")
         self.assertContains(response, "Generar enlace")
-        self.assertContains(response, "Actualización")
-        self.assertContains(response, "Renovación")
+        self.assertContains(response, "ingreso o un retiro")
+        self.assertNotContains(response, "Renovación")
         self.assertContains(response, "Actualizar información desde Zoho")
         self.assertNotContains(response, "Generar enlace de actualización")
         self.assertNotContains(response, "Crear solicitud multipóliza")
@@ -291,7 +291,7 @@ class PolicyNavigationTests(TestCase):
     def test_same_policy_workspace_changes_only_the_primary_tool_context(self):
         with patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService()):
             requests_page = self.client.get(reverse(
-                "cotizacion_colectivos:requests_policy_detail", args=[TOKEN]
+                "cotizacion_colectivos:novelties_policy_detail", args=[TOKEN]
             ))
             invitations_page = self.client.get(reverse(
                 "cotizacion_colectivos:invitations_policy_detail", args=[TOKEN]
@@ -299,7 +299,7 @@ class PolicyNavigationTests(TestCase):
             individual_page = self.client.get(reverse(
                 "cotizacion_colectivos:individual_policy_detail", args=[TOKEN]
             ))
-        self.assertContains(requests_page, "Solicitudes y Renovaciones")
+        self.assertContains(requests_page, "Novedades")
         self.assertContains(requests_page, "Generar enlace")
         self.assertContains(invitations_page, "Invitaciones a Aseguradoras")
         self.assertContains(invitations_page, "Descargar plantillas de invitación")
@@ -712,7 +712,7 @@ class PolicyNavigationTests(TestCase):
             "request_type": SolicitudColectivo.RequestType.UPDATE,
             "deadline": (timezone.localdate() + timedelta(days=5)).isoformat(),
             "confirm_snapshot": "on", "policy_0": "on",
-            "adjustments_0": ("SIN_CAMBIOS", "MODIFICACION"),
+            "adjustments_0": ("SIN_CAMBIOS", "INCLUSION", "RETIRO"),
         }
         with patch("cotizacion_colectivos.views.EntityDetailService", return_value=FakeEntityDetailService()), \
              patch("cotizacion_colectivos.views.create_request_from_policies", return_value=item), \
@@ -748,7 +748,7 @@ class PolicyNavigationTests(TestCase):
             "request_type": SolicitudColectivo.RequestType.UPDATE,
             "deadline": (timezone.localdate() + timedelta(days=5)).isoformat(),
             "confirm_snapshot": "on", "policy_0": "on",
-            "adjustments_0": ("SIN_CAMBIOS", "MODIFICACION"),
+            "adjustments_0": ("SIN_CAMBIOS", "INCLUSION", "RETIRO"),
         }
         with patch("cotizacion_colectivos.views.EntityDetailService") as detail_service, \
              patch("cotizacion_colectivos.views.create_request_from_policies", return_value=item), \

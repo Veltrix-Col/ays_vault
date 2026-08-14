@@ -70,7 +70,8 @@ def _individual_workspace(context):
     schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
     if schema.slug != context.get("branch_slug") or schema.version != context.get("schema_version"):
         raise signing.BadSignature("El formulario ya no corresponde a la póliza.")
-    if str(context.get("affiliate_key")) not in {
+    affiliate_key = str(context.get("affiliate_key") or "")
+    if affiliate_key and affiliate_key not in {
         option.key for option in affiliate_options(members)
     }:
         raise signing.BadSignature("El afiliado ya no pertenece al contexto.")
@@ -262,13 +263,14 @@ def _policy_sections(request_obj, snapshot):
         )
         return [{
             "policy": None, "snapshot": snapshots[0], "rows": rows,
-            "allowed_actions": ("SIN_CAMBIOS", "MODIFICAR", "RETIRAR", "INCLUIR"),
+            "allowed_actions": ("SIN_CAMBIOS", "RETIRAR", "INCLUIR"),
+            "allows_include": True,
             "functional_groups": groups,
             "grouping_warnings": grouping_warnings,
             "branch_code": request_obj.branch_code,
         }]
     sections = []
-    action_map = {"SIN_CAMBIOS": "SIN_CAMBIOS", "MODIFICACION": "MODIFICAR", "RETIRO": "RETIRAR", "INCLUSION": "INCLUIR"}
+    action_map = {"SIN_CAMBIOS": "SIN_CAMBIOS", "RETIRO": "RETIRAR", "INCLUSION": "INCLUIR"}
     for index, policy in enumerate(policies):
         policy_snapshot = snapshots[index] if index < len(snapshots) else {}
         members = policy_snapshot.get("group", []) if isinstance(policy_snapshot, dict) else []
@@ -382,7 +384,7 @@ def portal(request):
 
 def _posted_rows(request, request_obj):
     branch_fields = (
-        "plan", "parentesco", "fecha_efectiva", "fecha_ingreso",
+        "plan", "parentesco", "fecha_nacimiento", "fecha_efectiva", "fecha_ingreso",
         "fecha_retiro", "motivo", "observaciones", "ciudad", "direccion",
         "tipo_uso", "anio_construccion", "descripcion", "valor_asegurado",
         "vehiculo", "placa", "marca", "modelo", "estado",

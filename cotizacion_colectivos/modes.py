@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from django.http import Http404
 
 
-REQUESTS_MODE = "requests"
+NOVELTIES_MODE = "novelties"
+# Alias técnico temporal para imports históricos. La experiencia vigente y la
+# sesión usan exclusivamente ``novelties``.
+REQUESTS_MODE = NOVELTIES_MODE
 INVITATIONS_MODE = "invitations"
 INDIVIDUAL_MODE = "individual"
 
@@ -23,12 +26,12 @@ class ToolMode:
 TOOL_MODES = {
     REQUESTS_MODE: ToolMode(
         code=REQUESTS_MODE,
-        slug="solicitudes-renovaciones",
-        name="Solicitudes y Renovaciones",
-        short_name="Solicitudes",
+        slug="novedades",
+        name="Novedades",
+        short_name="Novedades",
         description=(
-            "Gestión digital de solicitudes, novedades y renovaciones de pólizas "
-            "colectivas mediante enlace al cliente."
+            "Capture ingresos y retiros en pólizas colectivas mediante un "
+            "enlace contextualizado para el cliente."
         ),
         primary_action="Generar enlace",
     ),
@@ -56,6 +59,10 @@ TOOL_MODES = {
     ),
 }
 MODES_BY_SLUG = {item.slug: item for item in TOOL_MODES.values()}
+LEGACY_MODES = {
+    "requests": NOVELTIES_MODE,
+    "solicitudes-renovaciones": NOVELTIES_MODE,
+}
 SESSION_KEY = "colectivos_tool_mode"
 
 
@@ -63,10 +70,12 @@ def resolve_tool_mode(request, value: str | None = None) -> ToolMode:
     """Resolve an allowlisted UX mode; it never changes data or CRM scope."""
 
     if value is not None:
-        mode = TOOL_MODES.get(value) or MODES_BY_SLUG.get(value)
+        normalized = LEGACY_MODES.get(value, value)
+        mode = TOOL_MODES.get(normalized) or MODES_BY_SLUG.get(normalized)
         if mode is None:
             raise Http404("Herramienta no disponible")
         request.session[SESSION_KEY] = mode.code
         return mode
-    stored = request.session.get(SESSION_KEY, REQUESTS_MODE)
+    stored_value = request.session.get(SESSION_KEY, NOVELTIES_MODE)
+    stored = LEGACY_MODES.get(stored_value, stored_value)
     return TOOL_MODES.get(stored, TOOL_MODES[REQUESTS_MODE])

@@ -6,6 +6,7 @@ from django.test import RequestFactory, TestCase, override_settings
 
 from cotizacion_colectivos.modes import (
     INVITATIONS_MODE,
+    NOVELTIES_MODE,
     REQUESTS_MODE,
     SESSION_KEY,
     resolve_tool_mode,
@@ -22,6 +23,8 @@ class ToolModeTests(TestCase):
     def test_mode_is_allowlisted_and_persisted_as_visual_context_only(self):
         request = self.request()
         self.assertEqual(resolve_tool_mode(request).code, REQUESTS_MODE)
+        self.assertEqual(resolve_tool_mode(request, "requests").code, NOVELTIES_MODE)
+        self.assertEqual(request.session[SESSION_KEY], NOVELTIES_MODE)
         self.assertEqual(resolve_tool_mode(request, INVITATIONS_MODE).code, INVITATIONS_MODE)
         self.assertEqual(request.session[SESSION_KEY], INVITATIONS_MODE)
         self.assertEqual(resolve_tool_mode(request).code, INVITATIONS_MODE)
