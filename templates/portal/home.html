@@ -21,41 +21,47 @@
       <div class="portal-heading">
         <span class="portal-kicker">Ecosistema digital</span>
         <h1 id="portal-title">Banco de Herramientas</h1>
-        <p>Seleccione el módulo al que desea acceder.</p>
+        <p>Seleccione el área o busque la herramienta que necesita.</p>
       </div>
     </header>
 
     <main id="portal-applications" class="portal-main" tabindex="-1">
-      <div class="application-grid" role="list" aria-label="Aplicaciones disponibles">
+      <div class="tool-search" role="search">
+        <label for="tool-search">Buscar herramientas</label>
+        <input id="tool-search" type="search" placeholder="Ej. novedades, SOAT, conciliación" autocomplete="off" aria-controls="tool-areas" data-tool-search>
+        <p data-tool-search-status aria-live="polite">{{ applications|length }} herramientas disponibles</p>
+      </div>
+      <div id="tool-areas" class="application-areas" data-area-packages>
+        <section class="application-area">
+          <div class="area-heading"><span>Banco</span><h2>Áreas</h2></div>
+          <div class="application-grid" role="list" aria-label="Áreas del Banco de Herramientas">
+          {% for area in area_packages %}
+            <article class="application-card area-package" role="listitem">
+              <div class="application-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="{{ area.icon_path }}"></path></svg></div>
+              <div class="application-copy">
+                <span class="application-area-label">Área</span>
+                <h2>{{ area.name }}</h2>
+                <p>{{ area.description }}</p>
+                <span class="area-tool-count">{{ area.applications|length }} herramientas</span>
+              </div>
+              <div class="application-action"><a class="portal-button" href="{{ area.url }}">Ver herramientas <span aria-hidden="true">→</span></a></div>
+            </article>
+          {% endfor %}
+          </div>
+        </section>
+      </div>
+      <section class="tool-results" data-tool-results hidden>
+        <div class="area-heading"><span>Resultados</span><h2>Herramientas</h2></div>
+        <div class="application-grid tool-results-grid" role="list" aria-label="Resultados de herramientas">
         {% for app in applications %}
-          <article class="application-card{% if not app.active %} is-disabled{% endif %}" role="listitem">
-            {% if app.logo %}
-              <div class="application-logo {{ app.logo_class }}">
-                <img src="{% static app.logo %}" alt="{{ app.name }}">
-              </div>
-            {% else %}
-              <div class="application-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false">
-                  <path d="{{ app.icon_path }}"></path>
-                </svg>
-              </div>
-            {% endif %}
-            <div class="application-copy">
-              <h2{% if app.logo %} class="sr-only"{% endif %}>{{ app.name }}</h2>
-              <p>{{ app.description }}</p>
-            </div>
-            <div class="application-action">
-              {% if app.active %}
-                <a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}>
-                  Ingresar <span aria-hidden="true">→</span>
-                </a>
-              {% else %}
-                <span class="access-unavailable" role="status">Acceso no configurado</span>
-              {% endif %}
-            </div>
+          <article class="application-card tool-result-card" role="listitem" data-tool-card data-tool-search-text="{{ app.area }} {{ app.name }} {{ app.description }} {{ app.search_terms }}" hidden>
+            <div class="application-copy"><span class="application-area-label">Área {{ app.area }}</span><h2>{{ app.name }}</h2><p>{{ app.description }}</p></div>
+            <div class="application-action"><a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}>Ingresar <span aria-hidden="true">→</span></a></div>
           </article>
         {% endfor %}
-      </div>
+        </div>
+      </section>
+      <div class="tool-search-empty" data-tool-search-empty hidden>No hay herramientas que coincidan con la búsqueda.</div>
     </main>
 
     <footer class="portal-footer">
@@ -63,5 +69,6 @@
       <span>Acceso institucional</span>
     </footer>
   </div>
+  <script src="{% static 'js/portal.js' %}?v=20260815-2" defer></script>
 </body>
 </html>

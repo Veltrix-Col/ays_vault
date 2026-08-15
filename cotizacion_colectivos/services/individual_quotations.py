@@ -23,6 +23,14 @@ from ..quotation_forms.catalog import get_policy_branch_schema
 from ..quotation_forms.security import sign_policy_context
 
 
+def _normalized(value: object) -> str:
+    import unicodedata
+    return "".join(
+        character for character in unicodedata.normalize("NFKD", str(value or "").casefold())
+        if not unicodedata.combining(character)
+    )
+
+
 @dataclass(frozen=True)
 class AffiliateOption:
     key: str
@@ -114,11 +122,22 @@ def build_policy_context(*, policy_token, detail, members, affiliate_key, creato
         "branch_slug": schema.slug,
         "schema_version": schema.version,
         "creator_id": int(creator_id),
-        "policy_label": str(detail.masked_reference or "Póliza colectiva"),
+        "policy_label": str(
+            detail.full_reference or detail.masked_reference or "Póliza colectiva"
+        ),
         "branch_name": str(detail.branch_name),
         "affiliate_label": selected.label if selected else "Persona nueva",
         **values,
     }
+    fund_evidence = " ".join((
+        str(detail.holder or ""), str(detail.source_name or ""),
+        str(values.get("collective_context") or ""),
+    ))
+    normalized_fund = _normalized(fund_evidence)
+    payload["requires_declared_company"] = (
+        "fonconstruimos" in normalized_fund
+        or "fondo de empleados construimos suenos" in normalized_fund
+    )
     payload["locked_fields"] = tuple(key for key, value in values.items() if value)
     return schema, sign_policy_context(payload), payload
 
@@ -170,10 +189,13 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
 @transaction.atomic
 def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     files = validate_attachments(cleaned_data.get("attachments") or [])
+    captured_fields = {field.key: cleaned_data.get(field.key, "") for field in schema.fields}
+    if (context or {}).get("requires_declared_company"):
+        captured_fields["declared_company"] = cleaned_data.get("declared_company", "")
     public_payload = {
         "schema": schema.slug,
         "schema_version": schema.version,
-        "fields": {field.key: cleaned_data.get(field.key, "") for field in schema.fields},
+        "fields": captured_fields,
         "groups": cleaned_data["normalized_items"],
         "context": context or {},
     }

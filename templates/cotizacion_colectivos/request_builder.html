@@ -11,14 +11,14 @@
     <div class="builder-step"><span>1</span><div><h2>Seleccione las pólizas</h2><p>Solo aparecen pólizas colectivas clasificadas mediante la allowlist vigente.</p></div></div>
     <div class="policy-selector-grid">
       {% for option in policies %}<article class="policy-selector-card">
-        <label class="policy-selector-heading">{{ option.selector }}<span><strong>{{ option.policy.branch_name }}</strong><small>{{ option.policy.masked_reference }} · {{ option.policy.state }}</small></span></label>
+        <label class="policy-selector-heading">{{ option.selector }}<span><strong>{{ option.policy.branch_name }}</strong><small>{{ option.policy.full_reference|default:option.policy.masked_reference }} · {{ option.policy.state }}</small></span></label>
         <dl><div><dt>Aseguradora</dt><dd>{{ option.policy.insurer }}</dd></div><div><dt>Vigencia</dt><dd>{{ option.policy.start_date|default:"Sin inicio" }} – {{ option.policy.end_date|default:"Sin fin" }}</dd></div><div><dt>Relaciones</dt><dd>{{ option.policy.related_count }}</dd></div></dl>
         <fieldset><legend>Ajustes habilitados</legend>{{ option.adjustment_selector }}{% for error in option.adjustment_selector.errors %}<p class="field-error">{{ error }}</p>{% endfor %}</fieldset>
         {% for warning in option.policy.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}
       </article>{% empty %}<div class="empty-state"><h2>No hay pólizas colectivas disponibles</h2><p>Las pólizas ambiguas o sin parametrización no pueden incluirse.</p></div>{% endfor %}
     </div>
     {% if pending_branches %}<section class="relation-card relation-card--pending"><h2>Pólizas pendientes de parametrización</h2><p>No pueden seleccionarse hasta contar con clasificación segura.</p>{% for branch in pending_branches %}<p>{{ branch.name }}</p>{% endfor %}</section>{% endif %}
-    {% if unavailable_policies %}<section class="relation-card relation-card--pending"><h2>Otras pólizas no disponibles</h2>{% for unavailable in unavailable_policies %}<p><strong>{{ unavailable.0.masked_reference }}</strong> · {{ unavailable.1 }}</p>{% endfor %}</section>{% endif %}
+    {% if unavailable_policies %}<section class="relation-card relation-card--pending"><h2>Otras pólizas no disponibles</h2>{% for unavailable in unavailable_policies %}<p><strong>{{ unavailable.0.full_reference|default:unavailable.0.masked_reference }}</strong> · {{ unavailable.1 }}</p>{% endfor %}</section>{% endif %}
   </section>
   <aside class="builder-summary">
     <div class="builder-step"><span>2</span><div><h2>Resumen y generación</h2><p>El enlace y el correo se gestionan después de crear el snapshot.</p></div></div>

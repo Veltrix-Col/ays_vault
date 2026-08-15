@@ -17,6 +17,7 @@ from django.utils.crypto import salted_hmac
 
 from vault.crypto import decrypt, encrypt
 from vault.notifications import send_notification
+from .otp_email import build_otp_email
 from .mappings import (
     CONTACT_ID_TYPE_CHOICES,
     INSURED_STATE_CHOICES,
@@ -110,14 +111,8 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     selector = secrets.token_urlsafe(18)[:24]
     secret = secrets.token_urlsafe(32)
     next_version = (locked.external_accesses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
-    configured_expiry = timezone.make_aware(datetime.combine(
-        timezone.localdate() + timedelta(days=settings.COLECTIVOS_EXTERNAL_LINK_DAYS),
-        time.max,
-    ))
-    maximum_expiry = timezone.make_aware(datetime.combine(
-        timezone.localdate() + timedelta(days=settings.COLECTIVOS_EXTERNAL_LINK_MAX_DAYS),
-        time.max,
-    ))
+    configured_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
+    maximum_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS)
     deadline_expiry = timezone.make_aware(datetime.combine(locked.deadline, time.max))
     expires_at = min(configured_expiry, maximum_expiry, deadline_expiry)
     access = AccesoExternoSolicitudColectivo.objects.create(
@@ -133,6 +128,53 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     # notificación administrativa para el analista.
     token = f"{selector}.{secret}"
     return GeneratedAccess(access, token, f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/{token}/", regenerate)
+
+
+@transaction.atomic
+def update_access_recipient(*, access: AccesoExternoSolicitudColectivo, actor, recipient: str) -> bool:
+    """Persist an explicitly edited recipient on a reusable live access.
+
+    A pending OTP belongs to the previous recipient.  Changing the authorized
+    address therefore invalidates only that challenge (and a verified session),
+    so the next normal access issues a fresh OTP to the new address.
+    """
+    normalized = recipient.strip()
+    if not normalized:
+        raise ExternalAccessError("El acceso no tiene un correo autorizado.")
+    locked = AccesoExternoSolicitudColectivo.objects.select_for_update().select_related(
+        "request"
+    ).get(pk=access.pk)
+    next_hash = _recipient_hash(normalized)
+    if hmac.compare_digest(locked.recipient_hash or "", next_hash):
+        return False
+    locked.encrypted_recipient = encrypt(normalized)
+    locked.recipient_hash = next_hash
+    locked.otp_hash = ""
+    locked.otp_expires_at = None
+    locked.otp_attempts = 0
+    locked.otp_used_at = None
+    update_fields = (
+        "encrypted_recipient", "recipient_hash", "otp_hash",
+        "otp_expires_at", "otp_attempts", "otp_used_at",
+    )
+    if locked.status == locked.Status.VERIFIED:
+        locked.status = locked.Status.ACTIVE
+        update_fields = (*update_fields, "status")
+    locked.save(update_fields=update_fields)
+    EventoSolicitudColectivo.objects.create(
+        request=locked.request,
+        actor=actor,
+        event_type="EXTERNAL_ACCESS_RECIPIENT_UPDATED",
+        safe_metadata={"access_version": locked.version},
+    )
+    access.encrypted_recipient = locked.encrypted_recipient
+    access.recipient_hash = locked.recipient_hash
+    access.otp_hash = ""
+    access.otp_expires_at = None
+    access.otp_attempts = 0
+    access.otp_used_at = None
+    access.status = locked.status
+    return True
 
 
 @transaction.atomic
@@ -187,21 +229,30 @@ def resolve_token(token: str) -> AccesoExternoSolicitudColectivo:
     return access
 
 
-def issue_otp(access: AccesoExternoSolicitudColectivo) -> None:
+def issue_otp(access: AccesoExternoSolicitudColectivo) -> bool:
+    access.refresh_from_db(fields=("otp_hash", "otp_expires_at", "encrypted_recipient"))
+    now = timezone.now()
+    if access.otp_hash and access.otp_expires_at and access.otp_expires_at > now:
+        return False
+    recipient = decrypt(access.encrypted_recipient).strip()
+    if not recipient:
+        raise ExternalAccessError("El acceso no tiene un correo autorizado.")
     code = f"{secrets.randbelow(1_000_000):06d}"
     access.otp_hash = make_password(code)
-    access.otp_expires_at = timezone.now() + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS)
+    access.otp_expires_at = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS)
     access.otp_attempts = 0
     access.save(update_fields=("otp_hash", "otp_expires_at", "otp_attempts"))
-    recipient = decrypt(access.encrypted_recipient)
+    email = build_otp_email(code)
     send_notification(
         notification_type="COLECTIVOS_OTP", recipient=recipient,
-        subject=f"Código de acceso · {access.request.public_id}",
-        text_body=f"Su código de un solo uso es {code}. Expira pronto. A&S nunca le solicitará compartirlo.",
-        html_body=f"<p>Su código de un solo uso es <strong>{code}</strong>.</p><p>Expira pronto. No lo comparta.</p>",
+        subject=email.subject,
+        text_body=email.text_body,
+        html_body=email.html_body,
         idempotency_key=f"colectivos-otp:{access.pk}:{access.otp_expires_at.isoformat()}",
+        contains_one_time_code=True,
     )
     EventoSolicitudColectivo.objects.create(request=access.request, event_type="OTP_SENT", origin="EXTERNO")
+    return True
 
 
 @transaction.atomic
@@ -317,7 +368,9 @@ def verify_otp(access: AccesoExternoSolicitudColectivo, code: str) -> str:
             locked.last_access_at = now
             locked.access_count += 1
             locked.save(update_fields=("otp_used_at", "otp_hash", "status", "first_access_at", "last_access_at", "access_count"))
-            if locked.request.status == locked.request.Status.SENT:
+            if locked.request.status == locked.request.Status.READY:
+                locked.request.transition_to(locked.request.Status.SENT)
+            if locked.request.status in {locked.request.Status.SENT, locked.request.Status.CORRECTION}:
                 locked.request.transition_to(locked.request.Status.OPENED)
                 locked.request.save(update_fields=("status", "updated_at"))
             cookie_payload = {

@@ -195,10 +195,15 @@ class ColectivosViewTests(TestCase):
 
     def test_portal_contains_authorized_link_and_soat_remains(self):
         response = self.client.get(reverse("public_home"))
-        self.assertContains(response, "Novedades")
-        self.assertContains(response, "Invitaciones a Aseguradoras")
+        self.assertContains(response, "Colectivos")
         self.assertContains(response, reverse("cotizacion_colectivos:novelties_index"))
-        self.assertNotContains(response, "Solicitudes y Renovaciones")
+        self.assertContains(response, reverse("cotizacion_colectivos:individual_index"))
         self.assertContains(response, reverse("cotizacion_colectivos:invitations_index"))
+        self.assertNotContains(
+            response,
+            f'href="{reverse("cotizacion_colectivos:index")}"',
+            html=False,
+        )
+        self.assertNotContains(response, "Solicitudes y Renovaciones")
         self.assertNotContains(response, "Cotización – Colectivos")
-        self.assertContains(response, "Gestión SOAT")
+        self.assertContains(response, ">SOAT<", html=False)

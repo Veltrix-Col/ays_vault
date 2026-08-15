@@ -13,6 +13,7 @@ class FieldSchema:
     required: bool = True
     choices: tuple[str, ...] = ()
     help_text: str = ""
+    show_when: tuple[str, str] = ()
 
 
 @dataclass(frozen=True)
@@ -64,16 +65,35 @@ PERSON_FIELDS = (
     FieldSchema("plan_interest", "Plan o interés", required=False),
 )
 
+HEALTH_PERSON_FIELDS = (
+    FieldSchema("name", "Nombre"),
+    FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
+    FieldSchema("document", "Identificación", "document"),
+    FieldSchema("birth_date", "Fecha de nacimiento", "date"),
+    FieldSchema("gender", "Género", "choice", required=False, choices=GENDER_CHOICES),
+    FieldSchema("employment_relationship", "Vínculo con el fondo", "choice", choices=("Empleado", "Grupo familiar")),
+    FieldSchema("relationship", "Parentesco o relación"),
+    FieldSchema("currently_health_insured", "¿Tiene cobertura de salud vigente?", "choice", choices=("Sí", "No")),
+    FieldSchema("current_health_insurer", "Aseguradora actual", required=False, show_when=("currently_health_insured", "Sí")),
+    FieldSchema("current_health_policy_end", "Fin de la cobertura actual", "date", required=False, show_when=("currently_health_insured", "Sí")),
+    FieldSchema("plan_interest", "Plan o interés", required=False),
+)
+
 VEHICLE_FIELDS = (
+    FieldSchema("zero_km", "¿Vehículo 0 km?", "choice", choices=("Sí", "No")),
     FieldSchema(
         "plate", "Placa", required=False,
-        help_text="Opcional para vehículos nuevos o 0 km que todavía no tienen placa.",
+        help_text="No se solicita cuando el vehículo es 0 km.",
+        show_when=("zero_km", "No"),
     ),
     FieldSchema("brand", "Marca", required=False),
     FieldSchema("line", "Línea o referencia", required=False),
+    FieldSchema("displacement", "Cilindraje", required=False),
     FieldSchema("model", "Modelo"),
     FieldSchema("city", "Ciudad", required=False),
     FieldSchema("use", "Uso", required=False),
+    FieldSchema("armored", "¿Vehículo blindado?", "choice", required=False, choices=("Sí", "No")),
+    FieldSchema("currently_insured", "¿Actualmente asegurado?", "choice", required=False, choices=("Sí", "No")),
     FieldSchema("insured_name", "Nombre del asegurado"),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),
@@ -94,8 +114,9 @@ BRANCH_SCHEMAS = (
         "Registre al afiliado principal y las personas de su grupo familiar.",
         "M12 21s-7-4.4-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.6-7 10-7 10z",
         REQUESTER_FIELDS,
-        (RepeatableSchema("people", "persona", "Personas", "Agregar persona", PERSON_FIELDS),),
+        (RepeatableSchema("people", "persona", "Personas", "Agregar persona", HEALTH_PERSON_FIELDS),),
         ("Otros soportes solicitados por A&S",),
+        version=2,
     ),
     BranchSchema(
         "VIDA", "vida", "Vida",
@@ -103,7 +124,7 @@ BRANCH_SCHEMAS = (
         "M12 21s-7-4.4-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.6-7 10-7 10z",
         REQUESTER_FIELDS,
         (RepeatableSchema("people", "asegurado", "Asegurados", "Agregar asegurado", PERSON_FIELDS + (FieldSchema("economic_activity", "Actividad económica", required=False),)),),
-        ("Declaración de asegurabilidad, cuando aplique", "Otros soportes"),
+        ("Otros soportes para cotización",),
     ),
     BranchSchema(
         "EXEQUIAL", "exequial", "Exequial",

@@ -1,11 +1,11 @@
-# Flujo externo directo de Colectivos
+# Flujo externo protegido de Colectivos
 
 ## Contrato funcional
 
-El enlace se genera en el Workspace de una póliza confirmada y se muestra en
-la misma respuesta, con acciones **Copiar**, **Abrir**, **Generar otro** y
-**Revocar**. Compartirlo por correo u otro canal ocurre fuera de la plataforma.
-No existe OTP, login ni pantalla intermedia para el cliente.
+El enlace se genera en el Workspace de una póliza confirmada para un correo
+destinatario editable. Se muestra en la misma respuesta, con acciones **Copiar**,
+**Abrir**, **Generar otro** y **Revocar**. El token no concede acceso directo:
+primero se emite y verifica un OTP enviado al destinatario registrado.
 
 El cliente revisa la información del snapshot local, confirma o escribe
 observaciones y finaliza. La respuesta crea una notificación
@@ -18,8 +18,10 @@ base conserva avisos administrativos históricos.
 - El secreto del enlace es aleatorio; solo se persiste su hash SHA-256 y se
   compara en tiempo constante.
 - El acceso se vincula a una estructura local y a su snapshot cifrado.
-- Las sesiones externas son firmadas, `HttpOnly`, `SameSite=Lax` y limitadas a
-  la ruta del portal.
+- El OTP se almacena sólo como hash, vence, limita intentos y no se reenvía
+  mientras exista otro vigente.
+- Tras verificarlo, la sesión externa es firmada, `HttpOnly`, `SameSite=Lax` y
+  limitada al acceso y a la ruta del portal.
 - Los POST conservan CSRF; las respuestas usan `no-store`.
 - Un enlace revocado responde 410 y el reemplazo tiene un secreto distinto.
 - No se registran tokens, documentos, nombres, cuerpos ni IDs de Zoho.
@@ -36,9 +38,10 @@ vigente.
 Configuración relacionada:
 
 ```env
-COLECTIVOS_EXTERNAL_LINK_DAYS=15
-COLECTIVOS_EXTERNAL_LINK_MAX_DAYS=30
+COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800
+COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=604800
+COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS=600
+COLECTIVOS_EXTERNAL_OTP_MAX_ATTEMPTS=5
 COLECTIVOS_GROUP_PAGE_SIZE=200
 COLECTIVOS_GROUP_MAX_RECORDS=10000
 ```
-

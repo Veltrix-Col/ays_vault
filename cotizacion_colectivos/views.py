@@ -5,6 +5,7 @@ import json
 import time
 import unicodedata
 import uuid
+from urllib.parse import quote
 from dataclasses import asdict
 from datetime import datetime, timedelta
 
@@ -30,7 +31,7 @@ from .permissions import has_internal_permission, permission_denied_response
 from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
 from .dto import ClientSearchResult, RequestPolicyOption
 from .services.requests import create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
-from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation
+from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation, update_access_recipient
 from .services.excel_roundtrip import (
     build_approved_consolidated,
     build_comparison,
@@ -52,18 +53,47 @@ from vault.notifications import mask_email
 from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
-from .modes import INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
+from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
+from .service_catalog import branch_workspaces
 from .quotation_forms.catalog import get_branch_schema
 from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
     affiliate_options,
     build_policy_context,
 )
-from .models import CotizacionIndividual, NotificacionCotizacionIndividual
+from .services.individual_access import generate_individual_access
+from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+RESPONSE_FIELD_LABELS = {
+    "tipo_id": "Tipo de identificación",
+    "documento": "Número de identificación",
+    "nombre": "Nombre completo",
+    "rol": "Rol",
+    "plan": "Plan",
+    "parentesco": "Parentesco",
+    "fecha_nacimiento": "Fecha de nacimiento",
+    "fecha_efectiva": "Fecha efectiva",
+    "fecha_ingreso": "Fecha de ingreso",
+    "fecha_retiro": "Fecha de retiro",
+    "motivo": "Motivo",
+    "observaciones": "Observaciones",
+    "ciudad": "Ciudad",
+    "direccion": "Dirección",
+    "tipo_uso": "Tipo de uso",
+    "anio_construccion": "Año de construcción",
+    "descripcion": "Descripción",
+    "valor_asegurado": "Valor asegurado",
+    "vehiculo": "Vehículo",
+    "placa": "Placa",
+    "marca": "Marca",
+    "modelo": "Modelo",
+    "estado": "Estado",
+}
 
 
 def _environment_context(request=None, mode=None):
@@ -84,7 +114,7 @@ def _error_status(exc):
 @never_cache
 @require_http_methods(["GET"])
 def index(request, mode=None):
-    tool_mode = resolve_tool_mode(request, mode)
+    tool_mode = resolve_tool_mode(request, mode or HUB_MODE)
     return render(request, "cotizacion_colectivos/index.html", {
         "form": ClientSearchForm(),
         "colectivos_mode": tool_mode,
@@ -133,7 +163,7 @@ def individual_quotation_confirmation(request, token):
 @require_http_methods(["GET", "POST"])
 def client_search(request, mode=None):
     environment = get_colectivos_environment()
-    tool_mode = resolve_tool_mode(request, mode)
+    tool_mode = resolve_tool_mode(request, mode or HUB_MODE)
     form = ClientSearchForm(request.POST or None)
     results, error, status = None, "", 200
     if request.method == "POST" and form.is_valid():
@@ -178,7 +208,7 @@ def client_search(request, mode=None):
 @never_cache
 @require_http_methods(["GET"])
 def client_detail(request, entity_kind, token, mode=None):
-    resolve_tool_mode(request, mode)
+    resolve_tool_mode(request, mode or HUB_MODE)
     if entity_kind == "company":
         return _detail(request, token, method="company", entity_kind="company")
     if entity_kind == "person":
@@ -339,6 +369,10 @@ def _render_client_detail(request, *, detail, token, entity_kind, environment=No
         ),
         "zoho_environment": environment,
         "colectivos_mode": mode,
+        "branch_workspaces": branch_workspaces(
+            detail.branches,
+            service_code=mode.code if mode.code != HUB_MODE else None,
+        ),
         **extra,
     })
 
@@ -820,12 +854,20 @@ def policy_individual_access(request, token):
         options = affiliate_options(members)
         affiliate_key = str(request.POST.get("affiliate_key") or "")
         actor = get_internal_actor(request, create=True)
-        schema, context_token, _payload = build_policy_context(
+        email_form = OptionalAccessEmailForm({"recipient": request.POST.get("recipient", "")})
+        if not email_form.is_valid():
+            raise ValidationError("Debe indicar un correo válido para proteger el acceso con OTP.")
+        schema, _context_token, payload = build_policy_context(
             policy_token=token,
             detail=detail,
             members=members,
             affiliate_key=affiliate_key,
             creator_id=actor.pk,
+        )
+        generated = generate_individual_access(
+            context=payload,
+            actor=actor,
+            recipient=email_form.cleaned_data["recipient"],
         )
     except (ColectivosServiceError, ValidationError, Http404) as exc:
         if isinstance(exc, ColectivosServiceError) and exc.code in {"invalid_record", "not_found"}:
@@ -847,7 +889,7 @@ def policy_individual_access(request, token):
             **_environment_context(request, INDIVIDUAL_MODE),
         }, status=400)
     external_url = request.build_absolute_uri(reverse(
-        "colectivos_external:individual_quotation", args=[context_token],
+        "colectivos_external:individual_quotation", args=[generated.token],
     ))
     logger.info(
         "colectivos_individual application=cotizacion_colectivos operation=generate_link "
@@ -901,6 +943,13 @@ def policy_generate_access(request, token, request_type=None):
     if request_type not in {SolicitudColectivo.RequestType.UPDATE, SolicitudColectivo.RequestType.RENEWAL}:
         raise Http404("Tipo de solicitud no válido")
     force_new = request.POST.get("force_new") == "1"
+    email_form = OptionalAccessEmailForm({"recipient": request.POST.get("recipient", "")})
+    if not email_form.is_valid():
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": "Debe indicar un correo válido para proteger el acceso con OTP.",
+            **_environment_context(),
+        }, status=400)
+    recipient = email_form.cleaned_data["recipient"]
     total_started = time.monotonic()
     correlation = uuid.uuid4().hex
     service = None
@@ -933,6 +982,7 @@ def policy_generate_access(request, token, request_type=None):
             expires_at__gt=timezone.now(),
         ).order_by("-created_at").first()
         if live_access is not None and not force_new:
+            update_access_recipient(access=live_access, actor=actor, recipient=recipient)
             return _render_existing_policy_access(
                 request, item=item, access=live_access, policy_token=token,
                 request_type=request_type, service=service, detail=detail,
@@ -944,6 +994,7 @@ def policy_generate_access(request, token, request_type=None):
             generated = generate_access(
                 request=item,
                 actor=actor,
+                recipient=recipient,
                 regenerate=regenerate,
             )
         except ActiveAccessExistsError:
@@ -956,6 +1007,7 @@ def policy_generate_access(request, token, request_type=None):
             ).order_by("-created_at").first()
             if live_access is None:
                 raise
+            update_access_recipient(access=live_access, actor=actor, recipient=recipient)
             return _render_existing_policy_access(
                 request, item=item, access=live_access, policy_token=token,
                 request_type=request_type, service=service, detail=detail,
@@ -1011,6 +1063,7 @@ def policy_generate_access(request, token, request_type=None):
             "generated_item": item,
             "generated_created": created,
             "generated_regenerated": regenerate,
+            "generated_recipient": recipient,
         },
     )
 
@@ -1119,6 +1172,12 @@ def policy_invitation_preview(request, token):
         "has_generable": any(item.status in {"ready", "ready_manual"} for item in previews),
         "preparation_metadata": metadata,
         "colectivos_mode": tool_mode,
+        "mailto_url": "mailto:?subject=" + quote(
+            f"Invitación a cotizar · {detail.branch_name}", safe="",
+        ) + "&body=" + quote(
+            "Agradecemos revisar la invitación a cotizar. Descargue los formatos desde el Banco de Herramientas y adjúntelos manualmente antes de enviar este correo.",
+            safe="",
+        ),
         **_environment_context(),
     })
 
@@ -1129,7 +1188,9 @@ def policy_invitation_download(request, token):
     if not has_internal_permission(request, "export_excel"):
         return permission_denied_response()
     try:
-        content, filename, content_type, errors = generate_invitation_templates(token)
+        content, filename, content_type, errors = generate_invitation_templates(
+            token, template_code=str(request.POST.get("template_code") or ""),
+        )
     except ColectivosServiceError as exc:
         if exc.code in {"invalid_record", "not_found"}:
             raise Http404("Póliza no encontrada") from exc
@@ -1207,7 +1268,14 @@ def request_list(request):
     if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     form = RequestFilterForm(request.GET, public_access=public_internal_access_enabled())
-    queryset = SolicitudColectivo.objects.select_related("assigned_to").prefetch_related("policies").annotate(
+    queryset = SolicitudColectivo.objects.select_related("assigned_to").prefetch_related(
+        "policies",
+        Prefetch(
+            "external_accesses",
+            queryset=AccesoExternoSolicitudColectivo.objects.order_by("-created_at", "-pk"),
+            to_attr="ordered_accesses",
+        ),
+    ).annotate(
         policy_count=Count("policies", distinct=True),
         active_access_count=Count(
             "external_accesses",
@@ -1225,10 +1293,26 @@ def request_list(request):
         data = form.cleaned_data
         if data["query"]:
             term = data["query"].strip()
+            protected_matches = []
+            normalized_term = _normalized_choice(term)
+            if normalized_term:
+                for candidate in SolicitudColectivo.objects.only(
+                    "pk", "encrypted_snapshot", "snapshot_version",
+                ).iterator(chunk_size=200):
+                    try:
+                        searchable = json.dumps(
+                            request_snapshot(candidate), ensure_ascii=False, sort_keys=True,
+                        )
+                    except ValidationError:
+                        continue
+                    if normalized_term in _normalized_choice(searchable):
+                        protected_matches.append(candidate.pk)
             queryset = queryset.filter(
                 Q(public_id__icontains=term)
                 | Q(client_label__icontains=term)
                 | Q(masked_policy_reference__icontains=term)
+                | Q(branch_name__icontains=term)
+                | Q(pk__in=protected_matches)
             )
         if data["status"]:
             queryset = queryset.filter(status=data["status"])
@@ -1253,14 +1337,227 @@ def request_list(request):
         if data["warning"]:
             queryset = queryset.exclude(warnings=[])
     queryset = queryset.order_by("-updated_at", "-created_at", "-pk")
-    page = Paginator(queryset, 25).get_page(request.GET.get("page"))
+    actor = get_internal_actor(request, create=False)
+    unread_request_ids = set()
+    if actor is not None and has_internal_permission(request, "manage_notifications"):
+        unread_request_ids = set(
+            NotificacionColectivos.objects.filter(
+                user=actor, read_at__isnull=True, notification_type="CLIENT_RESPONSE",
+            ).values_list("request_id", flat=True)
+        )
+    operational_entries = []
+    for item in queryset:
+        _attach_request_operational_context(item)
+        item.has_unread_response = item.pk in unread_request_ids
+        item.inbox_kind = "request"
+        item.inbox_policy_reference = item.primary_policy_reference
+        item.inbox_branch_name = item.primary_branch_name
+        item.inbox_client_label = item.client_label
+        item.inbox_type_label = item.get_request_type_display()
+        item.inbox_person_label = ""
+        item.inbox_public_id = item.public_id
+        item.inbox_last_activity = item.updated_at
+        item.inbox_deadline = item.deadline
+        item.inbox_status_label = item.get_status_display()
+        item.inbox_status_tone = item.status_tone
+        item.inbox_requires_attention = item.status == SolicitudColectivo.Status.ANSWERED
+        item.inbox_access_summary = item.current_access_status
+        item.inbox_access_opened = item.current_access_opened
+        item.inbox_otp_verified = item.current_access_otp_verified
+        item.inbox_detail_url = reverse(
+            "cotizacion_colectivos:request_detail", args=[item.public_id],
+        )
+        operational_entries.append(item)
+
+    individual_entries = []
+    if actor is not None and has_internal_permission(request, "view_individual_quotation"):
+        unread_quotation_ids = set(
+            NotificacionCotizacionIndividual.objects.filter(
+                user=actor, read_at__isnull=True,
+            ).values_list("quotation_id", flat=True)
+        )
+        accesses = AccesoCotizacionIndividual.objects.filter(created_by=actor).select_related(
+            "quotation"
+        ).prefetch_related("quotation__task_outbox").order_by("-created_at", "-pk")
+        for access in accesses:
+            try:
+                context = json.loads(decrypt(access.encrypted_context))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                context = {}
+            quotation = access.quotation
+            branch_code = quotation.branch_code if quotation else ""
+            branch_name = (
+                context.get("branch_name") or access.safe_metadata.get("branch") or "Ramo"
+            )
+            if quotation:
+                status_code = SolicitudColectivo.Status.ANSWERED
+                status_label = "Respondido"
+            elif access.status == access.Status.EXPIRED:
+                status_code, status_label = SolicitudColectivo.Status.EXPIRED, "Vencido"
+            elif access.status == access.Status.REVOKED:
+                status_code, status_label = SolicitudColectivo.Status.CANCELLED, "Revocado"
+            elif access.first_access_at or access.status == access.Status.VERIFIED:
+                status_code, status_label = SolicitudColectivo.Status.OPENED, "Abierto por cliente"
+            else:
+                status_code, status_label = SolicitudColectivo.Status.SENT, "Enlace activo"
+
+            data = form.cleaned_data if form.is_valid() else {}
+            searchable = " ".join(str(value or "") for value in (
+                context.get("policy_label"), branch_code, branch_name,
+                context.get("collective_context"), context.get("affiliate_label"),
+                context.get("requester_name"), str(quotation.public_id) if quotation else "",
+            ))
+            if data.get("query") and _normalized_choice(data["query"]) not in _normalized_choice(searchable):
+                continue
+            if data.get("status") and data["status"] != status_code:
+                continue
+            if data.get("source_kind") and data["source_kind"] != context.get("source_kind"):
+                continue
+            if data.get("branch") and _normalized_choice(data["branch"]) not in _normalized_choice(
+                " ".join((branch_code, branch_name, str(access.safe_metadata.get("branch") or "")))
+            ):
+                continue
+            if data.get("request_type") and data["request_type"] != SolicitudColectivo.RequestType.QUOTE:
+                continue
+            if data.get("assigned_to") and data["assigned_to"].pk != access.created_by_id:
+                continue
+            if data.get("created_from") and access.created_at.date() < data["created_from"]:
+                continue
+            if data.get("created_to") and access.created_at.date() > data["created_to"]:
+                continue
+            if data.get("deadline_from") and access.expires_at.date() < data["deadline_from"]:
+                continue
+            if data.get("deadline_to") and access.expires_at.date() > data["deadline_to"]:
+                continue
+            if data.get("assigned_to_me") and access.created_by_id != request.user.pk:
+                continue
+            if data.get("warning"):
+                continue
+
+            outboxes = tuple(quotation.task_outbox.all()) if quotation else ()
+            latest_outbox = max(outboxes, key=lambda row: (row.updated_at, row.pk)) if outboxes else None
+            requires_attention = bool(quotation) and (
+                latest_outbox is None
+                or latest_outbox.status != ColectivosTaskOutbox.Status.PUBLISHED
+            )
+            activity_candidates = tuple(value for value in (
+                quotation.submitted_at if quotation else None,
+                latest_outbox.updated_at if latest_outbox else None,
+                access.last_access_at,
+                access.otp_used_at,
+                access.first_access_at,
+                access.created_at,
+            ) if value is not None)
+            access.inbox_kind = "individual"
+            access.inbox_policy_reference = context.get("policy_label") or "Póliza colectiva"
+            access.inbox_branch_name = branch_name
+            access.inbox_client_label = context.get("collective_context") or "Cliente sin etiqueta"
+            access.inbox_type_label = "Cotización Individual"
+            access.inbox_person_label = context.get("affiliate_label") or "Persona nueva"
+            access.inbox_public_id = str(quotation.public_id) if quotation else ""
+            access.inbox_last_activity = max(activity_candidates)
+            access.inbox_deadline = access.expires_at
+            access.inbox_status_label = status_label
+            access.inbox_status_tone = (
+                "attention" if requires_attention else
+                "success" if latest_outbox and latest_outbox.status == ColectivosTaskOutbox.Status.PUBLISHED else
+                "opened" if status_code == SolicitudColectivo.Status.OPENED else
+                "muted" if status_code in {SolicitudColectivo.Status.EXPIRED, SolicitudColectivo.Status.CANCELLED} else
+                "neutral"
+            )
+            access.inbox_requires_attention = requires_attention
+            access.inbox_access_summary = access.get_status_display()
+            access.inbox_access_opened = bool(access.first_access_at)
+            access.inbox_otp_verified = bool(access.otp_used_at)
+            access.has_unread_response = bool(quotation and quotation.pk in unread_quotation_ids)
+            access.inbox_detail_url = reverse(
+                "cotizacion_colectivos:individual_expedient",
+                args=[sign_receipt(quotation.public_id)],
+            ) if quotation else ""
+            individual_entries.append(access)
+            operational_entries.append(access)
+
+    operational_entries.sort(key=lambda item: (
+        0 if item.inbox_requires_attention else 1,
+        -item.inbox_last_activity.timestamp(),
+        item.inbox_kind,
+        -item.pk,
+    ))
+    page = Paginator(operational_entries, 25).get_page(request.GET.get("page"))
     query = request.GET.copy()
     query.pop("page", None)
     return render(
         request,
         "cotizacion_colectivos/request_list.html",
-        {"form": form, "page": page, "filter_query": query.urlencode(), **_environment_context()},
+        {
+            "form": form,
+            "page": page,
+            "filter_query": query.urlencode(),
+            "unread_count": len(unread_request_ids) + sum(
+                1 for item in individual_entries if item.has_unread_response
+            ),
+            "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
+            **_environment_context(),
+        },
     )
+
+
+def _snapshot_policy_rows(snapshot):
+    snapshots = snapshot.get("policies") if isinstance(snapshot, dict) else None
+    if not isinstance(snapshots, list):
+        snapshots = [snapshot]
+    rows = []
+    for value in snapshots:
+        policy = value.get("policy", {}) if isinstance(value, dict) else {}
+        if isinstance(policy, dict):
+            rows.append(policy)
+    return tuple(rows)
+
+
+def _attach_request_operational_context(item):
+    try:
+        snapshot = request_snapshot(item)
+    except ValidationError:
+        snapshot = {}
+    snapshot_policies = _snapshot_policy_rows(snapshot)
+    persisted_policies = list(item.policies.all())
+    operational_policies = []
+    for index, policy in enumerate(persisted_policies):
+        protected = snapshot_policies[index] if index < len(snapshot_policies) else {}
+        operational_policies.append({
+            "reference": protected.get("reference") or policy.masked_policy_reference,
+            "branch_name": protected.get("branch_name") or policy.branch_name,
+            "insurer": policy.insurer,
+            "status": policy.policy_status,
+            "record_count": policy.record_count,
+        })
+    if not operational_policies:
+        protected = snapshot_policies[0] if snapshot_policies else {}
+        operational_policies.append({
+            "reference": protected.get("reference") or item.masked_policy_reference,
+            "branch_name": protected.get("branch_name") or item.branch_name,
+            "insurer": protected.get("insurer") or "",
+            "status": protected.get("state") or "",
+            "record_count": item.record_count,
+        })
+    item.operational_policies = tuple(operational_policies)
+    item.primary_policy_reference = operational_policies[0]["reference"]
+    item.primary_branch_name = operational_policies[0]["branch_name"]
+    access = item.ordered_accesses[0] if getattr(item, "ordered_accesses", ()) else None
+    item.current_access_status = _access_status_display(access)
+    item.current_access_opened = bool(access and access.first_access_at)
+    item.current_access_otp_verified = bool(access and access.otp_used_at)
+    item.status_tone = {
+        item.Status.ANSWERED: "attention",
+        item.Status.REVIEW: "attention",
+        item.Status.OPENED: "opened",
+        item.Status.CORRECTION: "warning",
+        item.Status.EXPIRED: "muted",
+        item.Status.CANCELLED: "muted",
+        item.Status.PENDING_ZOHO: "warning",
+        item.Status.LOADED_ZOHO: "success",
+        item.Status.CLOSED: "success",
+    }.get(item.status, "neutral")
 
 
 @never_cache
@@ -1275,7 +1572,16 @@ def request_detail(request, public_id):
                 queryset=SolicitudColectivoPoliza.objects.annotate(
                     change_count=Count("changes", distinct=True)
                 ).prefetch_related("records"),
-            )
+            ),
+            Prefetch(
+                "responses",
+                queryset=RespuestaSolicitudColectivo.objects.prefetch_related(
+                    "changes__policy", "changes__original_record", "attachments",
+                ).order_by("-version"),
+                to_attr="ordered_responses",
+            ),
+            "events",
+            "task_outbox",
         ),
         public_id=public_id,
     )
@@ -1283,6 +1589,10 @@ def request_detail(request, public_id):
         snapshot = request_snapshot(item)
     except ValidationError:
         snapshot = None
+    _attach_request_operational_context(item)
+    for index, policy in enumerate(item.policies.all()):
+        if index < len(item.operational_policies):
+            policy.operational_reference = item.operational_policies[index]["reference"]
     try:
         notes = decrypt(item.encrypted_internal_notes) if item.encrypted_internal_notes else ""
     except ValueError:
@@ -1312,6 +1622,61 @@ def request_detail(request, public_id):
         policy_token = candidate
     except (ValueError, ColectivosServiceError):
         pass
+    can_view_responses = has_internal_permission(request, "view_responses")
+    latest_response = next((
+        response for response in getattr(item, "ordered_responses", ())
+        if response.status in {
+            RespuestaSolicitudColectivo.Status.SUBMITTED,
+            RespuestaSolicitudColectivo.Status.APPROVED,
+        }
+    ), None)
+    response_summary = None
+    if latest_response is not None and can_view_responses:
+        try:
+            observations = (
+                decrypt(latest_response.encrypted_client_observations)
+                if latest_response.encrypted_client_observations else ""
+            )
+        except ValueError:
+            observations = ""
+        fields = []
+        for change in latest_response.changes.all():
+            try:
+                value = decrypt(change.encrypted_new_value) if change.encrypted_new_value else ""
+            except ValueError:
+                value = "Información no disponible"
+            fields.append({
+                "label": RESPONSE_FIELD_LABELS.get(
+                    change.functional_field,
+                    change.functional_field.replace("_", " ").strip().capitalize() or "Información",
+                ),
+                "value": value or "Sin dato",
+                "action": change.get_action_display(),
+                "record": (
+                    f"Registro {change.original_record.original_position}"
+                    if change.original_record_id else "Inclusión"
+                ),
+            })
+        response_summary = {
+            "item": latest_response,
+            "fields": tuple(fields),
+            "observations": observations,
+            "attachment_count": latest_response.attachments.count(),
+        }
+    latest_outbox = item.task_outbox.order_by("-updated_at", "-pk").first()
+    zoho_summary = {
+        "status": latest_outbox.get_status_display() if latest_outbox else "No preparada",
+        "last_attempt": latest_outbox.updated_at if latest_outbox and latest_outbox.attempts else None,
+        "attempts": latest_outbox.attempts if latest_outbox else 0,
+        "safe_error": latest_outbox.safe_error_code if latest_outbox else "",
+        "task_id": "",
+        "contract_ready": False,
+    }
+    if latest_outbox and latest_outbox.status == latest_outbox.Status.PUBLISHED and latest_outbox.encrypted_remote_id:
+        try:
+            zoho_summary["task_id"] = decrypt(latest_outbox.encrypted_remote_id)
+        except ValueError:
+            zoho_summary["task_id"] = "No disponible"
     return render(request, "cotizacion_colectivos/request_detail.html", {
         "item": item, "snapshot": snapshot, "transition_form": RequestTransitionForm(), "edit_form": edit_form,
         "snapshot_form": SnapshotRegenerateForm(), "access_summary": access_summary, "policy_token": policy_token,
@@ -1321,7 +1686,11 @@ def request_detail(request, public_id):
         "can_regenerate_access": has_internal_permission(request, "regenerate_external_access"),
         "can_revoke_access": has_internal_permission(request, "revoke_external_access"),
         "can_send_requests": has_internal_permission(request, "send_requests"),
-        "can_approve": has_internal_permission(request, "approve_requests"), **_environment_context(),
+        "can_approve": has_internal_permission(request, "approve_requests"),
+        "can_view_responses": can_view_responses,
+        "response_summary": response_summary,
+        "zoho_summary": zoho_summary,
+        **_environment_context(),
     })
 
 
@@ -1372,6 +1741,7 @@ def request_regenerate_snapshot(request, public_id):
 @require_http_methods(["GET", "POST"])
 def request_external_access(request, public_id, regenerate=False):
     item = get_object_or_404(SolicitudColectivo.objects.select_related("assigned_to"), public_id=public_id)
+    _attach_request_operational_context(item)
     permission = "regenerate_external_access" if regenerate else "generate_external_access"
     if not has_internal_permission(request, permission):
         return permission_denied_response()
@@ -1495,6 +1865,7 @@ def request_novelties_template(request, public_id):
 @require_http_methods(["GET", "POST"])
 def response_review(request, public_id, version):
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
+    _attach_request_operational_context(item)
     response = get_object_or_404(
         RespuestaSolicitudColectivo.objects.prefetch_related(
             Prefetch(
@@ -1508,6 +1879,15 @@ def response_review(request, public_id, version):
     )
     if not has_internal_permission(request, "review_responses"):
         return permission_denied_response()
+    policy_references = {
+        policy.pk: row["reference"]
+        for policy, row in zip(item.policies.all(), item.operational_policies)
+    }
+    for change in response.changes.all():
+        if change.policy_id:
+            change.policy.operational_reference = policy_references.get(
+                change.policy_id, change.policy.masked_policy_reference,
+            )
     error = ""
     if request.method == "POST":
         decisions = {}
@@ -1615,28 +1995,7 @@ def request_transition(request, public_id):
 def notification_list(request):
     if not has_internal_permission(request, "manage_notifications"):
         return permission_denied_response()
-    actor = get_internal_actor(request, create=False)
-    queryset = (
-        NotificacionColectivos.objects.none()
-        if actor is None
-        else NotificacionColectivos.objects.filter(
-            user=actor, notification_type="CLIENT_RESPONSE",
-        ).select_related("request")
-    )
-    queryset = queryset.order_by("-created_at", "-pk")
-    page = Paginator(queryset, 25).get_page(request.GET.get("page"))
-    individual_notifications = (
-        NotificacionCotizacionIndividual.objects.none()
-        if actor is None
-        else NotificacionCotizacionIndividual.objects.filter(user=actor)
-        .select_related("quotation")
-        .order_by("-created_at", "-pk")[:25]
-    )
-    return render(request, "cotizacion_colectivos/notifications.html", {
-        "page": page,
-        "individual_notifications": individual_notifications,
-        **_environment_context(),
-    })
+    return redirect("cotizacion_colectivos:request_list")
 
 
 @never_cache
@@ -1671,7 +2030,7 @@ def notification_read(request, notification_id):
                 public_id=item.request.public_id,
                 version=response.version,
             )
-    return redirect("cotizacion_colectivos:notification_list")
+    return redirect("cotizacion_colectivos:request_list")
 
 
 @never_cache
@@ -1688,26 +2047,27 @@ def individual_notification_read(request, notification_id):
         item.read_at = timezone.now()
         item.save(update_fields=("read_at",))
     return redirect(
-        "cotizacion_colectivos:individual_quotation_detail",
+        "cotizacion_colectivos:individual_expedient",
         token=sign_receipt(item.quotation.public_id),
     )
 
 
 @never_cache
 @require_http_methods(["GET"])
-def individual_quotation_detail(request, token):
+def individual_expedient(request, token):
     if not has_internal_permission(request, "view_individual_quotation"):
         return permission_denied_response()
     try:
         public_id = unsign_receipt(token)
-        quotation = CotizacionIndividual.objects.prefetch_related("attachments").get(
-            public_id=public_id,
-        )
+        quotation = CotizacionIndividual.objects.select_related(
+            "external_access"
+        ).prefetch_related("attachments", "task_outbox", "notifications").get(public_id=public_id)
         payload = json.loads(decrypt(quotation.encrypted_payload))
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError) as exc:
         raise Http404("Respuesta no encontrada") from exc
     schema = get_branch_schema(quotation.branch_slug)
     field_labels = {item.key: item.label for item in schema.fields}
+    field_labels["declared_company"] = "Empresa a la cual pertenece"
     group_schemas = {item.key: item for item in schema.repeatables}
     display_fields = tuple(
         (field_labels.get(key, "Información"), value)
@@ -1727,14 +2087,54 @@ def individual_quotation_detail(request, token):
                 for row in rows
             ),
         })
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    access = quotation.external_access
+    try:
+        recipient = decrypt(access.encrypted_recipient)
+    except (TypeError, ValueError):
+        recipient = "No disponible"
+    outboxes = tuple(quotation.task_outbox.all())
+    latest_outbox = max(outboxes, key=lambda row: (row.updated_at, row.pk)) if outboxes else None
+    remote_task_id = ""
+    if latest_outbox and latest_outbox.encrypted_remote_id:
+        try:
+            remote_task_id = decrypt(latest_outbox.encrypted_remote_id)
+        except (TypeError, ValueError):
+            remote_task_id = ""
+    history = [
+        {"label": "Enlace generado", "at": access.created_at},
+        *([{"label": "Enlace abierto", "at": access.first_access_at}] if access.first_access_at else []),
+        *([{"label": "OTP verificado", "at": access.otp_used_at}] if access.otp_used_at else []),
+        {"label": "Respuesta recibida", "at": quotation.submitted_at},
+    ]
+    if latest_outbox:
+        history.append({
+            "label": f"Zoho Task: {latest_outbox.get_status_display()}",
+            "at": latest_outbox.updated_at,
+        })
+    history.sort(key=lambda row: row["at"], reverse=True)
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
+        "access": access,
+        "individual_context": context,
+        "recipient": recipient,
+        "declared_company": payload.get("fields", {}).get("declared_company", ""),
         "display_fields": display_fields,
         "display_groups": tuple(display_groups),
+        "latest_outbox": latest_outbox,
+        "remote_task_id": remote_task_id,
+        "history": tuple(history),
         "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["GET"])
+def individual_quotation_detail(request, token):
+    """Compatibility route; the operational expediente is the sole UI."""
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
 @never_cache
@@ -1743,6 +2143,7 @@ def response_detail(request, public_id, version):
     if not has_internal_permission(request, "view_responses"):
         return permission_denied_response()
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
+    _attach_request_operational_context(item)
     response = get_object_or_404(
         RespuestaSolicitudColectivo.objects.prefetch_related("changes"),
         request=item,
@@ -1776,4 +2177,4 @@ def notifications_read_all(request):
         user=get_internal_actor(request, create=True),
         read_at__isnull=True,
     ).update(read_at=timezone.now())
-    return redirect("cotizacion_colectivos:notification_list")
+    return redirect("cotizacion_colectivos:request_list")

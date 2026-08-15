@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -14,12 +15,15 @@ from vault.crypto import decrypt
 
 from cotizacion_colectivos.dto import ContactSummary, GroupMember, PolicyDetail
 from cotizacion_colectivos.models import (
+    AccesoCotizacionIndividual,
     AdjuntoCotizacionIndividual,
     CotizacionIndividual,
     NotificacionCotizacionIndividual,
 )
 from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema
-from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt
+from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
+from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
+from cotizacion_colectivos.services.individual_access import generate_individual_access, issue_individual_otp
 from cotizacion_colectivos.services.individual_quotations import build_policy_context
 from cotizacion_colectivos.services.common import sign_record_id
 
@@ -124,18 +128,83 @@ class IndividualQuotationTests(TestCase):
             ),
         })
 
+    def access_token(self, *, schema_slug="salud"):
+        context = unsign_policy_context(self.context_token(schema_slug=schema_slug))
+        generated = generate_individual_access(
+            context=context, actor=self.actor, recipient="demo@example.test",
+        )
+        with patch("cotizacion_colectivos.services.individual_access.secrets.randbelow", return_value=123456):
+            entry = self.client.get(reverse(
+                "colectivos_external:individual_quotation", args=[generated.token],
+            ))
+        self.assertEqual(entry.status_code, 200)
+        verified = self.client.post(
+            reverse("colectivos_external:individual_verify", args=[generated.token]),
+            {"code": "123456"},
+        )
+        self.assertEqual(verified.status_code, 302)
+        return generated.token
+
+    def test_individual_email_is_multipart_ready_and_delivers_the_real_otp(self):
+        context = unsign_policy_context(self.context_token())
+        generated = generate_individual_access(
+            context=context, actor=self.actor, recipient="demo@example.test",
+        )
+        backend = Mock(name="individual_otp_backend")
+        backend.name = "smtp"
+        backend.send.return_value = "accepted"
+        with patch("cotizacion_colectivos.services.individual_access.secrets.randbelow", return_value=654321), patch(
+            "vault.notifications.get_backend", return_value=backend,
+        ), patch("vault.notifications.logger") as notification_logger:
+            self.assertTrue(issue_individual_otp(generated.access))
+
+        subject, text_body, html_body, recipient = backend.send.call_args.args
+        self.assertEqual(recipient, "demo@example.test")
+        self.assertIn("654321", text_body)
+        self.assertIn("654321", html_body)
+        self.assertNotIn("[CÓDIGO OMITIDO]", text_body + html_body)
+        self.assertIn("Código de verificación", subject + html_body)
+        generated.access.refresh_from_db()
+        self.assertNotEqual(generated.access.otp_hash, "654321")
+        self.assertNotIn("654321", repr(generated.access.__dict__))
+        self.assertNotIn("654321", repr(notification_logger.mock_calls))
+
+    def test_individual_otp_uses_edited_email_instead_of_zoho_original(self):
+        original = "original-zoho@example.test"
+        edited = "edited-access@example.test"
+        context = unsign_policy_context(self.context_token())
+        context["requester_email"] = original
+        generated = generate_individual_access(
+            context=context, actor=self.actor, recipient=edited,
+        )
+        backend = Mock(name="individual_edited_recipient_backend")
+        backend.name = "smtp"
+        backend.send.return_value = "accepted"
+        with patch(
+            "cotizacion_colectivos.services.individual_access.secrets.randbelow",
+            return_value=445566,
+        ), patch("vault.notifications.get_backend", return_value=backend):
+            self.assertTrue(issue_individual_otp(generated.access))
+        self.assertEqual(backend.send.call_args.args[3], edited)
+        self.assertNotEqual(backend.send.call_args.args[3], original)
+
     @staticmethod
     def person(suffix="1"):
         return {
             "name": f"Persona {suffix}", "id_type": "CC",
             "document": f"20000000{suffix}", "birth_date": "1990-01-01",
             "gender": "Femenino", "relationship": "Hijo(a)", "role": "Asegurado",
+            "employment_relationship": "Grupo familiar",
+            "currently_health_insured": "No",
+            "current_health_insurer": "",
+            "current_health_policy_end": "",
+            "plan_interest": "",
         }
 
     @staticmethod
     def vehicle(suffix="1"):
         return {
-            "plate": f"ABC12{suffix}", "brand": "Marca", "line": "Línea",
+            "zero_km": "No", "plate": f"ABC12{suffix}", "brand": "Marca", "line": "Línea",
             "model": "2025", "city": "Bogotá", "use": "Familiar",
             "insured_name": f"Asegurado {suffix}", "insured_id_type": "CC",
             "insured_document": f"30000000{suffix}",
@@ -147,7 +216,7 @@ class IndividualQuotationTests(TestCase):
 
     def test_tool_entry_goes_to_client_search_and_loose_branch_form_is_closed(self):
         response = self.client.get(reverse("public_home"))
-        self.assertContains(response, "Cotización Individual")
+        self.assertContains(response, "Colectivos")
         entry = self.client.get(reverse("cotizacion_colectivos:individual_index"))
         self.assertRedirects(entry, reverse("cotizacion_colectivos:individual_client_search"))
         loose = self.client.get(reverse("cotizacion_colectivos:individual_form", args=["salud"]))
@@ -184,13 +253,45 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(context["collective_context"], "Colectiva Demo")
         self.assertNotIn("4234567890123456789", token)
 
+    def test_fonconstruimos_requires_a_sanitized_declared_company_without_lookup(self):
+        fonco_policy = replace(
+            policy(), holder="Fondo de Empleados Construimos Sueños",
+            source_name="Fonconstruimos",
+        )
+        schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN, detail=fonco_policy, members=(affiliate(),),
+            affiliate_key="affiliate-hmac-key", creator_id=self.actor.pk,
+        )
+        self.assertTrue(context["requires_declared_company"])
+        data = {"items_payload": json.dumps({"people": [self.person()]})}
+        missing = IndividualQuotationForm(data, schema=schema, context=context)
+        self.assertFalse(missing.is_valid())
+        self.assertIn("declared_company", missing.errors)
+        valid = IndividualQuotationForm(
+            {**data, "declared_company": "Constructora Ejemplo S.A.S."},
+            schema=schema, context=context,
+        )
+        self.assertTrue(valid.is_valid(), valid.errors)
+        self.assertEqual(valid.cleaned_data["declared_company"], "Constructora Ejemplo S.A.S.")
+
+    def test_health_mvp_has_continuity_fields_and_no_medical_declaration(self):
+        schema = get_branch_schema("salud")
+        keys = {field.key for field in schema.repeatables[0].fields}
+        self.assertTrue({
+            "employment_relationship", "currently_health_insured",
+            "current_health_insurer", "current_health_policy_end",
+        }.issubset(keys))
+        serialized = " ".join(field.label.casefold() for field in schema.repeatables[0].fields)
+        self.assertNotIn("declaración de asegurabilidad", serialized)
+        self.assertNotIn("historia clínica", serialized)
+
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_health_multiple_people_submit_encrypted_notifies_and_never_calls_zoho(self, get_zoho, workspace):
         workspace.return_value = self.workspace("salud")
         data = {"items_payload": json.dumps({"people": [self.person("1"), self.person("2")]})}
         response = self.client.post(
-            reverse("colectivos_external:individual_quotation", args=[self.context_token()]), data,
+            reverse("colectivos_external:individual_quotation", args=[self.access_token()]), data,
         )
         self.assertEqual(response.status_code, 302)
         quotation = CotizacionIndividual.objects.get()
@@ -199,10 +300,12 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(payload["fields"]["requester_name"], "Afiliada Demo")
         self.assertNotIn("100000001", quotation.encrypted_payload)
         self.assertTrue(NotificacionCotizacionIndividual.objects.filter(quotation=quotation).exists())
+        access = AccesoCotizacionIndividual.objects.get(quotation=quotation)
+        self.assertEqual(access.status, access.Status.USED)
         get_zoho.assert_not_called()
 
         detail = self.client.get(reverse(
-            "cotizacion_colectivos:individual_quotation_detail",
+            "cotizacion_colectivos:individual_expedient",
             args=[sign_receipt(quotation.public_id)],
         ))
         self.assertContains(detail, "Nombre del solicitante")
@@ -217,7 +320,7 @@ class IndividualQuotationTests(TestCase):
             "matricula.png", b"\x89PNG\r\n\x1a\nprivate-demo", content_type="image/png",
         )
         response = self.client.post(
-            reverse("colectivos_external:individual_quotation", args=[self.context_token(schema_slug="movilidad")]),
+            reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")]),
             {"items_payload": json.dumps({"vehicles": [self.vehicle("1"), self.vehicle("2")]}), "attachments": uploaded},
         )
         self.assertEqual(response.status_code, 302)
@@ -229,12 +332,25 @@ class IndividualQuotationTests(TestCase):
     def test_new_vehicle_can_be_quoted_without_a_fictitious_plate(self, workspace):
         workspace.return_value = self.workspace("movilidad")
         vehicle = self.vehicle()
+        vehicle["zero_km"] = "Sí"
         vehicle["plate"] = ""
         response = self.client.post(
-            reverse("colectivos_external:individual_quotation", args=[self.context_token(schema_slug="movilidad")]),
+            reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")]),
             {"items_payload": json.dumps({"vehicles": [vehicle]})},
         )
         self.assertEqual(response.status_code, 302)
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_non_zero_km_vehicle_requires_plate_server_side(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        vehicle = self.vehicle()
+        vehicle["plate"] = ""
+        response = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")]),
+            {"items_payload": json.dumps({"vehicles": [vehicle]})},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "es obligatoria cuando el vehículo no es 0 km")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_soat_keeps_affiliate_and_insured_separate(self, workspace):
@@ -245,7 +361,7 @@ class IndividualQuotationTests(TestCase):
             "items_payload": json.dumps({"vehicles": [self.vehicle()]}),
         }
         response = self.client.post(
-            reverse("colectivos_external:individual_quotation", args=[self.context_token(schema_slug="soat")]), data,
+            reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="soat")]), data,
         )
         self.assertEqual(response.status_code, 302)
         payload = json.loads(decrypt(CotizacionIndividual.objects.get().encrypted_payload))
@@ -254,7 +370,7 @@ class IndividualQuotationTests(TestCase):
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_invalid_repeatable_and_tampered_token_fail_closed(self, workspace):
         workspace.return_value = self.workspace("salud")
-        token = self.context_token()
+        token = self.access_token()
         invalid = self.client.post(
             reverse("colectivos_external:individual_quotation", args=[token]),
             {"items_payload": json.dumps({"people": []})},
@@ -272,7 +388,7 @@ class IndividualQuotationTests(TestCase):
         workspace.return_value = self.workspace("movilidad")
         url = reverse(
             "colectivos_external:individual_quotation",
-            args=[self.context_token(schema_slug="movilidad")],
+            args=[self.access_token(schema_slug="movilidad")],
         )
         response = self.client.get(url)
         self.assertContains(response, "Contexto: Afiliada Demo")

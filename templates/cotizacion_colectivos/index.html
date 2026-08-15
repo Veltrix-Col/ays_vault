@@ -6,14 +6,15 @@
 <section class="search-panel" aria-labelledby="client-search-heading">
   <div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div>
   <p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p>
-  <form method="post" action="{% if colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_client_search' %}{% elif colectivos_mode.code == 'individual' %}{% url 'cotizacion_colectivos:individual_client_search' %}{% else %}{% url 'cotizacion_colectivos:novelties_client_search' %}{% endif %}" class="search-form search-form--inline unified-client-search" data-remote-zoho>{% csrf_token %}<div>
+  <form method="post" action="{% if colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_client_search' %}{% elif colectivos_mode.code == 'individual' %}{% url 'cotizacion_colectivos:individual_client_search' %}{% elif colectivos_mode.code == 'novelties' %}{% url 'cotizacion_colectivos:novelties_client_search' %}{% else %}{% url 'cotizacion_colectivos:client_search' %}{% endif %}" class="search-form search-form--inline unified-client-search" data-remote-zoho>{% csrf_token %}<div>
     <label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}
   </div><button type="submit">Buscar</button></form>
 </section>
 <div class="tool-mode-note">
   {% if colectivos_mode.code == 'novelties' %}<strong>Flujo:</strong> cliente → póliza → ingreso o retiro → enlace → respuesta.
   {% elif colectivos_mode.code == 'individual' %}<strong>Flujo:</strong> cliente → póliza → cotización contextualizada → respuesta.
-  {% else %}<strong>Flujo:</strong> cliente → póliza → plantillas disponibles → descarga.
+  {% elif colectivos_mode.code == 'invitations' %}<strong>Flujo:</strong> cliente → póliza → plantillas disponibles → descarga.
+  {% else %}<strong>Flujo central:</strong> cliente → ramo → servicio → póliza únicamente cuando la acción la requiere.
   {% endif %}
 </div>
 {% endblock %}

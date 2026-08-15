@@ -61,6 +61,13 @@ class IndividualQuotationForm(forms.Form):
                     initial=self.context.get(definition.key, ""),
                     disabled=definition.key in locked_fields,
                 )
+        if self.context.get("requires_declared_company"):
+            self.fields["declared_company"] = forms.CharField(
+                label="Empresa a la cual pertenece",
+                required=True,
+                max_length=180,
+                help_text="Escriba la empresa declarada por la persona. No se valida contra una lista Zoho no demostrada.",
+            )
 
     @staticmethod
     def _clean_value(definition: FieldSchema, raw):
@@ -79,6 +86,12 @@ class IndividualQuotationForm(forms.Form):
             raise forms.ValidationError("Ingrese una fecha válida.")
         if value and definition.choices and value not in definition.choices:
             raise forms.ValidationError("Seleccione una opción válida.")
+        return value
+
+    def clean_declared_company(self):
+        value = str(self.cleaned_data.get("declared_company") or "").strip()
+        if not value or len(value) > 180 or any(ord(character) < 32 for character in value):
+            raise forms.ValidationError("Ingrese una empresa válida.")
         return value
 
     def clean(self):
@@ -113,6 +126,26 @@ class IndividualQuotationForm(forms.Form):
                         normalized_row[definition.key] = self._clean_value(definition, row.get(definition.key))
                     except forms.ValidationError as exc:
                         self.add_error("items_payload", f"{group.singular.title()} {position} — {definition.label}: {exc.message}")
+                if group.key == "vehicles":
+                    zero_km = normalized_row.get("zero_km")
+                    plate = normalized_row.get("plate")
+                    if zero_km == "Sí":
+                        normalized_row["plate"] = ""
+                    elif zero_km == "No" and not plate:
+                        self.add_error(
+                            "items_payload",
+                            f"{group.singular.title()} {position} — Placa: es obligatoria cuando el vehículo no es 0 km.",
+                        )
+                if group.key == "people" and self.schema.slug == "salud":
+                    if normalized_row.get("currently_health_insured") == "Sí":
+                        if not normalized_row.get("current_health_insurer"):
+                            self.add_error(
+                                "items_payload",
+                                f"{group.singular.title()} {position} — Aseguradora actual: este campo es obligatorio cuando existe cobertura vigente.",
+                            )
+                    else:
+                        normalized_row["current_health_insurer"] = ""
+                        normalized_row["current_health_policy_end"] = ""
                 normalized_rows.append(normalized_row)
             normalized[group.key] = normalized_rows
         cleaned["normalized_items"] = normalized

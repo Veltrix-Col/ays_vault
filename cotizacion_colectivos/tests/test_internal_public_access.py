@@ -35,12 +35,16 @@ class InternalPublicAccessTests(TestCase):
 
     def test_django_permissions_are_not_required_in_public_mode(self):
         self.assertTrue(has_internal_permission(self.request, "approve_requests"))
-        for route in ("request_list", "notification_list"):
-            with self.subTest(route=route):
-                response = self.client.get(reverse(f"cotizacion_colectivos:{route}"))
-                self.assertEqual(response.status_code, 200)
-                self.assertNotContains(response, "Sin permiso")
-                self.assertNotContains(response, "Debe iniciar sesi")
+        response = self.client.get(reverse("cotizacion_colectivos:request_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Sin permiso")
+        self.assertNotContains(response, "Debe iniciar sesi")
+        legacy = self.client.get(reverse("cotizacion_colectivos:notification_list"))
+        self.assertRedirects(
+            legacy,
+            reverse("cotizacion_colectivos:request_list"),
+            fetch_redirect_response=False,
+        )
 
     def test_forms_do_not_expose_user_assignment_in_public_mode(self):
         self.assertNotIn("assigned_to", RequestCreateForm(public_access=True).fields)

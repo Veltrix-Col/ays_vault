@@ -75,6 +75,89 @@ class CotizacionIndividual(models.Model):
         )
 
 
+class AccesoCotizacionIndividual(models.Model):
+    """Acceso OTP persistido para cotización individual; no representa datos Zoho."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVO", "Activo"
+        VERIFIED = "VERIFICADO", "Verificado"
+        USED = "USADO", "Usado"
+        EXPIRED = "EXPIRADO", "Expirado"
+        REVOKED = "REVOCADO", "Revocado"
+        BLOCKED = "BLOQUEADO", "Bloqueado"
+
+    selector = models.CharField(max_length=32, unique=True, editable=False)
+    token_hash = models.CharField(max_length=64, editable=False)
+    encrypted_context = models.TextField(editable=False)
+    context_checksum = models.CharField(max_length=64, db_index=True, editable=False)
+    encrypted_recipient = models.TextField(editable=False)
+    recipient_hash = models.CharField(max_length=64, db_index=True, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="accesos_cotizacion_individual_creados",
+    )
+    quotation = models.OneToOneField(
+        CotizacionIndividual, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="external_access",
+    )
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.ACTIVE, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    first_access_at = models.DateTimeField(null=True, blank=True)
+    last_access_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(db_index=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    access_count = models.PositiveIntegerField(default=0)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    otp_hash = models.CharField(max_length=128, blank=True, editable=False)
+    otp_expires_at = models.DateTimeField(null=True, blank=True)
+    otp_attempts = models.PositiveSmallIntegerField(default=0)
+    otp_used_at = models.DateTimeField(null=True, blank=True)
+    safe_metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = (
+            models.Index(fields=("created_by", "status"), name="colect_ind_access_actor"),
+        )
+
+
+class ColectivosTaskOutbox(models.Model):
+    """Outbox local idempotente; crear una fila nunca implica escribir en Zoho."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDIENTE", "Pendiente"
+        PUBLISHED = "PUBLICADA", "Publicada"
+        BLOCKED = "BLOQUEADA", "Bloqueada"
+        RECONCILE = "CONCILIAR", "Requiere conciliación"
+
+    request = models.ForeignKey(
+        "SolicitudColectivo", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="task_outbox",
+    )
+    quotation = models.ForeignKey(
+        CotizacionIndividual, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="task_outbox",
+    )
+    event_kind = models.CharField(max_length=16)
+    event_version = models.PositiveIntegerField(default=1)
+    idempotency_key = models.CharField(max_length=96, unique=True, editable=False)
+    encrypted_payload = models.TextField(editable=False)
+    payload_checksum = models.CharField(max_length=64, editable=False)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    encrypted_remote_id = models.TextField(blank=True, editable=False)
+    safe_error_code = models.CharField(max_length=40, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = (
+            models.CheckConstraint(
+                condition=(models.Q(request__isnull=False, quotation__isnull=True) | models.Q(request__isnull=True, quotation__isnull=False)),
+                name="colect_task_outbox_one_source",
+            ),
+        )
+
+
 class AdjuntoCotizacionIndividual(models.Model):
     quotation = models.ForeignKey(
         CotizacionIndividual, on_delete=models.CASCADE, related_name="attachments"

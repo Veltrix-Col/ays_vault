@@ -274,6 +274,7 @@ class EntityDetailService:
         return RelatedPolicy(
             detail_token=sign_record_id(policy_id, "policy", {"source_id": source_id, "source_kind": source_kind}),
             masked_reference=mask_reference(record.get("Name") or fallback_name),
+            full_reference=str(record.get("Name") or fallback_name or "").strip(),
             state=_text(record.get("Estado_de_la_p_liza"), "Sin estado"),
             branch=_text(record.get("Ramo") or relation.get("Ramo"), "Sin ramo"),
             insurer=_text(record.get("Aseguradora1") or relation.get("Aseguradora"), "Sin aseguradora"),
@@ -326,6 +327,7 @@ class EntityDetailService:
             policies.append(RelatedPolicy(
                 detail_token=sign_record_id(record_id, "policy", {"source_id": str(contact_id), "source_kind": source_kind}),
                 masked_reference=mask_reference(record.get("Name")),
+                full_reference=str(record.get("Name") or "").strip(),
                 state=_text(record.get("Estado_de_la_p_liza"), "Sin estado"),
                 branch=_text(record.get("Ramo"), "Sin ramo"),
                 insurer=_text(record.get("Aseguradora1"), "Sin aseguradora"),

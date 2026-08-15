@@ -76,6 +76,9 @@ class RelatedPolicy:
     relationship_source: str = "insured"
     relationship_confidence: str = "confirmed"
     renewable: str = ""
+    # El número de póliza es contexto operativo solicitado. Solo se presenta
+    # después de resolver un cliente mediante un token firmado.
+    full_reference: str = ""
 
 
 @dataclass(frozen=True)

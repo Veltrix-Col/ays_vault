@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -20,9 +21,12 @@ from cotizacion_colectivos.branches import (
 )
 from cotizacion_colectivos.dto import GroupMember, PolicyDetail
 from cotizacion_colectivos.excel import build_current_policy_workbook
-from cotizacion_colectivos.models import EventoSolicitudColectivo, NotificacionColectivos, SolicitudColectivo
+from cotizacion_colectivos.models import AccesoCotizacionIndividual, CambioSolicitudColectivo, CotizacionIndividual, EventoSolicitudColectivo, NotificacionCotizacionIndividual, NotificacionColectivos, RespuestaSolicitudColectivo, SolicitudColectivo
 from cotizacion_colectivos.services.common import ColectivosServiceError, sign_record_id, unsign_record_id
 from cotizacion_colectivos.services.requests import create_or_reuse_request_from_policy, create_request_from_policy, request_snapshot, transition_request
+from cotizacion_colectivos.quotation_forms.security import sign_receipt
+from cotizacion_colectivos.services.individual_access import generate_individual_access
+from vault.crypto import encrypt
 
 
 POLICY_ID = "4234567890123456789"
@@ -33,6 +37,7 @@ def policy_detail(**overrides):
     values = {
         "detail_token": TOKEN,
         "masked_reference": "Referencia terminada en 3456",
+        "full_reference": "083002914855",
         "branch_code": "91",
         "branch_name": "Salud colectivo",
         "classification": "confirmed",
@@ -153,6 +158,55 @@ class RequestWorkflowTests(TestCase):
             created_by=self.creator,
         )
 
+    def create_individual_response(self, *, submitted_at, policy_label="IND-9001"):
+        context = {
+            "policy_token": TOKEN,
+            "source_kind": "company",
+            "affiliate_key": "affiliate-key",
+            "affiliate_label": "Afiliada Individual",
+            "branch_slug": "salud",
+            "branch_name": "Salud colectivo",
+            "schema_version": 1,
+            "creator_id": self.creator.pk,
+            "policy_label": policy_label,
+            "collective_context": "Cliente Individual",
+            "requester_email": "original@example.test",
+        }
+        generated = generate_individual_access(
+            context=context, actor=self.creator, recipient="edited@example.test",
+        )
+        quotation = CotizacionIndividual.objects.create(
+            branch_code="91",
+            branch_slug="salud",
+            schema_version=1,
+            encrypted_payload=encrypt(json.dumps({
+                "fields": {
+                    "requester_name": "Afiliada Individual",
+                    "requester_email": "edited@example.test",
+                },
+                "groups": {"people": []},
+                "context": context,
+            })),
+            payload_checksum="a" * 64,
+            context_hash="b" * 64,
+            created_by=self.creator,
+        )
+        CotizacionIndividual.objects.filter(pk=quotation.pk).update(submitted_at=submitted_at)
+        quotation.refresh_from_db()
+        access = generated.access
+        access.quotation = quotation
+        access.status = access.Status.USED
+        access.used_at = submitted_at
+        access.last_access_at = submitted_at
+        access.save(update_fields=("quotation", "status", "used_at", "last_access_at"))
+        NotificacionCotizacionIndividual.objects.create(
+            user=self.creator,
+            quotation=quotation,
+            message="Respuesta individual recibida.",
+            deduplication_key=f"individual:{quotation.public_id}",
+        )
+        return access, quotation
+
     def test_request_snapshot_rows_event_without_administrative_notification_or_zoho_write(self):
         item = self.create_request()
         self.assertTrue(item.public_id.startswith("COL-"))
@@ -164,6 +218,7 @@ class RequestWorkflowTests(TestCase):
         )
         snapshot = request_snapshot(item)
         self.assertEqual(snapshot["policy"]["branch_code"], "91")
+        self.assertEqual(snapshot["policy"]["reference"], "083002914855")
         self.assertEqual(snapshot["group"][0]["role"], "Asegurado")
 
     def test_duplicate_active_request_is_rejected(self):
@@ -230,7 +285,9 @@ class RequestWorkflowTests(TestCase):
                 updated_at=tied_updated,
             )
 
-        expected = [items[0], items[1], items[3], items[2], *items[4:]]
+        # Igual prioridad y actividad se resuelven por PK descendente para que
+        # la paginacion de la bandeja unificada permanezca deterministica.
+        expected = [items[0], items[3], items[2], items[1], *items[4:]]
         self.client.force_login(self.creator)
         first_page = self.client.get(reverse("cotizacion_colectivos:request_list"))
         second_page = self.client.get(
@@ -245,7 +302,7 @@ class RequestWorkflowTests(TestCase):
         self.assertFalse(set(first_ids) & set(second_ids))
         self.assertEqual(first_ids + second_ids, [item.pk for item in expected])
 
-    def test_notification_list_orders_by_created_at_and_pk_desc(self):
+    def test_old_notification_route_redirects_to_the_canonical_inbox(self):
         item = self.create_local_request(99)
         notifications = [
             NotificacionColectivos.objects.create(
@@ -258,7 +315,7 @@ class RequestWorkflowTests(TestCase):
             )
             for index in range(3)
         ]
-        hidden = NotificacionColectivos.objects.create(
+        NotificacionColectivos.objects.create(
             user=self.creator,
             request=item,
             notification_type="ASSIGNED",
@@ -266,23 +323,14 @@ class RequestWorkflowTests(TestCase):
             message="Mensaje histórico",
             deduplication_key="order:hidden-administrative",
         )
-        anchor = timezone.now() - timedelta(hours=1)
-        NotificacionColectivos.objects.filter(pk=notifications[0].pk).update(
-            created_at=anchor,
-        )
-        NotificacionColectivos.objects.filter(
-            pk__in=(notifications[1].pk, notifications[2].pk)
-        ).update(created_at=anchor - timedelta(minutes=1))
-
         self.client.force_login(self.creator)
         response = self.client.get(reverse("cotizacion_colectivos:notification_list"))
-        visible_ids = [item.pk for item in response.context["page"].object_list]
-        self.assertEqual(
-            visible_ids,
-            [notifications[0].pk, notifications[2].pk, notifications[1].pk],
+        self.assertRedirects(
+            response,
+            reverse("cotizacion_colectivos:request_list"),
+            fetch_redirect_response=False,
         )
-        self.assertNotIn(hidden.pk, visible_ids)
-        self.assertNotContains(response, "Solicitud asignada")
+        self.assertEqual(len(notifications), 3)
 
     def test_administrative_notification_returns_to_informational_list_when_locked(self):
         item = self.create_local_request(100)
@@ -304,8 +352,128 @@ class RequestWorkflowTests(TestCase):
                 )
         self.assertRedirects(
             response,
-            reverse("cotizacion_colectivos:notification_list"),
+            reverse("cotizacion_colectivos:request_list"),
             fetch_redirect_response=False,
         )
         self.assertEqual(locked_queryset.update.call_count, 2)
         self.assertTrue(any("category=sqlite_locked" in line for line in captured.output))
+
+    def test_inbox_uses_full_policy_search_and_prioritizes_answered_requests(self):
+        waiting = self.create_local_request(201)
+        answered = self.create_request()
+        answered.status = answered.Status.ANSWERED
+        answered.save(update_fields=("status", "updated_at"))
+        self.client.force_login(self.creator)
+
+        response = self.client.get(reverse("cotizacion_colectivos:request_list"))
+        self.assertEqual(response.context["page"].object_list[0].pk, answered.pk)
+        self.assertContains(response, "Póliza 083002914855")
+        self.assertNotContains(response, "Póliza Referencia terminada en 3456")
+        self.assertContains(response, answered.public_id)
+        self.assertNotEqual(waiting.pk, response.context["page"].object_list[0].pk)
+
+        searched = self.client.get(
+            reverse("cotizacion_colectivos:request_list"), {"query": "083002914855"},
+        )
+        self.assertEqual([row.pk for row in searched.context["page"].object_list], [answered.pk])
+
+    @patch("cotizacion_colectivos.views.PolicyService")
+    def test_inbox_is_one_chronological_stream_for_requests_and_individual_quotes(self, policy_service):
+        now = timezone.now()
+        opened = self.create_local_request(301)
+        opened.status = opened.Status.OPENED
+        opened.save(update_fields=("status", "updated_at"))
+        SolicitudColectivo.objects.filter(pk=opened.pk).update(updated_at=now)
+        answered = self.create_request()
+        answered.status = answered.Status.ANSWERED
+        answered.save(update_fields=("status", "updated_at"))
+        SolicitudColectivo.objects.filter(pk=answered.pk).update(
+            updated_at=now - timedelta(minutes=10),
+        )
+        _access, quotation = self.create_individual_response(
+            submitted_at=now - timedelta(minutes=5), policy_label="IND-9001",
+        )
+        self.client.force_login(self.creator)
+
+        response = self.client.get(reverse("cotizacion_colectivos:request_list"))
+        rows = response.context["page"].object_list
+        self.assertEqual([row.inbox_kind for row in rows[:3]], [
+            "individual", "request", "request",
+        ])
+        self.assertEqual(rows[0].quotation_id, quotation.pk)
+        self.assertContains(response, 'data-inbox-kind="individual"', html=False)
+        self.assertContains(response, 'data-inbox-kind="request"', html=False)
+        self.assertContains(response, "Póliza IND-9001")
+        self.assertNotContains(response, "Enlaces y respuestas")
+        policy_service.assert_not_called()
+
+        filtered = self.client.get(
+            reverse("cotizacion_colectivos:request_list"),
+            {"request_type": SolicitudColectivo.RequestType.QUOTE},
+        )
+        filtered_rows = filtered.context["page"].object_list
+        self.assertEqual(len(filtered_rows), 1)
+        self.assertEqual(filtered_rows[0].inbox_kind, "individual")
+
+    def test_individual_response_opens_canonical_operational_expedient(self):
+        _access, quotation = self.create_individual_response(
+            submitted_at=timezone.now(), policy_label="POLIZA-COMPLETA-123",
+        )
+        token = sign_receipt(quotation.public_id)
+        self.client.force_login(self.creator)
+
+        inbox = self.client.get(reverse("cotizacion_colectivos:request_list"))
+        canonical = reverse("cotizacion_colectivos:individual_expedient", args=[token])
+        self.assertContains(inbox, f'href="{canonical}"', html=False)
+        detail = self.client.get(canonical)
+        self.assertContains(detail, "Expediente interno")
+        self.assertContains(detail, "Póliza POLIZA-COMPLETA-123")
+        self.assertContains(detail, "Cotización Individual")
+        self.assertContains(detail, "Afiliada Individual")
+        self.assertContains(detail, "edited@example.test")
+        self.assertContains(detail, "Respuesta recibida")
+        self.assertContains(detail, "Zoho")
+        self.assertContains(detail, "Más información")
+        self.assertContains(detail, '<details class="workspace-card technical-disclosure">', html=False)
+        self.assertNotContains(detail, "<details open", html=False)
+
+        legacy = self.client.get(reverse(
+            "cotizacion_colectivos:individual_quotation_detail", args=[token],
+        ))
+        self.assertRedirects(legacy, canonical, fetch_redirect_response=False)
+
+    def test_request_workspace_centers_human_response_and_collapses_history(self):
+        item = self.create_request()
+        item.status = item.Status.ANSWERED
+        item.save(update_fields=("status", "updated_at"))
+        response = RespuestaSolicitudColectivo.objects.create(
+            request=item,
+            version=1,
+            status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+            origin=RespuestaSolicitudColectivo.Origin.WEB,
+            submitted_at=timezone.now(),
+            checksum="e" * 64,
+            encrypted_client_observations=encrypt("Retiro solicitado por el cliente."),
+        )
+        CambioSolicitudColectivo.objects.create(
+            response=response,
+            policy=item.policies.first(),
+            original_record=item.records.first(),
+            action=CambioSolicitudColectivo.Action.RETIRE,
+            functional_field="fecha_retiro",
+            encrypted_previous_value=encrypt(""),
+            encrypted_new_value=encrypt("2026-08-31"),
+            position=1,
+            checksum="f" * 64,
+        )
+        self.client.force_login(self.creator)
+        page = self.client.get(reverse("cotizacion_colectivos:request_detail", args=[item.public_id]))
+
+        self.assertContains(page, "Póliza 083002914855")
+        self.assertContains(page, "Respuesta recibida")
+        self.assertContains(page, "Fecha de retiro")
+        self.assertContains(page, "2026-08-31")
+        self.assertContains(page, "identificador técnico")
+        self.assertContains(page, '<details class="workspace-card technical-disclosure">', html=False)
+        self.assertNotContains(page, '<details open class="workspace-card technical-disclosure">', html=False)
+        self.assertContains(page, "No disponible: faltan layout y reglas obligatorias confirmadas.")

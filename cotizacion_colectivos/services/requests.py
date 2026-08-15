@@ -112,7 +112,9 @@ def _snapshot_payload(detail, members, profile: str, adjustments=()) -> dict[str
         "version": 1,
         "profile": profile,
         "policy": {
-            "reference": detail.masked_reference,
+            # La referencia completa permanece dentro del snapshot cifrado y
+            # sólo se presenta en superficies internas autorizadas.
+            "reference": detail.full_reference or detail.masked_reference,
             "branch_code": detail.branch_code,
             "branch_name": detail.branch_name,
             "insurer": detail.insurer,

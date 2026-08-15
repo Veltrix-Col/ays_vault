@@ -1,49 +1,48 @@
-# Miniportal externo y Excel de ida y vuelta
+# Accesos externos, OTP y expediente local
 
-> Documento histórico. El flujo funcional vigente es el enlace directo sin
-> OTP descrito en `direct_external_flow.md`; las referencias a OTP se conservan
-> únicamente para explicar datos y componentes heredados.
+## Contrato vigente
 
-## Alcance
+El enlace externo amplía un expediente local; no crea usuarios, no inicia una
+sesión interna de Vault y no escribe en Zoho. Las rutas públicas están aisladas
+bajo `/solicitudes/colectivos/externa/`.
 
-El miniportal amplía el expediente local `SolicitudColectivo`; no crea otro sistema de solicitudes y no escribe en Zoho. El cliente opera contra el snapshot cifrado. La ruta pública queda aislada bajo `/solicitudes/colectivos/externa/` y no crea un `User`, una sesión de Vault ni una autenticación MFA interna.
+1. A&S selecciona o corrige el correo destinatario y genera el acceso.
+2. Se crea selector + secreto aleatorios; sólo se persiste el hash del secreto.
+3. El acceso vence exactamente en `created_at + 172800 segundos` por defecto.
+   Una fecha límite anterior puede acortarlo, nunca alargarlo.
+4. Abrir el token no autoriza el formulario: emite un OTP al correo registrado.
+5. Sólo se guarda el hash del OTP. El código tiene vencimiento, máximo de
+   intentos y regeneración controlada; un OTP vigente no se reenvía por cada GET.
+6. Verificarlo crea una cookie firmada, `HttpOnly`, limitada al acceso y a la
+   ruta externa. El correo se presenta enmascarado.
+7. Al enviar se registra la respuesta, se consume la sesión/acceso y se crea una
+   alerta local idempotente.
 
-## Flujo
+Novedades reutiliza `services/external.py`. Cotización Individual emplea el
+mismo contrato de seguridad y configuración mediante `services/individual_access.py`,
+con su propio modelo/cookie para no mezclar expedientes.
 
-1. A&S deja el expediente en `LISTA_PARA_ENVIAR`, confirma destinatario, fecha límite, snapshot y tratamiento de datos.
-2. Se genera un selector aleatorio y un secreto. Solo se persiste SHA-256 del secreto; el token completo vive durante el envío del correo.
-3. El enlace expira independientemente de la fecha límite del expediente. Regenerarlo revoca los accesos anteriores sin alterar el snapshot.
-4. En producción se exige OTP por correo. Se persiste únicamente un hash, tiene expiración y límite de intentos.
-5. La verificación crea una cookie firmada, `HttpOnly`, limitada a una solicitud y a la ruta externa. No inicia sesión Django.
-6. El cliente guarda versiones de borrador y finalmente envía. La sesión y el acceso se invalidan y el expediente pasa a `RESPONDIDA`.
-7. Web y XLSX convergen en `RespuestaSolicitudColectivo` y `CambioSolicitudColectivo`.
-8. A&S registra decisiones inmutables por cambio. Una corrección genera un acceso nuevo sobre el mismo expediente; una aprobación permite exportar el consolidado, pero nunca escribe en Zoho.
+El correo OTP es multipart (`text/plain` y `text/html`) y usa HTML compatible
+con Outlook sin CSS externo. La capa común conserva la redacción automática de
+secuencias sensibles; sólo los tipos cerrados `COLECTIVOS_OTP` y
+`COLECTIVOS_INDIVIDUAL_OTP` pueden entregar el bloque de seis dígitos al backend
+de correo. Esa excepción no persiste el cuerpo ni el código, no lo registra en
+logs o auditoría y rechaza cualquier tipo de notificación distinto.
 
-## Ramos
+## Contenido y archivos
 
-Salud colectivo (`91`) tiene formulario web editable para confirmar, modificar, retirar e incluir. Exequial (`86`), Hogar (`28`), Vida grupo deudores (`83`) y Movilidad (`40`) conservan presentación y Excel controlado, sin habilitar campos específicos no confirmados.
+El cliente opera contra Snapshot cifrado. Web y XLSX convergen en respuestas y
+cambios locales. Los archivos se validan por extensión, MIME, magic bytes,
+tamaño y límites agregados; se almacenan cifrados fuera de estáticos y se sirven
+internamente con permiso y `no-store`.
 
-## Excel
-
-La plantilla contiene `Novedades`, `Póliza`, `Instrucciones`, `Catálogos` y `Metadatos` oculta. La metadata está firmada y vinculada a solicitud, ramo, revisión del snapshot y nonce. El importador acepta exclusivamente XLSX, limita tamaño/filas/descompresión, rechaza macros, binarios, relaciones externas, fórmulas, hipervínculos y encabezados alterados. La importación crea un borrador `EXCEL`; no lo envía automáticamente.
-
-Las exportaciones son independientes:
-
-- plantilla de novedades;
-- respuesta recibida;
-- comparativo con decisiones;
-- consolidado, solo cuando todas las decisiones están aprobadas.
-
-Los archivos `Novedades Junio_Fonconstruimos.xlsx` y `MT-CA-01 Matriz de Ramos (1).xlsx` son fuentes funcionales de solo lectura. No se sobrescriben ni se copian a los outputs.
-
-## Adjuntos
-
-Se admiten PDF, JPG/JPEG y PNG; XLSX solo en el canal Excel. Se valida firma de contenido, extensión, MIME, tamaño individual y total, doble extensión, macros y rutas. Se almacena con nombre aleatorio fuera de estáticos, checksum y descarga interna con permiso y `no-store`. El estado inicial es `REVISION_ANTIVIRUS`: no existe un motor antivirus configurado y no se afirma lo contrario.
+No existe antivirus configurado, por lo que el estado inicial sigue siendo
+`REVISION_ANTIVIRUS`. Tampoco existe una API pública confirmada de attachments
+en `ays-zoho-sdk` 1.1.0: no se usa HTTP directo para subirlos.
 
 ## Configuración
 
-- `COLECTIVOS_EXTERNAL_ACCESS_VERIFICATION=otp_email` (`token_only` únicamente con `DEBUG=true`).
-- `COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=86400`.
+- `COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800`.
 - `COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=604800`.
 - `COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS=600`.
 - `COLECTIVOS_EXTERNAL_OTP_MAX_ATTEMPTS=5`.
@@ -52,12 +51,17 @@ Se admiten PDF, JPG/JPEG y PNG; XLSX solo en el canal Excel. Se valida firma de 
 - `COLECTIVOS_ATTACHMENT_TOTAL_BYTES=26214400`.
 - `COLECTIVOS_EXTERNAL_BASE_URL=https://host-autorizado`.
 
-## Retención
+Las variables heredadas expresadas en días se conservan sólo por compatibilidad
+con flujos legacy; los accesos aquí descritos usan segundos y no redondean.
 
-No se elimina automáticamente información operativa hasta que A&S apruebe una política. Los OTP dejan de ser utilizables al vencer o usarse; las sesiones vencen por firma/TTL; los accesos se conservan como evidencia técnica sin secreto en claro; respuestas, revisiones, eventos y adjuntos se conservan como expediente. Una tarea futura deberá definir plazos, bloqueo legal y eliminación segura.
+## Retención y QA
 
-## QA manual
+No se elimina automáticamente información operativa hasta que A&S apruebe una
+política. Los OTP y sesiones dejan de ser utilizables al vencer o consumirse;
+accesos, respuestas, eventos y archivos se conservan como evidencia sin secretos
+en claro.
 
-Aplicar migraciones en un entorno QA, usar destinatario técnico y datos no reales. Crear una solicitud Salud, generar enlace, validar OTP, guardar modificación/inclusión/retiro, adjuntar archivo, descargar/cargar plantilla, revisar el preview, enviar, revisar internamente, solicitar corrección, responder, aprobar y descargar comparativo/consolidado. Verificar 320, 375, 768, 1024 y 1440 px, ausencia de scroll horizontal, CSRF, cookies y respuestas `no-store`.
-
-No enviar correos a clientes reales ni ejecutar escrituras contra Zoho durante QA.
+En QA se deben usar destinatarios técnicos y datos no reales. Verificar token sin
+OTP, código incorrecto, máximo de intentos, expiración, reenvío controlado,
+consumo, CSRF, cookies, `no-store` y 320/375/768/1024/1440 px. No enviar a
+clientes reales ni ejecutar escrituras Zoho.

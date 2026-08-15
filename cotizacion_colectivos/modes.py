@@ -6,6 +6,7 @@ from django.http import Http404
 
 
 NOVELTIES_MODE = "novelties"
+HUB_MODE = "hub"
 # Alias técnico temporal para imports históricos. La experiencia vigente y la
 # sesión usan exclusivamente ``novelties``.
 REQUESTS_MODE = NOVELTIES_MODE
@@ -24,6 +25,17 @@ class ToolMode:
 
 
 TOOL_MODES = {
+    HUB_MODE: ToolMode(
+        code=HUB_MODE,
+        slug="",
+        name="Colectivos",
+        short_name="Cliente y ramo",
+        description=(
+            "Seleccione un cliente, consulte sus ramos confirmados en Zoho y "
+            "elija el servicio que necesita."
+        ),
+        primary_action="Buscar cliente",
+    ),
     REQUESTS_MODE: ToolMode(
         code=REQUESTS_MODE,
         slug="novedades",
@@ -76,6 +88,8 @@ def resolve_tool_mode(request, value: str | None = None) -> ToolMode:
             raise Http404("Herramienta no disponible")
         request.session[SESSION_KEY] = mode.code
         return mode
+    # Las rutas legacy sin modo conservan Novedades. El hub nuevo siempre
+    # establece HUB_MODE de forma explícita en su entrada y buscador.
     stored_value = request.session.get(SESSION_KEY, NOVELTIES_MODE)
     stored = LEGACY_MODES.get(stored_value, stored_value)
     return TOOL_MODES.get(stored, TOOL_MODES[REQUESTS_MODE])

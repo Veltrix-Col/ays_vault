@@ -4,7 +4,7 @@ import io
 import json
 import zipfile
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -37,10 +37,12 @@ from cotizacion_colectivos.services.excel_roundtrip import (
 from cotizacion_colectivos.services.external import (
     ExternalAccessError,
     generate_access,
+    issue_otp,
     resolve_external_session,
     resolve_token,
     save_response,
     submit_response,
+    update_access_recipient,
     verify_otp,
 )
 from cotizacion_colectivos.services.review import finalize_review, record_reviews
@@ -93,19 +95,57 @@ class ExternalWorkflowTests(TestCase):
             recipient="cliente@example.test",
         )
 
+    def enter_with_otp(self, generated):
+        with patch("cotizacion_colectivos.services.external.secrets.randbelow", return_value=123456):
+            entry = self.client.get(
+                reverse("colectivos_external:entry", args=[generated.token])
+            )
+        self.assertEqual(entry.status_code, 200)
+        self.assertContains(entry, "Verifique su acceso")
+        verified = self.client.post(
+            reverse("colectivos_external:verify", args=[generated.token]),
+            {"code": "123456"},
+        )
+        self.assertEqual(verified.status_code, 302)
+        self.assertIn("colectivos_external_session", verified.cookies)
+        return verified
+
     def test_static_portal_route_is_not_interpreted_as_a_token(self):
         match = resolve(reverse("colectivos_external:portal"))
         self.assertEqual(match.url_name, "portal")
 
-    def test_external_portal_uses_direct_link_and_isolated_cookie_without_django_login(self):
+    def test_reused_access_persists_edited_recipient_for_the_next_otp(self):
+        original = "original@example.test"
+        edited = "edited@example.test"
+        generated = generate_access(
+            request=self.request, actor=self.admin, recipient=original,
+        )
+        generated.access.otp_hash = "pending-for-original-recipient"
+        generated.access.otp_expires_at = timezone.now() + timedelta(minutes=5)
+        generated.access.save(update_fields=("otp_hash", "otp_expires_at"))
+
+        self.assertTrue(update_access_recipient(
+            access=generated.access, actor=self.admin, recipient=edited,
+        ))
+        generated.access.refresh_from_db()
+        self.assertEqual(decrypt(generated.access.encrypted_recipient), edited)
+        self.assertEqual(generated.access.otp_hash, "")
+
+        backend = Mock(name="edited_recipient_backend")
+        backend.name = "smtp"
+        backend.send.return_value = "accepted"
+        with patch(
+            "cotizacion_colectivos.services.external.secrets.randbelow", return_value=112233,
+        ), patch("vault.notifications.get_backend", return_value=backend):
+            self.assertTrue(issue_otp(generated.access))
+        self.assertEqual(backend.send.call_args.args[3], edited)
+        self.assertNotEqual(backend.send.call_args.args[3], original)
+
+    def test_external_portal_requires_otp_and_uses_isolated_cookie_without_django_login(self):
         generated = self.access()
         self.request.status = self.request.Status.SENT
         self.request.save(update_fields=("status",))
-        entry_response = self.client.get(
-            reverse("colectivos_external:entry", args=[generated.token])
-        )
-        self.assertEqual(entry_response.status_code, 302)
-        self.assertIn("colectivos_external_session", entry_response.cookies)
+        self.enter_with_otp(generated)
         portal_response = self.client.get(reverse("colectivos_external:portal"))
         self.assertEqual(portal_response.status_code, 200)
         self.assertNotIn("_auth_user_id", self.client.session)
@@ -125,10 +165,7 @@ class ExternalWorkflowTests(TestCase):
     )
     def test_portal_warning_log_uses_request_correlation_without_model_attribute(self, _sections):
         generated = self.access()
-        entry = self.client.get(
-            reverse("colectivos_external:entry", args=[generated.token])
-        )
-        self.assertEqual(entry.status_code, 302)
+        self.enter_with_otp(generated)
         with self.assertLogs("cotizacion_colectivos", level="WARNING") as captured:
             portal = self.client.get(
                 reverse("colectivos_external:portal"),
@@ -140,7 +177,7 @@ class ExternalWorkflowTests(TestCase):
 
     def test_client_can_confirm_without_creating_a_draft_first(self):
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         response = self.client.post(
             reverse("colectivos_external:submit"),
             {"declaration": "on", "client_observations": ""},
@@ -156,13 +193,13 @@ class ExternalWorkflowTests(TestCase):
         self.assertEqual(notification.title, "Novedad recibida")
         self.assertNotIn("revisión interna", notification.message.lower())
 
-    def test_legacy_otp_endpoint_is_not_part_of_current_flow(self):
+    def test_otp_endpoint_rejects_an_unissued_code(self):
         generated = self.access()
         response = self.client.post(
             reverse("colectivos_external:verify", args=[generated.token]),
             {"code": "123456"},
         )
-        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.status_code, 400)
         generated.access.refresh_from_db()
         self.assertFalse(generated.access.otp_hash)
 
@@ -176,10 +213,10 @@ class ExternalWorkflowTests(TestCase):
                 generated = generate_access(
                     request=self.request,
                     actor=self.admin,
+                    recipient="cliente@example.test",
                     regenerate=index > 0,
                 )
-                response = self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
-                self.assertEqual(response.status_code, 302)
+                self.enter_with_otp(generated)
                 portal = self.client.get(reverse("colectivos_external:portal"))
                 self.assertContains(portal, "Mis pólizas y mi grupo")
                 self.assertContains(portal, expected_field[branch_code])
@@ -190,7 +227,7 @@ class ExternalWorkflowTests(TestCase):
         generated = self.access()
         self.request.status = self.request.Status.SENT
         self.request.save(update_fields=("status",))
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, 'name="include_rol" value="Asegurado"', html=False)
         self.assertContains(portal, '<select name="include_tipo_id">', html=False)
@@ -233,9 +270,10 @@ class ExternalWorkflowTests(TestCase):
                 }, ensure_ascii=False))
                 self.request.save(update_fields=("branch_code", "status", "encrypted_snapshot"))
                 generated = generate_access(
-                    request=self.request, actor=self.admin, regenerate=index > 0,
+                    request=self.request, actor=self.admin,
+                    recipient="cliente@example.test", regenerate=index > 0,
                 )
-                self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+                self.enter_with_otp(generated)
                 portal = self.client.get(reverse("colectivos_external:portal"))
                 self.assertEqual(portal.status_code, 200)
                 for text in expected:
@@ -260,7 +298,7 @@ class ExternalWorkflowTests(TestCase):
         }))
         self.request.save(update_fields=("encrypted_snapshot",))
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         functional_key = "a" * 64
         self.assertContains(portal, f'name="action_entity_{functional_key}"', html=False)
@@ -279,7 +317,7 @@ class ExternalWorkflowTests(TestCase):
         }))
         self.request.save(update_fields=("encrypted_snapshot",))
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         saved = self.client.post(reverse("colectivos_external:save_draft"), {
             f"source_records_{functional_key}": str(self.record.public_key),
             f"action_entity_{functional_key}": "RETIRAR",
@@ -292,7 +330,7 @@ class ExternalWorkflowTests(TestCase):
 
     def test_external_table_keeps_final_save_and_local_pagination_controls(self):
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, "Guardar mis cambios")
         self.assertContains(portal, "data-page-size", html=False)
@@ -304,7 +342,7 @@ class ExternalWorkflowTests(TestCase):
 
     def test_external_drawer_accessibility_and_javascript_contract(self):
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, 'aria-modal="true"', html=False)
         self.assertContains(portal, "data-drawer-title", html=False)
@@ -337,7 +375,7 @@ class ExternalWorkflowTests(TestCase):
         }))
         self.request.save(update_fields=("encrypted_snapshot",))
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertEqual(portal.content.count(b"data-functional-entity"), 1)
         self.assertContains(portal, "Asegurado · Beneficiario")
@@ -351,7 +389,7 @@ class ExternalWorkflowTests(TestCase):
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_external_table_and_drawer_use_only_persisted_snapshot(self, get_zoho):
         generated = self.access()
-        self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertEqual(portal.status_code, 200)
         get_zoho.assert_not_called()
@@ -392,6 +430,51 @@ class ExternalWorkflowTests(TestCase):
         generated.access.save(update_fields=("expires_at",))
         with self.assertRaises(ExternalAccessError):
             resolve_token(generated.token)
+
+    def test_access_expiry_uses_exact_seconds_not_end_of_day(self):
+        before = timezone.now()
+        generated = self.access()
+        after = timezone.now()
+        self.assertGreaterEqual(
+            generated.access.expires_at,
+            before + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS),
+        )
+        self.assertLessEqual(
+            generated.access.expires_at,
+            after + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS),
+        )
+
+    def test_entry_does_not_resend_an_unexpired_otp(self):
+        generated = self.access()
+        with patch("cotizacion_colectivos.services.external.send_notification") as sender, patch(
+            "cotizacion_colectivos.services.external.secrets.randbelow", return_value=123456,
+        ):
+            first = self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+            second = self.client.get(reverse("colectivos_external:entry", args=[generated.token]))
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(sender.call_count, 1)
+
+    def test_email_backend_receives_real_otp_while_database_and_logs_do_not(self):
+        generated = self.access()
+        backend = Mock(name="otp_backend")
+        backend.name = "smtp"
+        backend.send.return_value = "accepted"
+        with patch("cotizacion_colectivos.services.external.secrets.randbelow", return_value=123456), patch(
+            "vault.notifications.get_backend", return_value=backend,
+        ), patch("vault.notifications.logger") as notification_logger:
+            self.assertTrue(issue_otp(generated.access))
+
+        subject, text_body, html_body, recipient = backend.send.call_args.args
+        self.assertEqual(recipient, "cliente@example.test")
+        self.assertIn("123456", text_body)
+        self.assertIn("123456", html_body)
+        self.assertNotIn("[CÓDIGO OMITIDO]", text_body + html_body)
+        self.assertIn("Código de verificación", subject + html_body)
+        generated.access.refresh_from_db()
+        self.assertNotEqual(generated.access.otp_hash, "123456")
+        self.assertNotIn("123456", repr(generated.access.__dict__))
+        self.assertNotIn("123456", repr(notification_logger.mock_calls))
 
     def test_otp_is_one_use_and_external_session_is_request_scoped(self):
         generated = self.access()

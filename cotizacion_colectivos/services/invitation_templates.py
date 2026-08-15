@@ -39,6 +39,8 @@ class TemplatePreview:
     missing_required: tuple[str, ...]
     message: str = ""
     output_files: int = 1
+    columns: tuple[str, ...] = ()
+    preview_rows: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,13 +124,22 @@ def preview_invitation_templates(token: str):
     for template in templates_for_branch(detail.branch_code):
         capacity = template.end_row - template.start_row + 1
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
+        row_fields = tuple(
+            field for field in template.fields
+            if field.automatic and "{row}" in field.position
+        )
+        columns = tuple(field.destination for field in row_fields)
+        visible_rows = tuple(
+            tuple(str(row.get(field.source, "")) for field in row_fields)
+            for row in template_rows
+        )
         if not template.active:
             previews.append(TemplatePreview(
                 template, "unavailable",
                 sum(field.automatic for field in template.fields),
                 sum(not field.automatic for field in template.fields),
                 len(template_rows), capacity,
-                (), template.limitation,
+                (), template.limitation, 1, columns, visible_rows,
             ))
             continue
         missing = []
@@ -161,7 +172,7 @@ def preview_invitation_templates(token: str):
             sum(field.automatic for field in template.fields),
             sum(not field.automatic for field in template.fields),
             len(template_rows), capacity, tuple(dict.fromkeys(missing)), message,
-            output_files,
+            output_files, columns, visible_rows,
         ))
     logger.info(
         "colectivos_invitation_templates application=cotizacion_colectivos operation=preview "
@@ -289,12 +300,17 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
     return output.getvalue()
 
 
-def generate_invitation_templates(token: str):
+def generate_invitation_templates(token: str, *, template_code: str = ""):
     started = time.monotonic()
     detail, members, _metadata, context, profile, backend = _local_workspace(token)
     fixed, rows = _context(detail, members, context)
     generated, errors = [], []
-    for template in templates_for_branch(detail.branch_code, active_only=True):
+    templates = templates_for_branch(detail.branch_code, active_only=True)
+    if template_code:
+        templates = tuple(item for item in templates if item.code == template_code)
+        if not templates:
+            raise ColectivosServiceError("template_unavailable", "La plantilla solicitada no está disponible para este ramo.")
+    for template in templates:
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
         capacity = template.end_row - template.start_row + 1
         if len(template_rows) > capacity and not template.supports_chunking:

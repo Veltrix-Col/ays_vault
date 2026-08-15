@@ -11,26 +11,31 @@ from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.template.loader import render_to_string
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .branches import COLLECTIVE_BRANCH_CONFIG
-from .forms import AttachmentUploadForm, ExternalSubmitForm
-from .models import CambioSolicitudColectivo, CotizacionIndividual, RespuestaSolicitudColectivo
+from .forms import AttachmentUploadForm, ExternalOTPForm, ExternalSubmitForm
+from .models import AccesoCotizacionIndividual, CambioSolicitudColectivo, CotizacionIndividual, RespuestaSolicitudColectivo
 from .services.attachments import store_attachment
 from .services.excel_roundtrip import build_novelties_template
 from .services.excel_previews import cancel_preview, confirm_preview, create_preview, resolve_preview
 from .services.external import (
     EXTERNAL_COOKIE,
     ExternalAccessError,
-    authorize_direct_access,
+    issue_otp,
     resolve_external_session,
     resolve_token,
     save_response,
     submit_response,
+    verify_otp,
 )
+from vault.crypto import decrypt
+from vault.notifications import mask_email
 from .services.requests import request_snapshot
 from .services.functional_groups import consolidate_functional_groups
 from .services.mappings import (
@@ -48,6 +53,16 @@ from .quotation_forms.security import (
     unsign_receipt,
 )
 from .services.individual_quotations import affiliate_options, create_individual_quotation
+from .services.individual_access import (
+    INDIVIDUAL_COOKIE,
+    IndividualAccessError,
+    access_context,
+    consume_individual_access,
+    issue_individual_otp,
+    resolve_individual_session,
+    resolve_individual_token,
+    verify_individual_otp,
+)
 from .services.preparations import load_policy_preparation
 from .zoho import get_colectivos_profile
 
@@ -82,8 +97,25 @@ def _individual_workspace(context):
 @require_http_methods(["GET", "POST"])
 def individual_quotation(request, token):
     try:
-        context = unsign_policy_context(token)
+        access = resolve_individual_token(token)
+        resolve_individual_session(request.COOKIES.get(INDIVIDUAL_COOKIE, ""), access)
+        context = access_context(access)
         detail, _members, metadata, schema = _individual_workspace(context)
+    except IndividualAccessError:
+        if request.method != "GET":
+            return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+        try:
+            access = resolve_individual_token(token)
+            issue_individual_otp(access)
+        except IndividualAccessError:
+            return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+        return render(request, "cotizacion_colectivos/external/verify.html", {
+            "form": ExternalOTPForm(),
+            "token": token,
+            "public_id": "Cotización individual",
+            "masked_recipient": mask_email(decrypt(access.encrypted_recipient)),
+            "verify_url": reverse("colectivos_external:individual_verify", args=[token]),
+        })
     except (signing.BadSignature, Http404, KeyError, ValueError):
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
 
@@ -102,13 +134,15 @@ def individual_quotation(request, token):
             pk=context.get("creator_id"), is_active=True,
         ).first()
         try:
-            quotation = create_individual_quotation(
-                schema=schema,
-                cleaned_data=form.cleaned_data,
-                actor=creator,
-                context=context,
-            )
-        except ValidationError as exc:
+            with transaction.atomic():
+                quotation = create_individual_quotation(
+                    schema=schema,
+                    cleaned_data=form.cleaned_data,
+                    actor=creator,
+                    context=context,
+                )
+                consume_individual_access(access, quotation)
+        except (ValidationError, IndividualAccessError) as exc:
             form.add_error("attachments", exc.message)
         else:
             logger.info(
@@ -131,9 +165,43 @@ def individual_quotation(request, token):
         },
         "form": form,
         "field_rows": tuple((field, form[field.key]) for field in schema.fields),
+        "declared_company_field": form["declared_company"] if "declared_company" in form.fields else None,
         "context": context,
         "detail": detail,
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_verify(request, token):
+    try:
+        access = resolve_individual_token(token)
+    except IndividualAccessError:
+        return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+    form = ExternalOTPForm(request.POST)
+    error = ""
+    if form.is_valid():
+        try:
+            cookie = verify_individual_otp(access, form.cleaned_data["code"])
+        except IndividualAccessError:
+            error = "El código no es válido, expiró o superó los intentos permitidos."
+        else:
+            response = redirect("colectivos_external:individual_quotation", token=token)
+            response.set_cookie(
+                INDIVIDUAL_COOKIE, cookie,
+                max_age=settings.COLECTIVOS_EXTERNAL_SESSION_TTL_SECONDS,
+                secure=not settings.DEBUG, httponly=True, samesite="Lax",
+                path="/solicitudes/colectivos/externa/cotizacion-individual/",
+            )
+            return response
+    return render(request, "cotizacion_colectivos/external/verify.html", {
+        "form": form,
+        "error": error,
+        "token": token,
+        "public_id": "Cotización individual",
+        "masked_recipient": mask_email(decrypt(access.encrypted_recipient)),
+        "verify_url": reverse("colectivos_external:individual_verify", args=[token]),
+    }, status=400)
 
 
 @never_cache
@@ -175,16 +243,42 @@ def _access_from_cookie(request):
 def entry(request, token):
     try:
         access = resolve_token(token)
-        cookie = authorize_direct_access(access)
+        issue_otp(access)
     except ExternalAccessError:
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
-    return _set_external_cookie(redirect("colectivos_external:portal"), cookie)
+    return render(request, "cotizacion_colectivos/external/verify.html", {
+        "form": ExternalOTPForm(),
+        "token": token,
+        "public_id": access.request.public_id,
+        "masked_recipient": mask_email(decrypt(access.encrypted_recipient)),
+        "verify_url": reverse("colectivos_external:verify", args=[token]),
+    })
 
 
 @never_cache
 @require_http_methods(["POST"])
 def verify(request, token):
-    return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+    try:
+        access = resolve_token(token)
+    except ExternalAccessError:
+        return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+    form = ExternalOTPForm(request.POST)
+    error = ""
+    if form.is_valid():
+        try:
+            cookie = verify_otp(access, form.cleaned_data["code"])
+        except ExternalAccessError:
+            error = "El código no es válido, expiró o superó los intentos permitidos."
+        else:
+            return _set_external_cookie(redirect("colectivos_external:portal"), cookie)
+    return render(request, "cotizacion_colectivos/external/verify.html", {
+        "form": form,
+        "error": error,
+        "token": token,
+        "public_id": access.request.public_id,
+        "masked_recipient": mask_email(decrypt(access.encrypted_recipient)),
+        "verify_url": reverse("colectivos_external:verify", args=[token]),
+    }, status=400)
 
 
 def _rows(request_obj):

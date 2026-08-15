@@ -2,68 +2,58 @@
 {% load static %}
 {% block title %}Ficha del cliente{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span>
-{% if colectivos_mode.code == 'individual' %}<a href="{% url 'cotizacion_colectivos:individual_index' %}">{{ colectivos_mode.name }}</a>{% elif colectivos_mode.code == 'invitations' %}<a href="{% url 'cotizacion_colectivos:invitations_index' %}">{{ colectivos_mode.name }}</a>{% else %}<a href="{% url 'cotizacion_colectivos:novelties_index' %}">{{ colectivos_mode.name }}</a>{% endif %}<span>/</span><span>Cliente</span></nav>
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'area_home' 'colectivos' %}">Área Colectivos</a><span>/</span><span>{{ colectivos_mode.name }}</span><span>/</span><span>Cliente</span></nav>
 
-<header class="detail-hero"><span class="eyebrow">Ficha consolidada del cliente · {% if entity_kind == 'company' %}Empresa{% else %}Persona{% endif %}</span>
-<h1>{% if entity_kind == 'company' %}{{ detail.display_name }}{% else %}{{ detail.full_name }}{% endif %}</h1><span class="state-chip">{{ detail.state }}</span><p>Abra una póliza para continuar con {{ colectivos_mode.name|lower }}.</p></header>
+<header class="detail-hero detail-hero--compact">
+  <div><span class="eyebrow">{% if entity_kind == 'company' %}Empresa{% else %}Persona{% endif %} · {{ detail.id_type }} {{ detail.masked_document }}</span><h1>{% if entity_kind == 'company' %}{{ detail.display_name }}{% else %}{{ detail.full_name }}{% endif %}</h1></div>
+  <span class="state-chip">{{ detail.state }}</span>
+  <p>Seleccione un ramo y el servicio que desea gestionar. La póliza se solicita únicamente cuando el servicio actual la requiere.</p>
+</header>
 
-<nav class="detail-tabs" aria-label="Secciones de la ficha">
-  <a href="#resumen">Resumen</a><a href="#polizas">Pólizas</a><a href="#asegurados">Asegurados</a><a href="#riesgos">Riesgos</a><a href="#pendientes">Información pendiente</a>
-</nav>
-
-<section id="resumen" class="detail-section"><div class="section-heading"><h2>Resumen</h2></div>
-  <div class="detail-grid" aria-label="Identificación y contacto">
-    {% if entity_kind == 'company' %}<div><span>Nombre comercial</span><strong>{{ detail.display_name }}</strong></div><div><span>Razón social</span><strong>{{ detail.legal_name }}</strong></div>
-    {% else %}<div><span>Nombre completo</span><strong>{{ detail.full_name }}</strong></div><div><span>Nombres</span><strong>{{ detail.first_name|default:"Sin información" }}</strong></div><div><span>Apellidos</span><strong>{{ detail.last_name|default:"Sin información" }}</strong></div>{% endif %}
-    <div><span>Tipo de persona</span><strong>{{ detail.summary.person_type }}</strong></div><div><span>Tipo de documento</span><strong>{{ detail.id_type }}</strong></div><div><span>Documento</span><strong>{{ detail.masked_document }}</strong></div>
-    {% if detail.summary.email %}<div><span>Correo electrónico</span><strong>{{ detail.summary.email }}</strong></div>{% endif %}
-    {% if detail.summary.mobile %}<div><span>Móvil</span><strong>{{ detail.summary.mobile }}</strong></div>{% endif %}
-    {% if detail.summary.phone %}<div><span>Teléfono</span><strong>{{ detail.summary.phone }}</strong></div>{% endif %}
+<details class="detail-section compact-disclosure"><summary>Datos de identificación y contacto</summary>
+  <div class="detail-grid">
+    {% if entity_kind == 'company' %}<div><span>Razón social</span><strong>{{ detail.legal_name }}</strong></div>{% elif detail.company_name %}<div><span>Empresa relacionada</span><strong>{{ detail.company_name }}</strong></div>{% endif %}
+    <div><span>Tipo de persona</span><strong>{{ detail.summary.person_type }}</strong></div>
+    {% if detail.summary.email %}<div><span>Correo</span><strong>{{ detail.summary.email }}</strong></div>{% endif %}
+    {% if detail.summary.mobile or detail.summary.phone %}<div><span>Teléfono</span><strong>{{ detail.summary.mobile|default:detail.summary.phone }}</strong></div>{% endif %}
     {% if detail.summary.city %}<div><span>Ciudad</span><strong>{{ detail.summary.city }}</strong></div>{% endif %}
-    {% if detail.summary.address %}<div><span>Dirección</span><strong>{{ detail.summary.address }}</strong></div>{% endif %}
-    {% if entity_kind == 'person' and detail.company_name %}<div><span>Empresa relacionada</span><strong>{{ detail.company_name }}</strong></div>{% endif %}
   </div>
-</section>
+</details>
 
-{% if detail.branches %}<section class="detail-section"><div class="section-heading"><h2>Pólizas por ramo</h2><span>{{ detail.branches|length }}</span></div><div class="branch-grid">
-{% for branch in detail.branches %}<article class="branch-card"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{{ branch.name }}</h3></div>
-<div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.insured_count }} relación{{ branch.insured_count|pluralize:"es" }}</span><span>{{ branch.active_count }} activa{{ branch.active_count|pluralize:"s" }}</span></div>
-{% if branch.roles %}<p class="muted">Roles: {{ branch.roles|join:", " }}</p>{% endif %}
-{% for policy in branch.policies %}<a class="branch-policy" href="{% if colectivos_mode.code == 'individual' %}{% url 'cotizacion_colectivos:individual_policy_detail' policy.detail_token %}{% elif colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_policy_detail' policy.detail_token %}{% else %}{% url 'cotizacion_colectivos:novelties_policy_detail' policy.detail_token %}{% endif %}">{{ policy.masked_reference }} · {{ policy.state }}</a>{% empty %}<p class="muted">No hay una póliza resoluble para este ramo.</p>{% endfor %}
-{% for warning in branch.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}</article>{% endfor %}
-</div></section>{% endif %}
+{% if branch_workspaces %}
+<section class="detail-section client-workspace">
+  <div class="section-heading"><div><span class="eyebrow">{{ colectivos_mode.name }}</span><h2>Ramos y pólizas del cliente</h2></div><span>{{ branch_workspaces|length }}</span></div>
+  <div class="policy-search" role="search"><label for="policy-filter">Buscar póliza o aseguradora</label><input id="policy-filter" type="search" placeholder="Número completo, ramo, aseguradora o estado" autocomplete="off" data-policy-filter><small data-policy-filter-status aria-live="polite"></small></div>
+  <div class="branch-grid branch-grid--focused">
+  {% for workspace in branch_workspaces %}{% with branch=workspace.branch %}
+    <article class="branch-card" data-policy-branch>
+      <header class="branch-card-heading"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{{ branch.name }}</h3></div><div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.active_count }} relación{{ branch.active_count|pluralize:"es" }} activa{{ branch.active_count|pluralize:"s" }}</span></div></header>
+      {% for entry in workspace.services %}
+      <section class="branch-service branch-service--focused"><div class="branch-service-intro"><strong>{{ entry.service.name }}</strong><p>{{ entry.service.description }}</p></div>
+        <div class="policy-stack" aria-label="Pólizas operables de {{ branch.name }}">
+        {% for policy in entry.operable_policies %}<a class="branch-policy branch-policy--primary" href="{{ policy.url }}" data-policy-card data-policy-search-text="{{ branch.code }} {{ branch.name }} {{ policy.reference }} {{ policy.insurer }} {{ policy.state }}"><span><strong>{{ policy.reference }}</strong><small>{{ policy.insurer }} · {{ policy.state }}</small></span><span aria-hidden="true">→</span></a>{% empty %}<p class="muted">No hay pólizas vigentes resolubles para este servicio.</p>{% endfor %}
+        </div>
+        {% if entry.secondary_policies %}<details class="secondary-policies"><summary>Ver {{ entry.secondary_policies|length }} póliza{{ entry.secondary_policies|length|pluralize:"s" }} histórica{{ entry.secondary_policies|length|pluralize:"s" }} o no operable{{ entry.secondary_policies|length|pluralize:"s" }}</summary>
+          <div class="policy-stack">{% for policy in entry.secondary_policies %}<a class="branch-policy branch-policy--secondary" href="{{ policy.url }}" data-policy-card data-policy-search-text="{{ branch.code }} {{ branch.name }} {{ policy.reference }} {{ policy.insurer }} {{ policy.state }}"><span><strong>{{ policy.reference }}</strong><small>{{ policy.insurer }} · {{ policy.state }}{% if policy.start_date or policy.end_date %} · {{ policy.start_date|default:"?" }}–{{ policy.end_date|default:"?" }}{% endif %}</small></span><span aria-hidden="true">→</span></a>{% endfor %}</div>
+        </details>{% endif %}
+      </section>{% empty %}<p class="status-inline">Este ramo no ofrece {{ colectivos_mode.name }} con el contrato confirmado.</p>{% endfor %}
+      {% for warning in branch.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}
+    </article>
+  {% endwith %}{% endfor %}
+  </div>
+  <p class="tool-search-empty" data-policy-no-results hidden>No hay pólizas que coincidan con la búsqueda.</p>
+</section>
+{% else %}<section class="detail-section"><p class="muted">No se encontraron ramos estructurados para este cliente.</p></section>{% endif %}
 
 {% if detail.relations_truncated %}<div class="status-message">Se muestran las primeras 20 relaciones disponibles.</div>{% endif %}
 
-<section id="polizas" class="detail-section relation-card"><div class="section-heading"><h2>Pólizas vinculadas mediante asegurados</h2><span>{{ detail.policies|length }}</span></div>
-  {% for item in detail.policies %}<article class="relation-row"><div><strong>{{ item.masked_reference }}</strong>{% if item.layout_category == 'collective' %}<span class="relation-badge">Colectivos</span>{% elif item.layout_name %}<span class="relation-badge relation-badge--neutral">Otro diseño</span>{% else %}<span class="relation-badge relation-badge--neutral">Diseño desconocido</span>{% endif %}</div>
-  <span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span>{% if item.start_date or item.end_date %}<small>Vigencia: {{ item.start_date|default:"Sin inicio" }} – {{ item.end_date|default:"Sin fin" }}</small>{% endif %}<a class="text-link" href="{% if colectivos_mode.code == 'individual' %}{% url 'cotizacion_colectivos:individual_policy_detail' item.detail_token %}{% elif colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_policy_detail' item.detail_token %}{% else %}{% url 'cotizacion_colectivos:novelties_policy_detail' item.detail_token %}{% endif %}">Abrir póliza</a></article>
-  {% empty %}<p class="muted">No se encontraron pólizas por la ruta confirmada Contacto → Asegurado → Póliza.</p>{% endfor %}
-</section>
+<details class="detail-section compact-disclosure secondary-information"><summary>Referencias operativas relacionadas</summary>
+  <div class="secondary-information-grid">
+    <section><h3>Roles y asegurados <span>{{ detail.insured|length }}</span></h3>{% for item in detail.insured %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.role }} · {{ item.state }} · {{ item.branch }}</span>{% if item.policy_reference %}<small>Póliza: {{ item.policy_reference }}</small>{% endif %}</article>{% empty %}<p class="muted">Sin roles confirmados.</p>{% endfor %}</section>
+    <section><h3>Riesgos <span>{{ detail.risks|length }}</span></h3>{% for item in detail.risks %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.risk_type }}</span>{% for label, value in item.attributes %}<small>{{ label }}: {{ value }}</small>{% endfor %}</article>{% empty %}<p class="muted">Sin riesgos confirmados.</p>{% endfor %}</section>
+  </div>
+</details>
 
-{% if detail.direct_policies %}<section class="detail-section relation-card relation-card--pending"><div class="section-heading"><h2>Pólizas como tomador</h2><span>{{ detail.direct_policies|length }}</span></div>
-  <p class="relation-note">Relación directa en validación: se presenta separada y no se mezcla con las pólizas confirmadas mediante asegurados.</p>
-  {% for item in detail.direct_policies %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span><a class="text-link" href="{% if colectivos_mode.code == 'individual' %}{% url 'cotizacion_colectivos:individual_policy_detail' item.detail_token %}{% elif colectivos_mode.code == 'invitations' %}{% url 'cotizacion_colectivos:invitations_policy_detail' item.detail_token %}{% else %}{% url 'cotizacion_colectivos:novelties_policy_detail' item.detail_token %}{% endif %}">Abrir póliza</a></article>{% endfor %}
-</section>{% endif %}
-
-<section id="asegurados" class="detail-section relation-card"><div class="section-heading"><h2>Roles en pólizas</h2><span>{{ detail.insured|length }}</span></div>
-  {% for item in detail.insured %}<article class="relation-row"><div><strong>{{ item.masked_reference }}</strong><span class="relation-badge">{{ item.role }}</span></div><span>{{ item.state }} · {{ item.branch }} · {{ item.insurer }}</span>
-  {% if item.plan %}<small>Plan: {{ item.plan }}</small>{% endif %}
-  {% if item.entry_date or item.exit_date %}<small>Ingreso: {{ item.entry_date|default:"Sin información" }} · Retiro: {{ item.exit_date|default:"Sin información" }}</small>{% endif %}
-  {% if item.policy_reference %}<small>Póliza: {{ item.policy_reference }}</small>{% endif %}<small>Riesgo asociado: {% if item.has_risk %}Sí{% else %}No{% endif %}</small></article>
-  {% empty %}<p class="muted">No existen roles relacionados confirmados para este contacto.</p>{% endfor %}
-</section>
-
-<section id="riesgos" class="detail-section relation-card"><div class="section-heading"><h2>Riesgos</h2><span>{{ detail.risks|length }}</span></div>
-  {% for item in detail.risks %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.risk_type }}</span>{% if item.start_date or item.end_date %}<small>Vigencia: {{ item.start_date|default:"Sin inicio" }} – {{ item.end_date|default:"Sin fin" }}</small>{% endif %}</article>
-  {% empty %}<p class="muted">No existen riesgos vinculados mediante la relación confirmada de asegurados.</p>{% endfor %}
-</section>
-
-<section id="pendientes" class="detail-section relation-card relation-card--pending"><h2>Información pendiente</h2>
-  <p>Las relaciones directas Contacto → Pólizas y Contacto → Riesgos conservan estado de validación parcial. No se realizan uniones por nombre ni inferencias textuales.</p>
-  {% if entity_kind == 'person' and not detail.company_name %}<p>El lookup de empresa no está poblado para este registro; no se infiere una empresa relacionada.</p>{% endif %}
-  {% for message in detail.unavailable_relations %}<p class="status-inline">{{ message }}</p>{% endfor %}
-</section>
-
+{% if detail.direct_policies or detail.unavailable_relations %}<details class="detail-section compact-disclosure relation-card--pending"><summary>Relaciones pendientes de validación</summary><p>No se realizan uniones por nombre ni inferencias textuales.</p>{% for message in detail.unavailable_relations %}<p class="status-inline">{{ message }}</p>{% endfor %}</details>{% endif %}
 {% endblock %}
+{% block scripts %}<script src="{% static 'js/colectivos-client-detail.js' %}" defer></script>{% endblock %}

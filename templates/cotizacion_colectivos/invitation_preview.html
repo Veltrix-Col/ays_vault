@@ -1,12 +1,14 @@
 {% extends "cotizacion_colectivos/base.html" %}
+{% load static %}
 {% block title %}Plantillas de invitación{% endblock %}
 {% block content %}
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'cotizacion_colectivos:invitations_index' %}">Invitaciones a Aseguradoras</a><span>/</span><a href="{% url 'cotizacion_colectivos:invitations_policy_detail' policy_token %}">Póliza</a><span>/</span><span>Plantillas</span></nav>
-<header class="policy-workspace-hero"><div><span class="eyebrow">Vista previa</span><h1>Plantillas de invitación</h1><p>{{ detail.branch_name }} · {{ detail.masked_reference }}</p></div><div class="workspace-status"><span class="read-only-chip">Datos locales · Solo lectura</span></div></header>
+<header class="policy-workspace-hero"><div><span class="eyebrow">Vista previa</span><h1>Plantillas de invitación</h1><p>{{ detail.branch_name }} · {{ detail.full_reference|default:detail.masked_reference }}</p></div><div class="workspace-status"><span class="read-only-chip">Datos locales · Solo lectura</span></div></header>
 
 <section class="workspace-card">
   <div class="section-heading"><div><span class="eyebrow">Catálogo parametrizado</span><h2>Archivos disponibles</h2></div><span>{{ previews|length }}</span></div>
   <p>Se utilizan exclusivamente los datos del Workspace vigente. Los campos no confirmados permanecen vacíos para diligenciamiento manual.</p>
+  <div class="policy-search" role="search"><label for="invitation-filter">Filtrar vista previa</label><input id="invitation-filter" type="search" placeholder="Placa, modelo, asegurado…" autocomplete="off" data-invitation-filter></div>
   <div class="workspace-accordion-grid">
   {% for preview in previews %}
     <article class="relation-row">
@@ -17,9 +19,13 @@
       <small>{{ preview.automatic_fields }} campos parametrizados automáticamente · {{ preview.manual_fields }} manuales</small>
       {% if preview.missing_required %}<details><summary>Campos obligatorios pendientes</summary><ul>{% for field in preview.missing_required %}<li>{{ field }}</li>{% endfor %}</ul></details>{% endif %}
       {% if preview.template.limitation %}<p class="muted">{{ preview.template.limitation }}</p>{% endif %}
+      {% if preview.preview_rows %}<div class="invitation-table-wrap"><table class="invitation-preview-table"><thead><tr>{% for column in preview.columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in preview.preview_rows %}<tr data-invitation-row data-invitation-search-text="{% for value in row %}{{ value }} {% endfor %}">{% for value in row %}<td>{{ value|default:"—" }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>{% endif %}
+      {% if preview.status == 'ready' or preview.status == 'ready_manual' %}<form method="post" action="{% url 'cotizacion_colectivos:policy_invitation_download' policy_token %}">{% csrf_token %}<input type="hidden" name="template_code" value="{{ preview.template.code }}"><button type="submit" class="button-link button-link--secondary">Descargar sólo {{ preview.template.insurer_name }}</button></form>{% endif %}
     </article>
   {% empty %}<p class="muted">No hay plantillas registradas para este ramo.</p>{% endfor %}
   </div>
   {% if has_generable %}<form method="post" action="{% url 'cotizacion_colectivos:policy_invitation_download' policy_token %}">{% csrf_token %}<button type="submit">Descargar plantillas disponibles</button></form>{% endif %}
+  {% if has_generable %}<p><a class="button-link button-link--secondary" href="{{ mailto_url }}">Preparar correo</a></p><p class="muted">Se abrirá su aplicación de correo con asunto y mensaje sugeridos. Los archivos no se adjuntan automáticamente: descárguelos y adjúntelos antes de enviar.</p>{% endif %}
 </section>
+<script src="{% static 'js/colectivos-invitations.js' %}" defer></script>
 {% endblock %}

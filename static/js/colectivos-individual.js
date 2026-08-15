@@ -41,6 +41,17 @@
     const definition = groupSchema(key); const row = index === null ? {} : groups[key][index];
     dialog.querySelector("[data-dialog-title]").textContent = `${index === null ? "Agregar" : "Editar"} ${definition.singular}`;
     fieldsHost.replaceChildren();
+    const applyConditions = () => {
+      definition.fields.forEach(field => {
+        if (!field.show_when || !field.show_when.length) return;
+        const [dependency, expected] = field.show_when;
+        const target = fieldsHost.querySelector(`[name="${field.key}"]`);
+        const source = fieldsHost.querySelector(`[name="${dependency}"]`);
+        const visible = source && source.value === expected;
+        target.closest(".field").hidden = !visible;
+        if (!visible) target.value = "";
+      });
+    };
     definition.fields.forEach(field => {
       const wrapper = document.createElement("div"); wrapper.className = "field";
       const label = document.createElement("label"); label.textContent = `${field.label}${field.required ? " *" : ""}`;
@@ -50,6 +61,8 @@
       input.name = field.key; input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });
+    fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", applyConditions));
+    applyConditions();
     dialog.showModal();
   };
   form.querySelectorAll("[data-add-item]").forEach(button => button.addEventListener("click", () => openDialog(button.dataset.addItem)));

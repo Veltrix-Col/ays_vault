@@ -313,7 +313,7 @@ class PolicyNavigationTests(TestCase):
     def test_individual_link_is_generated_from_policy_and_hmac_affiliate_without_zoho_id(self, _service):
         response = self.client.post(reverse(
             "cotizacion_colectivos:policy_individual_access", args=[TOKEN],
-        ))
+        ), {"recipient": "cliente@example.test"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Enlace listo para compartir")
         self.assertContains(response, "/solicitudes/colectivos/externa/cotizacion-individual/")
@@ -326,7 +326,7 @@ class PolicyNavigationTests(TestCase):
             "cotizacion_colectivos:policy_generate_access",
             args=[TOKEN, SolicitudColectivo.RequestType.UPDATE],
         )
-        first = self.client.post(url)
+        first = self.client.post(url, {"recipient": "cliente@example.test"})
         self.assertEqual(first.status_code, 200)
         self.assertContains(first, "Copiar enlace")
         self.assertContains(first, 'data-copy-target="generated-policy-url"', html=False)
@@ -338,7 +338,7 @@ class PolicyNavigationTests(TestCase):
         event_count = item.events.count()
         notification_count = item.notifications.count()
 
-        second = self.client.post(url)
+        second = self.client.post(url, {"recipient": "cliente@example.test"})
         self.assertEqual(second.status_code, 200)
         self.assertContains(second, "Existe un enlace vigente")
         self.assertContains(second, "Generar nuevo enlace")
@@ -353,7 +353,7 @@ class PolicyNavigationTests(TestCase):
             1,
         )
 
-        regenerated = self.client.post(url, {"force_new": "1"})
+        regenerated = self.client.post(url, {"force_new": "1", "recipient": "cliente@example.test"})
         self.assertEqual(regenerated.status_code, 200)
         self.assertContains(regenerated, "Copiar enlace")
         self.assertEqual(item.external_accesses.count(), 2)
@@ -368,7 +368,7 @@ class PolicyNavigationTests(TestCase):
     def test_simple_flow_uses_defaults_without_preliminary_form(self, _service):
         response = self.client.post(
             reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN]),
-            {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Copiar enlace")
@@ -415,7 +415,7 @@ class PolicyNavigationTests(TestCase):
             "cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN],
         )
         generated = self.client.post(
-            generate_url, {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            generate_url, {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
         self.assertContains(generated, "Copiar enlace")
         revoke_url = reverse("cotizacion_colectivos:policy_revoke_access", args=[TOKEN])
@@ -435,7 +435,7 @@ class PolicyNavigationTests(TestCase):
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_revoked_or_expired_access_is_replaced_automatically(self, _service):
         url = reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN])
-        post = {"request_type": SolicitudColectivo.RequestType.UPDATE}
+        post = {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"}
         self.client.post(url, post)
         item = SolicitudColectivo.objects.get()
         first = item.external_accesses.get()
@@ -463,7 +463,7 @@ class PolicyNavigationTests(TestCase):
 
         response = self.client.post(
             reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN]),
-            {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -500,7 +500,7 @@ class PolicyNavigationTests(TestCase):
         terminal.save(update_fields=("status", "closed_at"))
         response = self.client.post(
             reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN]),
-            {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Copiar enlace")
@@ -516,7 +516,7 @@ class PolicyNavigationTests(TestCase):
 
         response = self.client.post(
             reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN]),
-            {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -686,7 +686,7 @@ class PolicyNavigationTests(TestCase):
         self.assertNotContains(policy_page, "Existe un enlace vigente")
         response = self.client.post(
             reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN]),
-            {"request_type": SolicitudColectivo.RequestType.UPDATE},
+            {"request_type": SolicitudColectivo.RequestType.UPDATE, "recipient": "cliente@example.test"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(SolicitudColectivo.objects.count(), 2)
@@ -726,7 +726,7 @@ class PolicyNavigationTests(TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "cotizacion_colectivos/detail.html")
-        self.assertContains(response, "Abra una póliza para continuar")
+        self.assertContains(response, "Seleccione un ramo y el servicio que desea gestionar")
         self.assertNotContains(response, "Solicitud creada correctamente")
         self.assertNotContains(response, generated.url)
         self.assertNotContains(response, "Abrir solicitud")

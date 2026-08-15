@@ -1,0 +1,39 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Área {{ area.name }} · Banco de Herramientas A&amp;S</title>
+  <meta name="theme-color" content="#152036"><link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}"><link rel="stylesheet" href="{% static 'css/portal.css' %}">
+</head>
+<body class="public-portal">
+  <a class="skip-link" href="#area-tools">Ir a las herramientas</a>
+  <div class="portal-page">
+    <header class="portal-header" aria-labelledby="portal-title">
+      <a href="/" aria-label="Volver al Banco de Herramientas"><img class="portal-logo" src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&amp;S Asesores en Seguros"></a>
+      <div class="portal-heading"><span class="portal-kicker">Banco de Herramientas · Área</span><h1 id="portal-title">{{ area.name }}</h1><p>{{ area.description }}</p></div>
+    </header>
+    <main id="area-tools" class="portal-main" tabindex="-1">
+      <nav class="portal-breadcrumb" aria-label="Migas de pan"><a href="/">Banco</a><span aria-hidden="true">/</span><span aria-current="page">{{ area.name }}</span></nav>
+      <div class="application-grid" role="list" aria-label="Herramientas del área {{ area.name }}">
+      {% for app in area.applications %}
+        <article class="application-card" role="listitem">
+          {% if app.logo %}<div class="application-logo {{ app.logo_class }}"><img src="{% static app.logo %}" alt="{{ app.name }}"></div>
+          {% else %}<div class="application-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="{{ app.icon_path }}"></path></svg></div>{% endif %}
+          <div class="application-copy"><span class="application-area-label">Área {{ area.name }}</span><h2{% if app.logo %} class="sr-only"{% endif %}>{{ app.name }}</h2><p>{{ app.description }}</p></div>
+          <div class="application-action"><a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}>Ingresar <span aria-hidden="true">→</span></a></div>
+        </article>
+      {% endfor %}
+      </div>
+      {% if area.operational_center %}
+      <aside class="operational-center" aria-labelledby="operational-center-title">
+        <div class="operational-center-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4V5Zm0 9h5l2 3h2l2-3h5"></path></svg></div>
+        <div><span class="application-area-label">Centro operativo</span><h2 id="operational-center-title">{{ area.operational_center.name }}</h2><p>{{ area.operational_center.description }}</p></div>
+        <a class="portal-button portal-button--operational" href="{{ area.operational_center.url }}">Abrir Buzón <span aria-hidden="true">→</span></a>
+      </aside>
+      {% endif %}
+    </main>
+    <footer class="portal-footer"><a href="/">← Volver al Banco</a><span>© A&amp;S Asesores en Seguros</span></footer>
+  </div>
+</body></html>
