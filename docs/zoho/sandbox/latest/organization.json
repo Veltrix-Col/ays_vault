@@ -1,0 +1,12 @@
+{
+  "organization": {
+    "company_name": "AYS Seguros",
+    "country": "",
+    "currency": "Colombian Peso",
+    "environment": "sandbox",
+    "organization_id": "4991513000000020005",
+    "timezone": "America/Bogota"
+  },
+  "profile": "sandbox",
+  "schema_version": 2
+}
