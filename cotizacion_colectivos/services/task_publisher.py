@@ -1,4 +1,4 @@
-"""Outbox y dry-run seguro para Tasks; la publicación real sigue bloqueada por contrato."""
+"""Outbox local y publicación manual, estrictamente protegida, de Tasks Sandbox."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
+from integrations.zoho import get_zoho
+from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
+from integrations.zoho.settings import ZohoSettings
 from vault.crypto import decrypt, encrypt
 
 from ..models import ColectivosTaskOutbox
@@ -22,14 +25,25 @@ TASK_KIND = {
     "COTIZACION": "Cotización",
 }
 ALLOWED_TASK_FIELDS = frozenset({"Subject", "tipo_de_solicitud"})
+SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
+SYNTHETIC_TEST_TASK = {
+    "Subject": "PRUEBA VELTRIX - NO GESTIONAR",
+    "tipo_de_solicitud": "Ingresos",
+}
 
 
 class TaskPublishingDisabled(RuntimeError):
     pass
 
 
-class TaskContractIncomplete(TaskPublishingDisabled):
+class TaskPublicationRejected(RuntimeError):
     pass
+
+
+class TaskPublicationUncertain(RuntimeError):
+    """El request pudo llegar a Zoho y exige conciliación antes de otro intento."""
+
+    reconciliation_required = True
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,8 @@ class ColectivosTaskPayload:
 
 class ColectivosTaskPublisher(Protocol):
     def publish(self, payload: ColectivosTaskPayload) -> Mapping[str, object]: ...
+
+    def publish_test_task(self) -> Mapping[str, object]: ...
 
 
 def build_task_record(payload: ColectivosTaskPayload) -> dict[str, str]:
@@ -128,25 +144,81 @@ class DisabledColectivosTaskPublisher:
         del payload
         raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
 
+    def publish_test_task(self) -> Mapping[str, object]:
+        raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
+
 
 class GuardedSandboxTaskPublisher:
-    """Guardas en capas; no escribe mientras el layout real siga sin confirmar."""
+    """Único punto de escritura Tasks, cerrado por barreras independientes."""
 
-    enabled = False
+    enabled = True
 
-    def __init__(self, *, profile: str):
+    def __init__(self, *, profile: str, confirmation: str):
         if profile != "sandbox":
             raise TaskPublishingDisabled("Tasks sólo admite Sandbox en esta fase.")
+        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != "sandbox":
+            raise TaskPublishingDisabled("El perfil Zoho activo no es Sandbox.")
+        zoho_config = ZohoSettings.from_django(profile)
+        if not zoho_config.write_enabled:
+            raise TaskPublishingDisabled("La escritura del perfil Sandbox está deshabilitada.")
         if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
             raise TaskPublishingDisabled("La publicación Tasks no está habilitada.")
-        if getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "") != "SANDBOX_TASK_WRITE":
+        if getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "") != SANDBOX_WRITE_CONFIRMATION:
+            raise TaskPublishingDisabled("La configuración no confirma la escritura Sandbox.")
+        if str(confirmation or "").strip() != SANDBOX_WRITE_CONFIRMATION:
             raise TaskPublishingDisabled("Falta la confirmación explícita de escritura Sandbox.")
-        raise TaskContractIncomplete(
-            "El layout y sus reglas obligatorias no están demostrados; no se puede publicar responsablemente."
-        )
+        self.profile = profile
+
+    def publish(self, payload: ColectivosTaskPayload) -> Mapping[str, object]:
+        return self._create_one(build_task_record(payload))
+
+    def publish_test_task(self) -> Mapping[str, object]:
+        return self._create_one(SYNTHETIC_TEST_TASK)
+
+    def _create_one(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        normalized = dict(record)
+        if set(normalized) != ALLOWED_TASK_FIELDS:
+            raise ValidationError("El payload Tasks no coincide con el contrato autorizado.")
+        try:
+            # La fachada vuelve a comprobar write_enabled antes de construir el POST.
+            result = get_zoho(profile=self.profile).records.create(
+                module="Tasks",
+                records=(normalized,),
+            )
+        except ZohoTimeoutError as exc:
+            raise TaskPublicationUncertain(
+                "Resultado incierto: no reintente; requiere conciliación manual en Zoho Sandbox."
+            ) from exc
+        except ZohoAPIError as exc:
+            if getattr(exc, "request_sent", None) is True and (
+                getattr(exc, "status_code", None) or 0
+            ) >= 500:
+                raise TaskPublicationUncertain(
+                    "Resultado incierto: no reintente; requiere conciliación manual en Zoho Sandbox."
+                ) from exc
+            raise
+
+        records = tuple(getattr(result, "records", ()))
+        if len(records) != 1:
+            raise TaskPublicationRejected("Zoho no devolvió un resultado individual válido.")
+        item = records[0]
+        if not getattr(item, "succeeded", False) or not str(
+            getattr(item, "record_id", "") or ""
+        ).strip():
+            code = str(getattr(item, "code", "") or "WRITE_REJECTED")[:40]
+            raise TaskPublicationRejected(f"Zoho rechazó la Task ({code}).")
+        return {
+            "profile": self.profile,
+            "module": "Tasks",
+            "record_id": str(item.record_id),
+        }
 
 
-def get_task_publisher(*, profile: str = "sandbox") -> ColectivosTaskPublisher:
+def get_task_publisher(
+    *, profile: str = "sandbox", confirmation: str = "",
+) -> ColectivosTaskPublisher:
+    if profile != "sandbox":
+        raise TaskPublishingDisabled("Tasks sólo admite Sandbox en esta fase.")
     if getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
-        return GuardedSandboxTaskPublisher(profile=profile)
+        return GuardedSandboxTaskPublisher(profile=profile, confirmation=confirmation)
     return DisabledColectivosTaskPublisher()

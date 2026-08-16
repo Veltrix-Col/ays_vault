@@ -35,7 +35,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Fecha solicitada de ingreso", content)
         self.assertIn("Fecha solicitada de retiro", content)
 
-    def test_future_task_publisher_is_explicitly_disabled(self):
+    def test_task_publisher_remains_disabled_by_default(self):
         publisher = get_task_publisher()
         self.assertFalse(publisher.enabled)
         payload = ColectivosTaskPayload(
@@ -47,7 +47,3 @@ class ProductToolsContractTests(SimpleTestCase):
         )
         with self.assertRaises(TaskPublishingDisabled):
             publisher.publish(payload)
-
-        source = Path("cotizacion_colectivos/services/task_publisher.py").read_text(encoding="utf-8")
-        for forbidden in ("records.create", "records.update", "records.upsert", "get_zoho"):
-            self.assertNotIn(forbidden, source)
