@@ -258,7 +258,15 @@
 .policy-search input { box-sizing: border-box; width: 100%; min-height: 46px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 13px; font: inherit; }
 .policy-search input:focus-visible { outline: 3px solid rgba(0,124,255,.22); border-color: var(--blue); }
 .policy-search small { color: var(--muted); }
-.branch-grid--focused { grid-template-columns: 1fr; }
+.branch-grid--focused { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.branch-card-heading .eyebrow { font-size: 13px; letter-spacing: .08em; }
+.branch-card-heading h3 { margin-top: 4px; font-size: clamp(1.25rem, 2vw, 1.55rem); }
+.branch-card-heading h3 a { color: inherit; text-decoration: none; }
+.branch-card-heading h3 a:hover, .branch-card-heading h3 a:focus-visible { color: var(--blue); text-decoration: underline; }
+.branch-consolidated-action { margin-top: 18px; }
+.insurer-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.insurer-actions form { margin: 0; }
+.profile-instruction { margin: -10px 0 20px; padding: 10px 14px; border-left: 3px solid var(--blue); background: rgba(0,124,255,.045); color: var(--muted); }
 .branch-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .branch-service--focused { margin-top: 18px; }
 .branch-service-intro p { margin: 4px 0 12px; }
@@ -278,9 +286,60 @@
   .detail-hero--compact p { grid-column: auto; }
   .branch-card-heading { display: block; }
   .secondary-information-grid { grid-template-columns: 1fr; }
+  .branch-grid--focused { grid-template-columns: 1fr; }
 }
 .invitation-table-wrap { max-width: 100%; margin: 14px 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
 .invitation-preview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .invitation-preview-table th, .invitation-preview-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 .invitation-preview-table th { color: var(--navy); background: rgba(0,124,255,.05); }
 .invitation-preview-table tr[hidden] { display: none; }
+.invitation-workspace-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 320px); gap: 20px; align-items: start; }
+.invitation-workspace-main { min-width: 0; display: grid; gap: 18px; }
+.invitation-actions-panel { position: sticky; top: 18px; display: grid; gap: 18px; }
+.invitation-actions-panel h2, .invitation-insurer-action h3 { margin: 0; }
+.invitation-insurer-action { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--line); }
+.invitation-insurer-action form, .invitation-insurer-action button, .invitation-insurer-action .button-link { width: 100%; }
+.invitation-insurer-action .button-link { box-sizing: border-box; text-align: center; }
+.invitation-policy-group + .invitation-policy-group { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.invitation-policy-group header h3 { margin: 3px 0 0; color: var(--navy); }
+.invitation-warning { border-color: #e7b95b; background: #fffaf0; }
+.invitation-technical > summary, .invitation-secondary-actions > summary { cursor: pointer; color: var(--navy); font-weight: 800; }
+.invitation-secondary-actions { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.invitation-secondary-actions[open] summary { margin-bottom: 12px; }
+.invitation-secondary-actions form, .invitation-secondary-actions .button-link { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; text-align: center; }
+@media (max-width: 900px) {
+  .invitation-workspace-layout { grid-template-columns: 1fr; }
+  .invitation-actions-panel { position: static; }
+}
+.button-primary, .button-secondary { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px; border: 0; border-radius: 11px; font: inherit; font-weight: 800; cursor: pointer; }
+.button-primary { background: #173b5c; color: #fff; }
+.button-primary:hover, .button-primary:focus-visible { background: #0e2d49; }
+.button-secondary { border: 1px solid #b9d8e9; background: #edf7fc; color: #245879; }
+.button-secondary:hover, .button-secondary:focus-visible { background: #dceff9; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.branch-workspace-hero { align-items: center; }
+.branch-policy-count { display: inline-flex; align-items: center; gap: 9px; color: #245879; }
+.branch-policy-count strong { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #e4f2fa; color: #173b5c; font-size: 1.15rem; }
+.branch-policy-count span { max-width: 78px; font-size: .76rem; font-weight: 800; line-height: 1.2; }
+.branch-policy-table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+.branch-policy-table { width: 100%; min-width: 850px; border-collapse: collapse; font-size: .83rem; }
+.branch-policy-table th, .branch-policy-table td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.branch-policy-table th { color: #536076; background: #f5f8fb; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.branch-policy-table td span, .branch-policy-table td small { display: block; }
+.branch-policy-table td small { margin-top: 4px; color: #926010; }
+.branch-policy-radio { width: 18px; height: 18px; accent-color: #173b5c; cursor: pointer; }
+.branch-policy-radio:disabled { cursor: not-allowed; }
+.branch-policy-pending { background: #fffbf2; }
+.branch-selection-clear { margin-top: 13px; }
+.status-message--warning { background: #fff7e8; color: #77500c; }
+.branch-data-search { margin-top: 4px; }
+.invitation-operational-table { min-width: 1040px; }
+.invitation-other-actions { display: grid; gap: 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+.invitation-other-actions form, .invitation-other-actions button, .invitation-other-actions .button-link { width: 100%; }
+.invitation-other-actions .button-link { justify-content: center; }
+.invitation-filter-empty { padding: 12px; text-align: center; }
+@media (max-width: 700px) {
+  .branch-policy-count { justify-self: start; }
+  .branch-selection-clear { width: 100%; }
+  .invitation-actions-panel .button-primary, .invitation-actions-panel .button-secondary, .invitation-actions-panel .button-link { width: 100%; }
+}

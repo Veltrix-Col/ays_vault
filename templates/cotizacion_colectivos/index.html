@@ -3,6 +3,7 @@
 {% block content %}
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><span>{{ colectivos_mode.name }}</span></nav>
 <header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
+<p class="profile-instruction">Perfil Zoho activo: <strong>{{ zoho_environment.label|upper }}</strong>. El perfil se cambia mediante <code>ZOHO_ACTIVE_PROFILE</code> y reinicio de la aplicación; no se cambia por sesión.</p>
 <section class="search-panel" aria-labelledby="client-search-heading">
   <div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div>
   <p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p>

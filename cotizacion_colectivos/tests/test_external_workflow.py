@@ -444,7 +444,23 @@ class ExternalWorkflowTests(TestCase):
             after + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS),
         )
 
-    def test_entry_does_not_resend_an_unexpired_otp(self):
+    def test_otp_expires_exactly_with_access_and_email_uses_local_deadline(self):
+        generated = self.access()
+        expected_expiry = generated.access.expires_at
+        with patch(
+            "cotizacion_colectivos.services.external.send_notification"
+        ) as sender, patch(
+            "cotizacion_colectivos.services.external.secrets.randbelow",
+            return_value=123456,
+        ):
+            self.assertTrue(issue_otp(generated.access))
+        generated.access.refresh_from_db()
+        self.assertEqual(generated.access.otp_expires_at, expected_expiry)
+        message = sender.call_args.kwargs
+        self.assertIn("mientras el enlace permanezca vigente", message["text_body"])
+        self.assertNotIn("minutos", message["text_body"])
+
+    def test_entry_does_not_resend_an_unexpired_otp_after_link_bound_issue(self):
         generated = self.access()
         with patch("cotizacion_colectivos.services.external.send_notification") as sender, patch(
             "cotizacion_colectivos.services.external.secrets.randbelow", return_value=123456,

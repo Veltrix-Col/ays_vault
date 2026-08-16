@@ -206,6 +206,7 @@ class CompanySearchService(_BaseSearchService):
             display_name=name,
             masked_document=mask_document(record.get("N_mero_de_ID")),
             state=str(record.get("Estado") or "Sin estado"),
+            document=str(record.get("N_mero_de_ID") or "").strip(),
         )
 
 
@@ -248,6 +249,7 @@ class PersonSearchService(_BaseSearchService):
             full_name=str(record.get("Full_Name") or "Persona sin nombre"),
             masked_document=mask_document(record.get("N_mero_de_ID")),
             state=str(record.get("Estado") or "Sin estado"),
+            document=str(record.get("N_mero_de_ID") or "").strip(),
         )
 
 
@@ -280,6 +282,7 @@ class UnifiedClientSearchService:
                 document_label="NIT",
                 masked_document=item.masked_document,
                 state=item.state,
+                document=item.document,
             )
             for item in company_results
         ]
@@ -292,6 +295,7 @@ class UnifiedClientSearchService:
                 document_label="Documento",
                 masked_document=item.masked_document,
                 state=item.state,
+                document=item.document,
             )
             for item in person_results
         )

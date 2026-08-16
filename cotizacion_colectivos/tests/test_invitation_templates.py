@@ -4,6 +4,7 @@ import hashlib
 import io
 import zipfile
 import inspect
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 from xml.etree import ElementTree as ET
@@ -18,10 +19,12 @@ from cotizacion_colectivos.invitation_templates.catalog import (
     templates_for_branch,
 )
 from cotizacion_colectivos.services.common import sign_record_id
+from cotizacion_colectivos.services.common import ColectivosServiceError
 from cotizacion_colectivos.services.invitation_templates import (
     _context,
     generate_invitation_templates,
     preview_invitation_templates,
+    sign_branch_invitation_context,
 )
 
 
@@ -88,6 +91,11 @@ class InvitationTemplateCatalogTests(TestCase):
         self.assertEqual({item.code for item in templates_for_branch("40", active_only=True)}, {
             "sura_autos_quote", "allianz_autos_collective",
         })
+        sura = next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "sura_autos_quote")
+        allianz = next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "allianz_autos_collective")
+        self.assertTrue(sura.expandable_rows)
+        self.assertFalse(sura.supports_chunking)
+        self.assertTrue(allianz.supports_chunking)
 
     def test_legacy_xls_is_not_silently_converted_or_enabled(self):
         legacy = next(item for item in INVITATION_TEMPLATE_CATALOG if item.extension == "xls")
@@ -157,6 +165,92 @@ class InvitationTemplateGenerationTests(TestCase):
         self.assertNotEqual(fixed_company["holder.document"], member().document)
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_branch_preview_consolidates_same_client_branch_from_local_workspaces(self, workspace):
+        second_token = sign_record_id(
+            "4234567890123456790", "policy",
+            context={"source_id": SOURCE_ID, "source_kind": "company"},
+        )
+        first_workspace = local_workspace(members=(member(1),))
+        first_workspace = (
+            first_workspace[0], first_workspace[1], first_workspace[2],
+            {"source_kind": "company", "source_id": SOURCE_ID}, "sandbox", "sdk",
+        )
+        second_policy = replace(policy(), detail_token=second_token, full_reference="POLIZA-2")
+        workspace.side_effect = (
+            first_workspace,
+            (second_policy, (member(2),), {"status": "hit"},
+             {"source_kind": "company", "source_id": SOURCE_ID}, "sandbox", "sdk"),
+        )
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN, second_token), branch_code="40",
+            holder="Empresa de prueba", policy_references=("POLIZA-PRUEBA", "POLIZA-2"),
+        )
+        detail, previews, metadata = preview_invitation_templates(
+            context_token, consolidated=True,
+        )
+        self.assertEqual(detail.full_reference, "2 pólizas vigentes del ramo")
+        self.assertEqual({item.rows for item in previews}, {2})
+        self.assertEqual(metadata["remote_queries"], 0)
+        self.assertTrue(metadata["complete"])
+        self.assertEqual(
+            [item["policy_reference"] for item in metadata["operational_groups"]],
+            ["POLIZA-PRUEBA", "POLIZA-2"],
+        )
+        self.assertEqual(workspace.call_count, 2)
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_branch_missing_workspace_keeps_available_policy_operational(self, workspace):
+        second_token = sign_record_id(
+            "4234567890123456790", "policy",
+            context={"source_id": SOURCE_ID, "source_kind": "company"},
+        )
+        first = local_workspace()
+        workspace.side_effect = (
+            (first[0], first[1], first[2],
+             {"source_kind": "company", "source_id": SOURCE_ID}, "sandbox", "sdk"),
+            ColectivosServiceError("workspace_unavailable", "No disponible"),
+        )
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN, second_token), branch_code="40",
+            holder="Empresa de prueba", policy_references=("POLIZA-1", "POLIZA-2"),
+        )
+        _detail, previews, metadata = preview_invitation_templates(
+            context_token, consolidated=True,
+        )
+        self.assertTrue(previews)
+        self.assertFalse(metadata["complete"])
+        self.assertEqual(metadata["missing_workspaces"], ("POLIZA-2",))
+        workspace.side_effect = (
+            (first[0], first[1], first[2],
+             {"source_kind": "company", "source_id": SOURCE_ID}, "sandbox", "sdk"),
+            ColectivosServiceError("workspace_unavailable", "No disponible"),
+        )
+        content, filename, content_type, errors = generate_invitation_templates(
+            context_token, consolidated=True, insurer_code="SURA",
+        )
+        self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertEqual(filename, "sura_movilidad.xlsx")
+        self.assertEqual(errors, ())
+        self.assertEqual(inline_value(content, "xl/worksheets/sheet1.xml", "A2"), "ABC001")
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_branch_rejects_policy_from_another_branch(self, workspace):
+        workspace.return_value = local_workspace(branch="83")
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN,), branch_code="40", holder="Empresa de prueba",
+        )
+        with self.assertRaises(ColectivosServiceError):
+            preview_invitation_templates(context_token, consolidated=True)
+
+    def test_branch_rejects_tampered_signed_context(self):
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN,), branch_code="40", holder="Empresa de prueba",
+        )
+        altered = context_token[:-1] + ("a" if context_token[-1] != "a" else "b")
+        with self.assertRaises(ColectivosServiceError):
+            preview_invitation_templates(altered, consolidated=True)
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
     def test_ooxml_preserves_every_non_target_part_and_formula_validation_structure(self, workspace):
         workspace.return_value = local_workspace()
         content, _filename, _content_type, _errors = generate_invitation_templates(TOKEN)
@@ -184,11 +278,11 @@ class InvitationTemplateGenerationTests(TestCase):
         self.assertEqual(content_type, "application/zip")
         self.assertEqual(errors, ())
         with zipfile.ZipFile(io.BytesIO(content)) as bundle:
-            self.assertEqual(len([name for name in bundle.namelist() if name.startswith("sura_")]), 15)
+            self.assertEqual(len([name for name in bundle.namelist() if name.startswith("sura_")]), 1)
             self.assertEqual(len([name for name in bundle.namelist() if name.startswith("allianz_")]), 2)
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
-    def test_sura_capacity_creates_multiple_files_instead_of_blocking(self, workspace):
+    def test_sura_31_records_stays_one_file_in_general_download(self, workspace):
         workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 31)))
         content, filename, content_type, errors = generate_invitation_templates(TOKEN)
         self.assertEqual(content_type, "application/zip")
@@ -196,33 +290,59 @@ class InvitationTemplateGenerationTests(TestCase):
         self.assertEqual(errors, ())
         with zipfile.ZipFile(io.BytesIO(content)) as bundle:
             self.assertEqual(set(bundle.namelist()), {
-                "sura_movilidad_01.xlsx", "sura_movilidad_02.xlsx",
+                "sura_movilidad.xlsx",
                 "allianz_movilidad.xlsx",
             })
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
-    def test_sura_136_over_21_produces_seven_complete_files(self, workspace):
+    def test_per_insurer_download_is_xlsx_or_exclusive_zip_without_truncation(self, workspace):
+        workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 32)))
+        allianz, allianz_name, allianz_type, _errors = generate_invitation_templates(
+            TOKEN, insurer_code="ALLIANZ",
+        )
+        self.assertTrue(allianz_name.startswith("allianz_"))
+        self.assertIn("spreadsheetml", allianz_type)
+        self.assertTrue(allianz.startswith(b"PK"))
+        sura, sura_name, sura_type, _errors = generate_invitation_templates(
+            TOKEN, insurer_code="SURA",
+        )
+        self.assertIn("spreadsheetml", sura_type)
+        self.assertEqual(sura_name, "sura_movilidad.xlsx")
+        with zipfile.ZipFile(io.BytesIO(sura)) as workbook:
+            root = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+        record_count = sum(
+            1 for cell in root.findall(f".//{{{NS}}}c")
+            if cell.get("r", "").startswith("A")
+            and cell.find(f"{{{NS}}}is/{{{NS}}}t") is not None
+            and cell.find(f"{{{NS}}}is/{{{NS}}}t").text
+        )
+        self.assertEqual(record_count, 31)
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_sura_136_records_expand_one_file_without_truncation(self, workspace):
         workspace.return_value = local_workspace(members=tuple(member(i) for i in range(1, 137)))
         _detail, previews, _metadata = preview_invitation_templates(TOKEN)
         sura_preview = next(item for item in previews if item.template.insurer_code == "SURA")
-        self.assertEqual(sura_preview.output_files, 7)
+        self.assertEqual(sura_preview.output_files, 1)
         self.assertEqual(sura_preview.status, "ready_manual")
-        content, _filename, _content_type, errors = generate_invitation_templates(TOKEN)
+        content, filename, content_type, errors = generate_invitation_templates(
+            TOKEN, insurer_code="SURA",
+        )
         self.assertEqual(errors, ())
-        with zipfile.ZipFile(io.BytesIO(content)) as bundle:
-            sura_names = sorted(name for name in bundle.namelist() if name.startswith("sura_"))
-            self.assertEqual(len(sura_names), 7)
-            counts = []
-            for name in sura_names:
-                with zipfile.ZipFile(io.BytesIO(bundle.read(name))) as workbook:
-                    root = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
-                counts.append(sum(
-                    1 for cell in root.findall(f".//{{{NS}}}c")
-                    if cell.get("r", "").startswith("A")
-                    and cell.find(f"{{{NS}}}is/{{{NS}}}t") is not None
-                    and cell.find(f"{{{NS}}}is/{{{NS}}}t").text
-                ))
-            self.assertEqual(sum(counts), 136)
+        self.assertEqual(filename, "sura_movilidad.xlsx")
+        self.assertIn("spreadsheetml", content_type)
+        with zipfile.ZipFile(io.BytesIO(content)) as workbook:
+            root = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+        cells = {
+            cell.get("r"): cell for cell in root.findall(f".//{{{NS}}}c")
+            if cell.get("r", "").startswith("A")
+        }
+        populated = [cell for cell in cells.values()
+                     if cell.find(f"{{{NS}}}is/{{{NS}}}t") is not None
+                     and cell.find(f"{{{NS}}}is/{{{NS}}}t").text]
+        self.assertEqual(len(populated), 136)
+        self.assertEqual(cells["A137"].get("s"), cells["A22"].get("s"))
+        self.assertEqual(root.find(f"{{{NS}}}dimension").get("ref"), "A1:T137")
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
     def test_sensitive_values_are_never_logged(self, workspace):
@@ -262,7 +382,9 @@ class InvitationTemplateViewTests(TestCase):
 
     @patch("cotizacion_colectivos.views.preview_invitation_templates")
     def test_preview_is_get_anti_idor_and_contains_no_raw_identifier(self, preview):
-        preview.return_value = policy(), (), {"status": "hit"}
+        preview.return_value = policy(), (), {
+            "status": "hit", "complete": True, "operational_groups": (),
+        }
         url = reverse("cotizacion_colectivos:policy_invitation_preview", args=[TOKEN])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -275,6 +397,92 @@ class InvitationTemplateViewTests(TestCase):
         ):
             self.assertEqual(self.client.get(reverse("cotizacion_colectivos:policy_invitation_preview", args=[altered])).status_code, 404)
 
+    @patch("cotizacion_colectivos.views.preview_invitation_templates")
+    def test_each_insurer_has_a_short_independent_mailto(self, preview):
+        from cotizacion_colectivos.services.invitation_templates import TemplatePreview
+        templates = templates_for_branch("40", active_only=True)
+        preview.return_value = policy(), tuple(
+            TemplatePreview(item, "ready", 1, 0, 1, 100, ())
+            for item in templates
+        ), {"status": "hit", "complete": True, "operational_groups": ({
+            "policy_reference": "POLIZA-PRUEBA", "insurer": "Actual",
+            "rows": ({"document": "100000001", "plate": "ABC001",
+                      "model": "2025", "brand": "Marca", "city": "Bogotá",
+                      "relationship": "Titular", "insured_name": "Persona 1"},),
+        },)}
+        response = self.client.get(reverse(
+            "cotizacion_colectivos:policy_invitation_preview", args=[TOKEN],
+        ))
+        self.assertContains(response, "Preparar correo SURA")
+        self.assertContains(response, "Preparar correo Allianz")
+        self.assertEqual(response.content.count(b"invitation-preview-table"), 1)
+        self.assertContains(response, "ABC001")
+        self.assertContains(response, "100000001")
+        for item in response.context["actions"]:
+            self.assertLess(len(item["mailto_url"]), 700)
+            self.assertIn(item["insurer_name"], item["mailto_url"])
+
+    @patch("cotizacion_colectivos.views.preview_invitation_templates")
+    def test_branch_view_groups_records_by_policy_and_actions_by_catalog_insurer(self, preview):
+        from cotizacion_colectivos.services.invitation_templates import TemplatePreview
+        templates = templates_for_branch("40", active_only=True)
+        preview.return_value = replace(
+            policy(), full_reference="2 pólizas vigentes del ramo",
+        ), tuple(
+            TemplatePreview(item, "ready", 1, 0, 2, 100, ())
+            for item in templates
+        ), {
+            "complete": True, "remote_queries": 0,
+            "operational_groups": (
+                {"policy_reference": "POLIZA-1", "insurer": "SURA", "rows": ({
+                    "document": "1001", "insured_name": "Persona uno", "plate": "AAA001",
+                    "model": "2025", "brand": "Marca", "city": "Bogotá", "relationship": "Titular",
+                },)},
+                {"policy_reference": "POLIZA-2", "insurer": "Allianz", "rows": ({
+                    "document": "1002", "insured_name": "Persona dos", "plate": "BBB002",
+                    "model": "2024", "brand": "Marca", "city": "Medellín", "relationship": "Titular",
+                },)},
+            ),
+        }
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN,), branch_code="40", holder="Empresa de prueba",
+        )
+        response = self.client.get(reverse(
+            "cotizacion_colectivos:branch_invitation_preview", args=[context_token],
+        ))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.count(b"invitation-preview-table"), 1)
+        self.assertContains(response, "POLIZA-1")
+        self.assertContains(response, "POLIZA-2")
+        self.assertEqual(
+            {item["insurer_code"] for item in response.context["actions"]},
+            {"SURA", "ALLIANZ"},
+        )
+
+    @patch("cotizacion_colectivos.views.generate_invitation_templates")
+    def test_branch_download_requests_only_selected_catalog_insurer(self, generate):
+        generate.return_value = (
+            b"zip", "Invitaciones_SURA_40.zip", "application/zip", (),
+        )
+        context_token = sign_branch_invitation_context(
+            policy_tokens=(TOKEN,), branch_code="40", holder="Empresa de prueba",
+        )
+        response = self.client.post(reverse(
+            "cotizacion_colectivos:branch_invitation_download", args=[context_token],
+        ), {"insurer_code": "SURA"})
+        self.assertEqual(response.status_code, 200)
+        generate.assert_called_once_with(
+            context_token, template_code="", insurer_code="SURA", consolidated=True,
+        )
+
+    def test_local_filter_supports_policy_plate_document_name_and_clear(self):
+        source = (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-invitations.js").read_text(encoding="utf-8")
+        self.assertIn("data-invitation-policy-filter", source)
+        self.assertIn("row.dataset.policyKey", source)
+        self.assertIn("row.dataset.invitationSearchText", source)
+        self.assertIn("option.checked = false", source)
+        self.assertNotIn("fetch(", source)
+
     @patch("cotizacion_colectivos.views.generate_invitation_templates")
     def test_download_requires_post_and_csrf_and_sets_private_headers(self, generate):
         generate.return_value = (b"xlsx", "Invitacion_SURA_40.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ())
@@ -284,6 +492,7 @@ class InvitationTemplateViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("no-store", response["Cache-Control"])
         self.assertIn("private", response["Cache-Control"])
+        generate.assert_called_once_with(TOKEN, template_code="", insurer_code="")
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.admin)
         self.assertEqual(csrf_client.post(url).status_code, 403)

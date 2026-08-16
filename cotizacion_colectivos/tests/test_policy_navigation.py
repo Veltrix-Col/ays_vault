@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import timedelta
 from html.parser import HTMLParser
 from unittest.mock import Mock, patch
@@ -174,8 +175,9 @@ class FakeEntityDetailService:
         return CompanyDetail(
             display_name="Empresa autorizada", legal_name="Empresa autorizada",
             id_type="NIT", masked_document="•••789", state="Cliente",
-            summary=ContactSummary("Persona jurídica", "NIT", "•••789", "Cliente"),
+            summary=ContactSummary("Persona jurídica", "NIT", "•••789", "Cliente", document="900123789"),
             policies=(policy,), direct_policies=(), insured=(), risks=(), branches=(branch,),
+            document="900123789",
         )
 
 
@@ -216,6 +218,127 @@ class PolicyNavigationTests(TestCase):
             return (client or self.client).get(
                 reverse("cotizacion_colectivos:policy_detail", args=[token])
             )
+
+    def test_internal_client_detail_shows_complete_document(self):
+        company_token = sign_record_id(SOURCE_ID, "company")
+        with patch(
+            "cotizacion_colectivos.views.EntityDetailService",
+            return_value=FakeEntityDetailService(),
+        ):
+            response = self.client.get(reverse(
+                "cotizacion_colectivos:client_detail",
+                args=["company", company_token],
+            ))
+        self.assertContains(response, "900123789")
+        self.assertNotContains(response, "NIT •••789")
+
+    def test_home_only_displays_active_zoho_profile_without_runtime_switch(self):
+        response = self.client.get(reverse("cotizacion_colectivos:invitations_index"))
+        self.assertContains(response, "Perfil Zoho activo: SANDBOX")
+        self.assertContains(response, "ZOHO_ACTIVE_PROFILE")
+        self.assertNotContains(response, 'name="zoho_profile"', html=False)
+
+    def test_branch_page_consolidates_only_active_policies_from_same_branch(self):
+        from cotizacion_colectivos.invitation_templates.catalog import templates_for_branch
+        from cotizacion_colectivos.services.invitation_templates import TemplatePreview
+        company_token = sign_record_id(SOURCE_ID, "company")
+        base_detail = FakeEntityDetailService().company(company_token)
+        active = replace(
+            base_detail.branches[0].policies[0],
+            full_reference="23696696", branch="Movilidad colectivo",
+        )
+        inactive = replace(
+            active, detail_token=sign_record_id(
+                "4234567890123456790", "policy",
+                context={"source_id": SOURCE_ID, "source_kind": "company"},
+            ), full_reference="INACTIVA-900", state="Vencida",
+        )
+        other = replace(
+            active, detail_token=sign_record_id(
+                "4234567890123456791", "policy",
+                context={"source_id": SOURCE_ID, "source_kind": "company"},
+            ), full_reference="OTRO-RAMO", branch="Salud colectivo",
+        )
+        mobility = BranchSummary(
+            code="40", slug="movilidad", name="Movilidad colectivo",
+            classification="confirmed", policies=(active, inactive),
+            insured_count=2, risk_count=2, active_count=1, excluded_count=1,
+        )
+        health = replace(base_detail.branches[0], policies=(other,))
+        detail = replace(
+            base_detail, policies=(active, inactive, other), branches=(mobility, health),
+        )
+        service = Mock()
+        service.company.return_value = detail
+        previews = tuple(
+            TemplatePreview(item, "ready", 1, 0, 1, 100, ())
+            for item in templates_for_branch("40", active_only=True)
+        )
+        invitation_detail = _policy(
+            detail_token=active.detail_token, branch_code="40",
+            branch_name="Movilidad colectivo", full_reference="23696696",
+        )
+        metadata = {
+            "complete": True, "remote_queries": 0,
+            "operational_groups": ({
+                "policy_token": active.detail_token,
+                "policy_reference": "23696696", "insurer": active.insurer,
+                "rows": ({"document": "100000890", "insured_name": "Persona interna",
+                          "plate": "ABC123", "model": "2025", "brand": "Marca",
+                          "city": "Bogotá", "relationship": "Titular"},),
+            },),
+        }
+        with patch("cotizacion_colectivos.views.EntityDetailService", return_value=service), patch(
+            "cotizacion_colectivos.views.preview_invitation_templates",
+            return_value=(invitation_detail, previews, metadata),
+        ):
+            response = self.client.get(reverse(
+                "cotizacion_colectivos:invitations_branch_detail",
+                args=["company", company_token, "40"],
+            ))
+        self.assertContains(response, "23696696")
+        self.assertContains(response, "Información consolidada del ramo")
+        self.assertContains(response, "ABC123")
+        self.assertContains(response, "Limpiar selección")
+        self.assertContains(response, "Ver póliza")
+        self.assertContains(response, "Descargar formato SURA")
+        self.assertContains(response, "Descargar formato Allianz")
+        self.assertContains(response, "data-invitation-policy-filter", html=False)
+        self.assertNotContains(response, "Invitar aseguradoras con todo el ramo")
+        self.assertNotContains(response, "INACTIVA-900")
+        self.assertNotContains(response, "OTRO-RAMO")
+
+    def test_branch_page_does_not_abort_when_every_workspace_is_pending(self):
+        company_token = sign_record_id(SOURCE_ID, "company")
+        service = Mock()
+        service.company.return_value = FakeEntityDetailService().company(company_token)
+        with patch("cotizacion_colectivos.views.EntityDetailService", return_value=service), patch(
+            "cotizacion_colectivos.views.preview_invitation_templates",
+            side_effect=ColectivosServiceError("workspace_unavailable", "Pendiente"),
+        ):
+            response = self.client.get(reverse(
+                "cotizacion_colectivos:invitations_branch_detail",
+                args=["company", company_token, "91"],
+            ))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Información pendiente de actualizar")
+        self.assertContains(response, "Las pólizas con información local disponible continúan operativas")
+        self.assertNotContains(response, "No fue posible cargar la ficha")
+
+    def test_expedient_links_to_signed_client_policy_and_insured_context(self):
+        item = self.create_request()
+        response = self.client.get(reverse(
+            "cotizacion_colectivos:request_detail", args=[item.public_id],
+        ))
+        self.assertContains(response, "Empresa autorizada")
+        self.assertContains(response, "Abrir personas y riesgos de la póliza")
+        self.assertContains(response, reverse(
+            "cotizacion_colectivos:policy_detail", args=[TOKEN],
+        ))
+        self.assertContains(response, reverse(
+            "cotizacion_colectivos:policy_group", args=[TOKEN],
+        ))
+        self.assertNotContains(response, SOURCE_ID)
 
     def test_company_breadcrumb_and_back_action_resolve_to_signed_source(self):
         service = FakePolicyService(_policy(source_name="Fonconstruimos", source_kind="company"))

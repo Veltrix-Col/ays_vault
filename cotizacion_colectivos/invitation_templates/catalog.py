@@ -39,6 +39,9 @@ class InvitationTemplate:
     limitation: str = ""
     clear_cells: tuple[str, ...] = ()
     supports_chunking: bool = False
+    expandable_rows: bool = False
+    recipient_email: str = ""
+    recipient_alias: str = ""
 
     @property
     def path(self) -> Path:
@@ -167,7 +170,7 @@ INVITATION_TEMPLATE_CATALOG = (
         filename="movilidad/sura/Plantilla cotizacion Autos_Sura.xlsx", extension="xlsx",
         version="2026-07-14", active=True, generator="ooxml_patch",
         data_sheet="Riesgos", start_row=2, end_row=22,
-        fields=AUTOS_SURA_FIELDS, supports_chunking=True,
+        fields=AUTOS_SURA_FIELDS, expandable_rows=True,
     ),
     InvitationTemplate(
         code="allianz_autos_collective", insurer_code="ALLIANZ",

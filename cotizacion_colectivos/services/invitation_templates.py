@@ -7,11 +7,13 @@ import math
 import re
 import time
 import zipfile
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from django.conf import settings
+from django.core import signing
 
 from ..invitation_templates.catalog import InvitationTemplate, templates_for_branch
 from ..zoho import get_colectivos_profile
@@ -26,6 +28,7 @@ NS_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS_CUSTOM = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 ET.register_namespace("", NS_MAIN)
 SAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
+BRANCH_INVITATION_SALT = "cotizacion_colectivos.branch_invitations.v1"
 
 
 @dataclass(frozen=True)
@@ -70,7 +73,7 @@ def _attributes(member) -> dict[str, str]:
     return {str(key): str(value or "").strip() for key, value in member.risk_attributes}
 
 
-def _vehicle_rows(members) -> tuple[dict[str, str], ...]:
+def _vehicle_rows(members, detail=None) -> tuple[dict[str, str], ...]:
     rows = []
     seen = set()
     for member in members:
@@ -85,6 +88,7 @@ def _vehicle_rows(members) -> tuple[dict[str, str], ...]:
             continue
         seen.add(identity)
         rows.append({
+            "policy.full_reference": getattr(detail, "full_reference", ""),
             "vehicle.plate": attributes.get("placa", ""),
             "vehicle.model": attributes.get("modelo", ""),
             "vehicle.brand": attributes.get("marca", ""),
@@ -113,16 +117,143 @@ def _context(detail, members, token_context) -> tuple[dict[str, str], tuple[dict
         "policy.current_insurer": detail.insurer,
         "policy.payment_mode": detail.payment_mode,
     }
-    return fixed, _vehicle_rows(members)
+    return fixed, _vehicle_rows(members, detail)
 
 
-def preview_invitation_templates(token: str):
-    started = time.monotonic()
+def _operational_rows(rows):
+    """Expose only the already-confirmed local fields used by the internal UI."""
+    return tuple({
+        "document": row.get("insured.document", ""),
+        "plate": row.get("vehicle.plate", ""),
+        "model": row.get("vehicle.model", ""),
+        "brand": row.get("vehicle.brand", ""),
+        "city": row.get("vehicle.city", ""),
+        "relationship": row.get("insured.relationship", ""),
+        "insured_name": row.get("insured.name", ""),
+    } for row in rows)
+
+
+def sign_branch_invitation_context(
+    *, policy_tokens, branch_code: str, holder: str, policy_references=(),
+) -> str:
+    tokens = tuple(dict.fromkeys(str(token) for token in policy_tokens if token))
+    references = tuple(str(value or "").strip()[:80] for value in policy_references)
+    if not tokens or len(tokens) > 20:
+        raise ColectivosServiceError("invalid_record", "El contexto del ramo no es válido.")
+    return signing.dumps(
+        {
+            "policies": tokens, "references": references,
+            "branch": str(branch_code), "holder": str(holder)[:160],
+        },
+        salt=BRANCH_INVITATION_SALT, compress=True,
+    )
+
+
+def _branch_workspace(token: str, *, require_complete=False):
+    try:
+        payload = signing.loads(
+            token, salt=BRANCH_INVITATION_SALT,
+            max_age=getattr(settings, "COLECTIVOS_SIGNED_ID_MAX_AGE_SECONDS", 1800),
+        )
+    except signing.BadSignature as exc:
+        raise ColectivosServiceError("invalid_record", "El contexto del ramo no es válido.") from exc
+    tokens = tuple(payload.get("policies") or ())
+    references = tuple(payload.get("references") or ())
+    branch_code = str(payload.get("branch") or "")
+    if not tokens or len(tokens) > 20 or not branch_code:
+        raise ColectivosServiceError("invalid_record", "El contexto del ramo no es válido.")
+    workspaces = []
+    missing = []
+    for index, policy_token in enumerate(tokens):
+        try:
+            workspaces.append(_local_workspace(policy_token))
+        except ColectivosServiceError as exc:
+            if exc.code != "workspace_unavailable":
+                raise
+            missing.append(
+                references[index] if index < len(references) and references[index]
+                else f"póliza {index + 1}"
+            )
+    if not workspaces:
+        raise ColectivosServiceError(
+            "workspace_unavailable",
+            "No hay workspaces locales vigentes para las pólizas de este ramo. "
+            "Abra cada póliza indicada y actualice su información antes de consolidar.",
+        )
+    if missing and require_complete:
+        raise ColectivosServiceError(
+            "workspace_unavailable",
+            "Falta actualizar el workspace local de: " + ", ".join(missing) + ".",
+        )
+    workspaces = tuple(workspaces)
+    if any(item[0].branch_code != branch_code for item in workspaces):
+        raise ColectivosServiceError("invalid_record", "Las pólizas no pertenecen al mismo ramo.")
+    details = tuple(item[0] for item in workspaces)
+    contexts = tuple(item[3] for item in workspaces)
+    source_identity = (
+        contexts[0].get("source_kind"), contexts[0].get("source_id"),
+    )
+    if any(
+        (context.get("source_kind"), context.get("source_id")) != source_identity
+        for context in contexts
+    ):
+        raise ColectivosServiceError("invalid_record", "Las pólizas no pertenecen al mismo cliente.")
+    fixed, rows = _context(details[0], workspaces[0][1], workspaces[0][3])
+    combined_rows = []
+    operational_groups = []
+    for detail, members, _metadata, context, _profile, _backend in workspaces:
+        _policy_fixed, policy_rows = _context(detail, members, context)
+        combined_rows.extend(policy_rows)
+        operational_groups.append({
+            "policy_token": detail.detail_token,
+            "policy_reference": detail.full_reference or detail.masked_reference,
+            "insurer": detail.insurer,
+            "rows": _operational_rows(policy_rows),
+        })
+    display = replace(
+        details[0], full_reference=f"{len(details)} pólizas vigentes del ramo",
+        masked_reference=f"{len(details)} pólizas",
+    )
+    metadata = {
+        "storage": "database", "remote_queries": 0,
+        "policy_count": len(details), "consolidated": True,
+        "operational_groups": tuple(operational_groups),
+        "missing_workspaces": tuple(missing),
+        "complete": not missing,
+    }
+    return display, fixed, tuple(combined_rows), metadata, workspaces[0][4], workspaces[0][5]
+
+
+def _invitation_context(token: str, *, consolidated=False, require_complete=False):
+    if consolidated:
+        return _branch_workspace(token, require_complete=require_complete)
     detail, members, metadata, context, profile, backend = _local_workspace(token)
     fixed, rows = _context(detail, members, context)
+    metadata = {
+        **metadata,
+        "operational_groups": ({
+            "policy_token": detail.detail_token,
+            "policy_reference": detail.full_reference or detail.masked_reference,
+            "insurer": detail.insurer,
+            "rows": _operational_rows(rows),
+        },),
+        "missing_workspaces": (), "complete": True, "remote_queries": 0,
+    }
+    return detail, fixed, rows, metadata, profile, backend
+
+
+def preview_invitation_templates(token: str, *, consolidated=False):
+    started = time.monotonic()
+    detail, fixed, rows, metadata, profile, backend = _invitation_context(
+        token, consolidated=consolidated,
+    )
     previews = []
     for template in templates_for_branch(detail.branch_code):
-        capacity = template.end_row - template.start_row + 1
+        declared_capacity = template.end_row - template.start_row + 1
+        capacity = (
+            max(declared_capacity, len(rows))
+            if template.expandable_rows else declared_capacity
+        )
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
         row_fields = tuple(
             field for field in template.fields
@@ -215,6 +346,28 @@ def _set_cell(root: ET.Element, coordinate: str, value: str) -> None:
     text.text = str(value or "")
 
 
+def _expand_template_rows(root: ET.Element, template: InvitationTemplate, last_row: int) -> None:
+    if not template.expandable_rows or last_row <= template.end_row:
+        return
+    sheet_data = root.find(f"{{{NS_MAIN}}}sheetData")
+    seed = root.find(f".//{{{NS_MAIN}}}row[@r='{template.end_row}']")
+    if sheet_data is None or seed is None or seed.find(f".//{{{NS_MAIN}}}f") is not None:
+        raise ValueError("expandable-row")
+    for row_number in range(template.end_row + 1, last_row + 1):
+        row = deepcopy(seed)
+        row.set("r", str(row_number))
+        for cell in row.findall(f"{{{NS_MAIN}}}c"):
+            coordinate = str(cell.get("r") or "")
+            cell.set("r", re.sub(r"\d+$", str(row_number), coordinate))
+            for child in list(cell):
+                if child.tag in {f"{{{NS_MAIN}}}v", f"{{{NS_MAIN}}}is"}:
+                    cell.remove(child)
+        sheet_data.append(row)
+    dimension = root.find(f"{{{NS_MAIN}}}dimension")
+    if dimension is not None:
+        dimension.set("ref", re.sub(r"\d+$", str(last_row), dimension.get("ref", "")))
+
+
 def _column_number(value: str) -> int:
     result = 0
     for character in value:
@@ -282,6 +435,10 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
         for sheet_name, values in changes.items():
             part = _sheet_part(source, sheet_name)
             root = ET.fromstring(source.read(part))
+            if sheet_name == template.data_sheet and rows:
+                _expand_template_rows(
+                    root, template, template.start_row + len(rows) - 1,
+                )
             for coordinate, value in values.items():
                 _set_cell(root, coordinate, value)
             replacements[part] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -300,23 +457,40 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
     return output.getvalue()
 
 
-def generate_invitation_templates(token: str, *, template_code: str = ""):
+def generate_invitation_templates(
+    token: str, *, template_code: str = "", insurer_code: str = "",
+    consolidated=False,
+):
     started = time.monotonic()
-    detail, members, _metadata, context, profile, backend = _local_workspace(token)
-    fixed, rows = _context(detail, members, context)
+    detail, fixed, rows, _metadata, profile, backend = _invitation_context(
+        token, consolidated=consolidated, require_complete=not consolidated,
+    )
     generated, errors = [], []
     templates = templates_for_branch(detail.branch_code, active_only=True)
     if template_code:
         templates = tuple(item for item in templates if item.code == template_code)
         if not templates:
             raise ColectivosServiceError("template_unavailable", "La plantilla solicitada no está disponible para este ramo.")
+    if insurer_code:
+        templates = tuple(
+            item for item in templates if item.insurer_code == insurer_code
+        )
+        if not templates:
+            raise ColectivosServiceError(
+                "template_unavailable",
+                "La aseguradora solicitada no está disponible para este ramo.",
+            )
     for template in templates:
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
         capacity = template.end_row - template.start_row + 1
-        if len(template_rows) > capacity and not template.supports_chunking:
+        if (
+            len(template_rows) > capacity
+            and not template.supports_chunking
+            and not template.expandable_rows
+        ):
             errors.append((template.insurer_name, "capacidad"))
             continue
-        chunks = (
+        chunks = (template_rows,) if template.expandable_rows else (
             tuple(
                 template_rows[offset : offset + capacity]
                 for offset in range(0, len(template_rows), capacity)
@@ -355,4 +529,8 @@ def generate_invitation_templates(token: str, *, template_code: str = ""):
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in generated:
             bundle.writestr(item.filename, item.content)
-    return archive.getvalue(), f"Invitaciones_{detail.branch_code}.zip", "application/zip", tuple(errors)
+    archive_name = (
+        f"Invitaciones_{insurer_code}_{detail.branch_code}.zip"
+        if insurer_code else f"Invitaciones_{detail.branch_code}.zip"
+    )
+    return archive.getvalue(), archive_name, "application/zip", tuple(errors)

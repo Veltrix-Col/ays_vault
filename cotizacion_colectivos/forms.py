@@ -216,6 +216,16 @@ REQUEST_TRANSITION_CHOICES = tuple(
 class RequestTransitionForm(forms.Form):
     target = forms.ChoiceField(choices=REQUEST_TRANSITION_CHOICES)
 
+    def __init__(self, *args, current_status=None, allowed_targets=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = REQUEST_TRANSITION_CHOICES
+        if current_status is not None:
+            domain_targets = SolicitudColectivo.TRANSITIONS.get(current_status, set())
+            choices = tuple(choice for choice in choices if choice[0] in domain_targets)
+        if allowed_targets is not None:
+            choices = tuple(choice for choice in choices if choice[0] in allowed_targets)
+        self.fields["target"].choices = choices
+
 
 class RequestEditForm(forms.Form):
     assigned_to = forms.ModelChoiceField(label="Responsable", queryset=None)

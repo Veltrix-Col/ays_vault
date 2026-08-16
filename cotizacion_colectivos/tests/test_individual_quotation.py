@@ -165,6 +165,7 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("[CÓDIGO OMITIDO]", text_body + html_body)
         self.assertIn("Código de verificación", subject + html_body)
         generated.access.refresh_from_db()
+        self.assertEqual(generated.access.otp_expires_at, generated.access.expires_at)
         self.assertNotEqual(generated.access.otp_hash, "654321")
         self.assertNotIn("654321", repr(generated.access.__dict__))
         self.assertNotIn("654321", repr(notification_logger.mock_calls))

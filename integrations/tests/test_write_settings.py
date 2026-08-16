@@ -5,7 +5,13 @@ from integrations.zoho.settings import ZohoSettings
 
 
 class ZohoWriteSettingsTests(SimpleTestCase):
-    def test_project_defaults_are_safe(self):
+    @override_settings(
+        ZOHO_SANDBOX_WRITE_ENABLED=False,
+        ZOHO_PRODUCTION_WRITE_ENABLED=False,
+        COLECTIVOS_TASK_PUBLISH_ENABLED=False,
+        COLECTIVOS_TASK_WRITE_CONFIRMATION="",
+    )
+    def test_explicit_disabled_configuration_is_safe(self):
         self.assertFalse(settings.ZOHO_SANDBOX_WRITE_ENABLED)
         self.assertFalse(settings.ZOHO_PRODUCTION_WRITE_ENABLED)
         self.assertFalse(settings.COLECTIVOS_TASK_PUBLISH_ENABLED)

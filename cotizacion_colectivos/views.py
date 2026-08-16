@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django.contrib import messages
 from django.core import signing
 from django.db import OperationalError, transaction
 from django.db.models import Count, Prefetch, Q
@@ -43,6 +44,7 @@ from .services.preparations import load_builder_preparation, store_builder_prepa
 from .services.invitation_templates import (
     generate_invitation_templates,
     preview_invitation_templates,
+    sign_branch_invitation_context,
 )
 from pathlib import Path
 from django.conf import settings
@@ -67,6 +69,16 @@ from .quotation_forms.catalog import get_policy_branch_schema
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _transition_permission(target):
+    if target == SolicitudColectivo.Status.APPROVED:
+        return "approve_requests"
+    if target == SolicitudColectivo.Status.CLOSED:
+        return "close_requests"
+    if target == SolicitudColectivo.Status.CANCELLED:
+        return "cancel_requests"
+    return "create_requests"
 
 
 RESPONSE_FIELD_LABELS = {
@@ -237,12 +249,12 @@ def _search(request, *, form_class, service_class, entity_kind):
             if entity_kind == "company":
                 results = tuple(ClientSearchResult(
                     item.detail_token, "company", item.display_name, "Empresa", "NIT",
-                    item.masked_document, item.state,
+                    item.masked_document, item.state, item.document,
                 ) for item in raw_results)
             else:
                 results = tuple(ClientSearchResult(
                     item.detail_token, "person", item.full_name, "Persona", "Documento",
-                    item.masked_document, item.state,
+                    item.masked_document, item.state, item.document,
                 ) for item in raw_results)
             timings.update(service.timings)
             if query.isdigit():
@@ -382,6 +394,161 @@ def _normalized_choice(value):
         character for character in unicodedata.normalize("NFKD", str(value or "").strip().casefold())
         if not unicodedata.combining(character)
     )
+
+
+def _short_invitation_mailto(*, branch_name, client_name, insurer=None, recipient=""):
+    audience = f" para {insurer}" if insurer else ""
+    subject = f"Solicitud de cotización · {branch_name} · {client_name}"
+    body = (
+        "Buenos días,\n\n"
+        f"Compartimos formatos{audience} para solicitud de cotización del ramo "
+        f"{branch_name} correspondiente a {client_name}.\n\n"
+        "Quedamos atentos.\n\nA&S Seguros"
+    )
+    return "mailto:" + quote(recipient or "", safe="@") + "?subject=" + quote(
+        subject, safe="",
+    ) + "&body=" + quote(body, safe="")
+
+
+def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
+    client_name = detail.holder or "Cliente"
+    actions = []
+    for preview in previews:
+        if preview.status not in {"ready", "ready_manual"}:
+            continue
+        action = next(
+            (item for item in actions if item["insurer_code"] == preview.template.insurer_code),
+            None,
+        )
+        if action is None:
+            action = {
+                "insurer_code": preview.template.insurer_code,
+                "insurer_name": preview.template.insurer_name,
+                "recipient": preview.template.recipient_email,
+                "previews": [], "missing_required": set(), "output_files": 0,
+                "mailto_url": _short_invitation_mailto(
+                    branch_name=detail.branch_name, client_name=client_name,
+                    insurer=preview.template.insurer_name,
+                    recipient=preview.template.recipient_email,
+                ),
+            }
+            actions.append(action)
+        action["previews"].append(preview)
+        action["missing_required"].update(preview.missing_required)
+        action["output_files"] += preview.output_files
+    for action in actions:
+        action["previews"] = tuple(action["previews"])
+        action["missing_required"] = tuple(sorted(action["missing_required"]))
+    groups = tuple(metadata.get("operational_groups") or ())
+    policy_items = []
+    operational_rows = []
+    if active_policies:
+        groups_by_token = {item.get("policy_token"): item for item in groups}
+        missing = set(metadata.get("missing_workspaces") or ())
+        for index, policy in enumerate(active_policies, start=1):
+            reference = policy.full_reference or policy.masked_reference
+            group = groups_by_token.get(policy.detail_token)
+            key = f"policy-{index}"
+            rows = tuple(group.get("rows") or ()) if group else ()
+            policy_items.append({
+                "key": key, "policy": policy, "reference": reference,
+                "workspace_available": group is not None,
+                "record_count": len(rows) if group is not None else None,
+                "workspace_missing": reference in missing or group is None,
+            })
+            operational_rows.extend({
+                **row, "policy_key": key, "policy_reference": reference,
+            } for row in rows)
+    else:
+        for index, group in enumerate(groups, start=1):
+            key = f"policy-{index}"
+            operational_rows.extend({
+                **row, "policy_key": key,
+                "policy_reference": group.get("policy_reference", ""),
+            } for row in group.get("rows") or ())
+    complete = bool(metadata.get("complete", True))
+    return {
+        "actions": tuple(actions),
+        "operational_groups": groups,
+        "operational_rows": tuple(operational_rows),
+        "branch_policy_items": tuple(policy_items),
+        "missing_workspaces": tuple(metadata.get("missing_workspaces") or ()),
+        "workspace_complete": complete,
+        "has_generable": bool(actions),
+        "mailto_url": _short_invitation_mailto(
+            branch_name=detail.branch_name, client_name=client_name,
+        ),
+    }
+
+
+@never_cache
+@require_http_methods(["GET"])
+def branch_detail(request, entity_kind, token, branch_code):
+    if entity_kind not in {"company", "person"}:
+        raise Http404("Cliente no encontrado")
+    tool_mode = resolve_tool_mode(request, INVITATIONS_MODE)
+    try:
+        detail = getattr(EntityDetailService(), entity_kind)(token)
+    except ColectivosServiceError as exc:
+        if exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Cliente no encontrado") from exc
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": exc.message, "colectivos_mode": tool_mode,
+            **_environment_context(),
+        }, status=_error_status(exc))
+    branch = next((item for item in detail.branches if item.code == branch_code), None)
+    if branch is None:
+        raise Http404("Ramo no encontrado")
+    active_policies = tuple(
+        policy for policy in branch.policies
+        if _normalized_choice(policy.state) in {"vigente", "activa", "activo"}
+    )
+    client_name = detail.display_name if entity_kind == "company" else detail.full_name
+    consolidated_token = ""
+    invitation_context = {
+        "actions": (), "operational_rows": (), "branch_policy_items": tuple({
+            "key": f"policy-{index}", "policy": policy,
+            "reference": policy.full_reference or policy.masked_reference,
+            "workspace_available": False, "record_count": None,
+            "workspace_missing": True,
+        } for index, policy in enumerate(active_policies, start=1)),
+        "missing_workspaces": (), "workspace_complete": False,
+        "has_generable": False, "mailto_url": "",
+    }
+    if active_policies:
+        consolidated_token = sign_branch_invitation_context(
+            policy_tokens=(policy.detail_token for policy in active_policies),
+            branch_code=branch.code, holder=client_name,
+            policy_references=(
+                policy.full_reference or policy.masked_reference
+                for policy in active_policies
+            ),
+        )
+        try:
+            invitation_detail, previews, metadata = preview_invitation_templates(
+                consolidated_token, consolidated=True,
+            )
+            invitation_context = {
+                **_invitation_page_context(
+                    invitation_detail, previews, metadata,
+                    active_policies=active_policies,
+                ),
+                "previews": previews,
+            }
+        except ColectivosServiceError as exc:
+            if exc.code not in {"workspace_unavailable"}:
+                raise
+            invitation_context["missing_workspaces"] = tuple(
+                policy.full_reference or policy.masked_reference
+                for policy in active_policies
+            )
+    return render(request, "cotizacion_colectivos/branch_detail.html", {
+        "detail": detail, "entity_kind": entity_kind, "entity_token": token,
+        "branch": branch, "active_policies": active_policies,
+        "consolidated_token": consolidated_token, "colectivos_mode": tool_mode,
+        **invitation_context,
+        **_environment_context(),
+    })
 
 
 def _builder_policies(detail):
@@ -1169,17 +1336,60 @@ def policy_invitation_preview(request, token):
         }, status=409)
     return render(request, "cotizacion_colectivos/invitation_preview.html", {
         "detail": detail, "previews": previews, "policy_token": token,
-        "has_generable": any(item.status in {"ready", "ready_manual"} for item in previews),
         "preparation_metadata": metadata,
         "colectivos_mode": tool_mode,
-        "mailto_url": "mailto:?subject=" + quote(
-            f"Invitación a cotizar · {detail.branch_name}", safe="",
-        ) + "&body=" + quote(
-            "Agradecemos revisar la invitación a cotizar. Descargue los formatos desde el Banco de Herramientas y adjúntelos manualmente antes de enviar este correo.",
-            safe="",
-        ),
+        **_invitation_page_context(detail, previews, metadata),
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["GET"])
+def branch_invitation_preview(request, token):
+    if not has_internal_permission(request, "export_excel"):
+        return permission_denied_response()
+    try:
+        detail, previews, metadata = preview_invitation_templates(token, consolidated=True)
+    except ColectivosServiceError as exc:
+        if exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Ramo no encontrado") from exc
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": exc.message, **_environment_context(),
+        }, status=409)
+    return render(request, "cotizacion_colectivos/invitation_preview.html", {
+        "detail": detail, "previews": previews,
+        "consolidated": True, "consolidated_token": token,
+        "preparation_metadata": metadata,
+        "colectivos_mode": resolve_tool_mode(request, INVITATIONS_MODE),
+        **_invitation_page_context(detail, previews, metadata),
+        **_environment_context(),
+    })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def branch_invitation_download(request, token):
+    if not has_internal_permission(request, "export_excel"):
+        return permission_denied_response()
+    try:
+        content, filename, content_type, errors = generate_invitation_templates(
+            token, template_code=str(request.POST.get("template_code") or ""),
+            insurer_code=str(request.POST.get("insurer_code") or ""),
+            consolidated=True,
+        )
+    except ColectivosServiceError as exc:
+        if exc.code in {"invalid_record", "not_found"}:
+            raise Http404("Ramo no encontrado") from exc
+        return render(request, "cotizacion_colectivos/detail_error.html", {
+            "message": exc.message, **_environment_context(),
+        }, status=409)
+    response = HttpResponse(content, content_type=content_type)
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["Cache-Control"] = "no-store, private"
+    response["X-Content-Type-Options"] = "nosniff"
+    if errors:
+        response["X-Colectivos-Template-Warnings"] = str(len(errors))
+    return response
 
 
 @never_cache
@@ -1190,6 +1400,7 @@ def policy_invitation_download(request, token):
     try:
         content, filename, content_type, errors = generate_invitation_templates(
             token, template_code=str(request.POST.get("template_code") or ""),
+            insurer_code=str(request.POST.get("insurer_code") or ""),
         )
     except ColectivosServiceError as exc:
         if exc.code in {"invalid_record", "not_found"}:
@@ -1622,6 +1833,23 @@ def request_detail(request, public_id):
         policy_token = candidate
     except (ValueError, ColectivosServiceError):
         pass
+    client_url = ""
+    policy_url = ""
+    insured_url = ""
+    if policy_token:
+        policy_url = reverse("cotizacion_colectivos:policy_detail", args=[policy_token])
+        insured_url = reverse("cotizacion_colectivos:policy_group", args=[policy_token])
+        try:
+            token_context = unsign_record_context(policy_token, "policy")
+            source_kind = token_context.get("source_kind")
+            source_id = token_context.get("source_id")
+            if source_kind in {"company", "person"} and source_id:
+                client_url = reverse(
+                    "cotizacion_colectivos:client_detail",
+                    args=[source_kind, sign_record_id(source_id, source_kind)],
+                )
+        except ColectivosServiceError:
+            pass
     can_view_responses = has_internal_permission(request, "view_responses")
     latest_response = next((
         response for response in getattr(item, "ordered_responses", ())
@@ -1677,9 +1905,17 @@ def request_detail(request, public_id):
             zoho_summary["task_id"] = decrypt(latest_outbox.encrypted_remote_id)
         except ValueError:
             zoho_summary["task_id"] = "No disponible"
+    allowed_targets = tuple(
+        target for target in SolicitudColectivo.TRANSITIONS.get(item.status, set())
+        if has_internal_permission(request, _transition_permission(target))
+    )
     return render(request, "cotizacion_colectivos/request_detail.html", {
-        "item": item, "snapshot": snapshot, "transition_form": RequestTransitionForm(), "edit_form": edit_form,
+        "item": item, "snapshot": snapshot,
+        "transition_form": RequestTransitionForm(
+            current_status=item.status, allowed_targets=allowed_targets,
+        ), "edit_form": edit_form,
         "snapshot_form": SnapshotRegenerateForm(), "access_summary": access_summary, "policy_token": policy_token,
+        "client_url": client_url, "policy_url": policy_url, "insured_url": insured_url,
         "can_edit": has_internal_permission(request, "edit_requests"),
         "can_prepare": has_internal_permission(request, "create_requests"),
         "can_generate_access": has_internal_permission(request, "generate_external_access"),
@@ -1977,15 +2213,27 @@ def request_transition(request, public_id):
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
     form = RequestTransitionForm(request.POST)
     if not form.is_valid():
-        return HttpResponse("Transición inválida.", status=400)
+        messages.warning(request, "Esta transición no está disponible para el estado actual.")
+        logger.warning(
+            "colectivos_transition operation=status_change result=rejected "
+            "category=invalid_target request_id=%s current_status=%s",
+            item.public_id, item.status,
+        )
+        return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
     target = form.cleaned_data["target"]
-    permission = "approve_requests" if target == SolicitudColectivo.Status.APPROVED else ("close_requests" if target == SolicitudColectivo.Status.CLOSED else ("cancel_requests" if target == SolicitudColectivo.Status.CANCELLED else "create_requests"))
+    permission = _transition_permission(target)
     if not has_internal_permission(request, permission):
         return permission_denied_response()
     try:
         transition_request(request=item, target=target, actor=get_internal_actor(request, create=True))
     except ValidationError:
-        return HttpResponse("La transición no está permitida.", status=400)
+        messages.warning(request, "Esta transición no está disponible para el estado actual.")
+        logger.warning(
+            "colectivos_transition operation=status_change result=rejected "
+            "category=domain_transition request_id=%s current_status=%s target=%s",
+            item.public_id, item.status, target,
+        )
+        return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
     audit(request, "UPDATE", reason="Estado de expediente Colectivos actualizado.", metadata={"request_id": item.public_id, "target": target})
     return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
 

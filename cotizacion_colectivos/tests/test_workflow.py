@@ -158,6 +158,25 @@ class RequestWorkflowTests(TestCase):
             created_by=self.creator,
         )
 
+    def test_invalid_transition_redirects_to_expedient_without_changing_status(self):
+        item = self.create_local_request(901)
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("cotizacion_colectivos:request_transition", args=[item.public_id]),
+            {"target": SolicitudColectivo.Status.APPROVED},
+            follow=True,
+        )
+        item.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(item.status, SolicitudColectivo.Status.DRAFT)
+        self.assertContains(
+            response, "Esta transición no está disponible para el estado actual.",
+        )
+        self.assertEqual(
+            response.redirect_chain[0][0],
+            reverse("cotizacion_colectivos:request_detail", args=[item.public_id]),
+        )
+
     def create_individual_response(self, *, submitted_at, policy_label="IND-9001"):
         context = {
             "policy_token": TOKEN,

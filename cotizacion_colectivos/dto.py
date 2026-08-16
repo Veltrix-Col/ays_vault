@@ -9,6 +9,7 @@ class CompanySearchResult:
     display_name: str
     masked_document: str
     state: str
+    document: str = ""
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class PersonSearchResult:
     full_name: str
     masked_document: str
     state: str
+    document: str = ""
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class ClientSearchResult:
     document_label: str
     masked_document: str
     state: str
+    document: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,8 @@ class RelatedInsured:
     role: str = "Asegurado"
     plan: str = ""
     relationship_token: str = ""
+    full_reference: str = ""
+    full_policy_reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,7 @@ class RelatedRisk:
     relationship_source: str = "insured_risk"
     relationship_confidence: str = "confirmed"
     attributes: tuple[tuple[str, str], ...] = ()
+    full_reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -215,6 +221,7 @@ class CompanyDetail:
     unavailable_relations: tuple[str, ...] = ()
     relations_truncated: bool = False
     branches: tuple[BranchSummary, ...] = ()
+    document: str = ""
 
 
 @dataclass(frozen=True)
@@ -234,3 +241,4 @@ class PersonDetail:
     unavailable_relations: tuple[str, ...] = ()
     relations_truncated: bool = False
     branches: tuple[BranchSummary, ...] = ()
+    document: str = ""

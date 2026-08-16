@@ -18,6 +18,11 @@ No existen overrides por aplicación. Cotización – Colectivos lee únicamente
 Un selector legado específico de Colectivos presente en un `.env` antiguo se
 ignora y debe eliminarse manualmente para evitar confusión operativa.
 
+La interfaz sólo informa el perfil activo. Un selector por sesión requiere una
+evolución separada en la que el perfil forme parte explícita de cada operación,
+Workspace, caché y contexto firmado; no puede implementarse como un cambio de
+estado superficial en el navegador.
+
 ## Sandbox
 
 ```env
@@ -27,7 +32,7 @@ ZOHO_PRODUCTION_ENABLED=true
 ZOHO_PUBLIC_SETUP_ENABLED=false
 ```
 
-La interfaz muestra `Sandbox · Solo lectura`. La fachada verifica que
+La interfaz muestra `Perfil Zoho activo: SANDBOX · Solo lectura`. La fachada verifica que
 Organization API reporte `type=sandbox` antes de ejecutar búsquedas o fichas.
 
 ## Producción
@@ -41,7 +46,7 @@ ZOHO_PUBLIC_SETUP_ENABLED=false
 
 El perfil Production debe tener credenciales, refresh token, environment, API
 base URL y resource path completos, propios y coherentes. La interfaz muestra
-`Producción · Solo lectura` con una variante visual de advertencia. Organization
+`Perfil Zoho activo: PRODUCCIÓN · Solo lectura` con una variante visual de advertencia. Organization
 API debe reportar `type=production`; una inconsistencia bloquea la operación sin
 intentar Sandbox.
 
@@ -106,4 +111,3 @@ ZOHO_ACTIVE_PROFILE=sandbox
 
 Reiniciar Django y comprobar `Sandbox · Solo lectura`. No requiere modificar
 código ni eliminar las credenciales productivas.
-

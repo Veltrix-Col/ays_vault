@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 
 from cotizacion_colectivos.adjustments import allowed_adjustments
@@ -35,7 +35,8 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Fecha solicitada de ingreso", content)
         self.assertIn("Fecha solicitada de retiro", content)
 
-    def test_task_publisher_remains_disabled_by_default(self):
+    @override_settings(COLECTIVOS_TASK_PUBLISH_ENABLED=False)
+    def test_task_publisher_disabled_configuration_is_fail_closed(self):
         publisher = get_task_publisher()
         self.assertFalse(publisher.enabled)
         payload = ColectivosTaskPayload(

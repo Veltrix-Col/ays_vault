@@ -97,6 +97,7 @@ class EntityDetailService:
             unavailable_relations=tuple(dict.fromkeys((*unavailable, *direct_unavailable))),
             relations_truncated=truncated or direct_truncated,
             branches=self._group_branches((*policies, *direct), insured, risks),
+            document=_text(record.get("N_mero_de_ID")),
         )
 
     def person(self, token: str) -> PersonDetail:
@@ -119,6 +120,7 @@ class EntityDetailService:
             unavailable_relations=tuple(dict.fromkeys((*unavailable, *direct_unavailable))),
             relations_truncated=truncated or direct_truncated,
             branches=self._group_branches((*policies, *direct), insured, risks),
+            document=_text(record.get("N_mero_de_ID")),
         )
 
     @staticmethod
@@ -133,6 +135,7 @@ class EntityDetailService:
             mobile=_text(record.get("Mobile")),
             city=_text(record.get("Ciudad_de_direcci_n_principal")),
             address=_text(record.get("Direcci_n")),
+            document=_text(record.get("N_mero_de_ID")),
         )
 
     def _contact(self, token: str, person_type: str, id_type: str, entity_type: str):
@@ -245,17 +248,21 @@ class EntityDetailService:
 
     @staticmethod
     def _insured(record, policy_lookup, risk_lookup) -> RelatedInsured:
+        reference = _text(record.get("Name"))
+        policy_reference = _text(policy_lookup.get("name")) if isinstance(policy_lookup, dict) else ""
         return RelatedInsured(
-            masked_reference=mask_reference(record.get("Name")),
+            masked_reference=mask_reference(reference),
             state=_text(record.get("Estado"), "Sin estado"),
             branch=_text(record.get("Ramo"), "Sin ramo"),
             insurer=_text(record.get("Aseguradora"), "Sin aseguradora"),
             entry_date=_text(record.get("Fecha_ingreso_riesgo")),
             exit_date=_text(record.get("Fecha_salida_riesgo")),
-            policy_reference=mask_reference(policy_lookup.get("name")) if isinstance(policy_lookup, dict) else "",
+            policy_reference=mask_reference(policy_reference),
             has_risk=bool(_lookup_id(risk_lookup)),
             role=_text(record.get("_relationship_role"), "Asegurado"),
             plan=_text(record.get("Plan")),
+            full_reference=reference,
+            full_policy_reference=policy_reference,
         )
 
     def _policy_by_id(self, policy_id: str, relation, prefetched=None, source_id="", source_kind="company") -> tuple[RelatedPolicy, bool]:
@@ -303,6 +310,7 @@ class EntityDetailService:
             risk_type=_text(record.get("Tipo_de_riesgo") or relation.get("Ramo"), "Sin tipo"),
             start_date=_text(record.get("Fecha_inicio")),
             end_date=_text(record.get("Fecha_fin")),
+            full_reference=_text(record.get("Name") or fallback_name),
         ), failed
 
     def _direct_policies(self, contact_id: object, source_kind: str):

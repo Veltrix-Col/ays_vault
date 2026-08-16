@@ -79,13 +79,13 @@ class ColectivosViewTests(TestCase):
             self.assertContains(response, 'name="query"', count=1)
             self.assertNotContains(response, 'id="id_company_query"')
             self.assertNotContains(response, 'id="id_person_query"')
-            self.assertContains(response, "Sandbox · Solo lectura")
+            self.assertContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
 
     @patch("cotizacion_colectivos.views.UnifiedClientSearchService")
     def test_unified_search_renders_company_and_person_as_clients(self, service):
         service.return_value.search.return_value = (
-            ClientSearchResult("company-token", "company", "Empresa Segura", "Empresa", "NIT", "•••567", "Cliente"),
-            ClientSearchResult("person-token", "person", "Persona Segura", "Persona", "Documento", "•••890", "Activo"),
+            ClientSearchResult("company-token", "company", "Empresa Segura", "Empresa", "NIT", "•••567", "Cliente", "9012171973"),
+            ClientSearchResult("person-token", "person", "Persona Segura", "Persona", "Documento", "•••890", "Activo", "1012345890"),
         )
         client = self.authenticated_client(self.admin)
         response = client.post(
@@ -93,6 +93,10 @@ class ColectivosViewTests(TestCase):
         )
         self.assertContains(response, "Empresa Segura")
         self.assertContains(response, "Persona Segura")
+        self.assertContains(response, "NIT 9012171973")
+        self.assertContains(response, "Documento 1012345890")
+        self.assertNotContains(response, "•••567")
+        self.assertNotContains(response, "•••890")
         self.assertContains(response, reverse(
             "cotizacion_colectivos:novelties_client_detail", args=["company", "company-token"]
         ))
@@ -100,16 +104,16 @@ class ColectivosViewTests(TestCase):
     @override_settings(ZOHO_ACTIVE_PROFILE="production")
     def test_production_badge_is_derived_from_configuration(self):
         response = self.client.get(reverse("cotizacion_colectivos:index"))
-        self.assertContains(response, "Producción · Solo lectura")
+        self.assertContains(response, "Perfil Zoho activo: PRODUCCIÓN · Solo lectura")
         self.assertContains(response, "environment-badge--production")
-        self.assertNotContains(response, "Sandbox · Solo lectura")
+        self.assertNotContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
 
     def test_browser_cannot_select_the_profile(self):
         response = self.client.get(
             reverse("cotizacion_colectivos:index"), {"profile": "production"}
         )
-        self.assertContains(response, "Sandbox · Solo lectura")
-        self.assertNotContains(response, "Producción · Solo lectura")
+        self.assertContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
+        self.assertNotContains(response, "Perfil Zoho activo: PRODUCCIÓN · Solo lectura")
 
     def test_numeric_prefix_shorter_than_three_is_rejected(self):
         client = self.authenticated_client(self.admin)

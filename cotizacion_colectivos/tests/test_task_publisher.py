@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from integrations.zoho.exceptions import ZohoTimeoutError
+from integrations.zoho.exceptions import ZohoSDKError, ZohoTimeoutError
 from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosTaskOutbox, SolicitudColectivo
@@ -168,6 +168,95 @@ class TaskPublisherTests(TestCase):
 
 
 class TestTaskCommandTests(TestCase):
+    def command_error_for(self, exc):
+        publisher = Mock()
+        publisher.publish_test_task.side_effect = exc
+        with patch(
+            "cotizacion_colectivos.management.commands.zoho_create_test_task.get_task_publisher",
+            return_value=publisher,
+        ) as factory, self.assertRaises(CommandError) as caught:
+            call_command(
+                "zoho_create_test_task", profile="sandbox",
+                confirm=SANDBOX_WRITE_CONFIRMATION,
+            )
+        factory.assert_called_once_with(
+            profile="sandbox", confirmation=SANDBOX_WRITE_CONFIRMATION,
+        )
+        publisher.publish_test_task.assert_called_once_with()
+        return str(caught.exception)
+
+    def test_sdk_error_diagnostic_contains_only_allowlisted_metadata(self):
+        diagnostic = self.command_error_for(ZohoSDKError(
+            "texto remoto access-token-secret refresh-token-secret client-secret-value "
+            "authorization-code-secret payload-secret",
+            status_code=422,
+            request_id="request-id-secret",
+            zoho_code="INVALID_DATA",
+            zoho_status="error",
+            detail_keys=("api_name", "expected_data_type"),
+            backend="sdk",
+            operation="records.create",
+            module="Tasks",
+            sdk_exception_class="SDKException",
+            sdk_code="MANDATORY_NOT_FOUND",
+            request_sent=None,
+        ))
+
+        self.assertEqual(
+            diagnostic,
+            "No se creó la Task (category=sdk; status_code=422; backend=sdk; "
+            "operation=records.create; module=Tasks; sdk_exception_class=SDKException; "
+            "sdk_code=MANDATORY_NOT_FOUND; zoho_code=INVALID_DATA; zoho_status=error; "
+            "detail_keys=[api_name, expected_data_type]; request_sent=unknown).",
+        )
+        for secret in (
+            "access-token-secret", "refresh-token-secret", "client-secret-value",
+            "authorization-code-secret", "payload-secret", "request-id-secret",
+            "texto remoto",
+        ):
+            self.assertNotIn(secret, diagnostic)
+
+    def test_sdk_error_diagnostic_marks_absent_values_as_unknown(self):
+        diagnostic = self.command_error_for(ZohoSDKError(
+            "refresh-token-secret",
+            status_code=None,
+            backend="sdk",
+            operation="records.create",
+            module="Tasks",
+            sdk_exception_class="SDKException",
+            sdk_code="",
+            request_sent=None,
+        ))
+
+        self.assertEqual(
+            diagnostic,
+            "No se creó la Task (category=sdk; status_code=unknown; backend=sdk; "
+            "operation=records.create; module=Tasks; sdk_exception_class=SDKException; "
+            "sdk_code=unknown; zoho_code=unknown; zoho_status=unknown; "
+            "detail_keys=none; request_sent=unknown).",
+        )
+        self.assertNotIn("refresh-token-secret", diagnostic)
+
+    def test_sdk_error_preserves_request_sent_tristate_without_inference(self):
+        for value, expected in ((True, "true"), (False, "false"), (None, "unknown")):
+            with self.subTest(request_sent=value):
+                diagnostic = self.command_error_for(ZohoSDKError(
+                    "safe normalized message",
+                    backend="sdk",
+                    operation="records.create",
+                    module="Tasks",
+                    sdk_exception_class="SDKException",
+                    request_sent=value,
+                ))
+                self.assertIn(f"request_sent={expected}", diagnostic)
+
+    def test_uncertain_result_behavior_is_unchanged_and_not_retried(self):
+        message = (
+            "Resultado incierto: no reintente; requiere conciliación manual en Zoho Sandbox."
+        )
+        diagnostic = self.command_error_for(TaskPublicationUncertain(message))
+        self.assertEqual(diagnostic, message)
+
     def test_missing_confirmation_fails_without_publisher(self):
         with patch(
             "cotizacion_colectivos.management.commands.zoho_create_test_task.get_task_publisher"

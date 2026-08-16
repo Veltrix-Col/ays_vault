@@ -5,7 +5,7 @@
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'area_home' 'colectivos' %}">Área Colectivos</a><span>/</span><span>{{ colectivos_mode.name }}</span><span>/</span><span>Cliente</span></nav>
 
 <header class="detail-hero detail-hero--compact">
-  <div><span class="eyebrow">{% if entity_kind == 'company' %}Empresa{% else %}Persona{% endif %} · {{ detail.id_type }} {{ detail.masked_document }}</span><h1>{% if entity_kind == 'company' %}{{ detail.display_name }}{% else %}{{ detail.full_name }}{% endif %}</h1></div>
+  <div><span class="eyebrow">{% if entity_kind == 'company' %}Empresa{% else %}Persona{% endif %} · {{ detail.id_type }} {{ detail.document|default:detail.masked_document }}</span><h1>{% if entity_kind == 'company' %}{{ detail.display_name }}{% else %}{{ detail.full_name }}{% endif %}</h1></div>
   <span class="state-chip">{{ detail.state }}</span>
   <p>Seleccione un ramo y el servicio que desea gestionar. La póliza se solicita únicamente cuando el servicio actual la requiere.</p>
 </header>
@@ -13,7 +13,7 @@
 <details class="detail-section compact-disclosure"><summary>Datos de identificación y contacto</summary>
   <div class="detail-grid">
     {% if entity_kind == 'company' %}<div><span>Razón social</span><strong>{{ detail.legal_name }}</strong></div>{% elif detail.company_name %}<div><span>Empresa relacionada</span><strong>{{ detail.company_name }}</strong></div>{% endif %}
-    <div><span>Tipo de persona</span><strong>{{ detail.summary.person_type }}</strong></div>
+    <div><span>Identificación</span><strong>{{ detail.summary.id_type }} {{ detail.summary.document|default:detail.summary.masked_document }}</strong></div><div><span>Tipo de persona</span><strong>{{ detail.summary.person_type }}</strong></div>
     {% if detail.summary.email %}<div><span>Correo</span><strong>{{ detail.summary.email }}</strong></div>{% endif %}
     {% if detail.summary.mobile or detail.summary.phone %}<div><span>Teléfono</span><strong>{{ detail.summary.mobile|default:detail.summary.phone }}</strong></div>{% endif %}
     {% if detail.summary.city %}<div><span>Ciudad</span><strong>{{ detail.summary.city }}</strong></div>{% endif %}
@@ -27,7 +27,7 @@
   <div class="branch-grid branch-grid--focused">
   {% for workspace in branch_workspaces %}{% with branch=workspace.branch %}
     <article class="branch-card" data-policy-branch>
-      <header class="branch-card-heading"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{{ branch.name }}</h3></div><div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.active_count }} relación{{ branch.active_count|pluralize:"es" }} activa{{ branch.active_count|pluralize:"s" }}</span></div></header>
+      <header class="branch-card-heading"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{% if colectivos_mode.code == 'invitations' and branch.code %}<a href="{% url 'cotizacion_colectivos:invitations_branch_detail' entity_kind entity_token branch.code %}">{{ branch.name }}</a>{% else %}{{ branch.name }}{% endif %}</h3></div><div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.active_count }} relación{{ branch.active_count|pluralize:"es" }} activa{{ branch.active_count|pluralize:"s" }}</span></div></header>
       {% for entry in workspace.services %}
       <section class="branch-service branch-service--focused"><div class="branch-service-intro"><strong>{{ entry.service.name }}</strong><p>{{ entry.service.description }}</p></div>
         <div class="policy-stack" aria-label="Pólizas operables de {{ branch.name }}">
@@ -49,8 +49,8 @@
 
 <details class="detail-section compact-disclosure secondary-information"><summary>Referencias operativas relacionadas</summary>
   <div class="secondary-information-grid">
-    <section><h3>Roles y asegurados <span>{{ detail.insured|length }}</span></h3>{% for item in detail.insured %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.role }} · {{ item.state }} · {{ item.branch }}</span>{% if item.policy_reference %}<small>Póliza: {{ item.policy_reference }}</small>{% endif %}</article>{% empty %}<p class="muted">Sin roles confirmados.</p>{% endfor %}</section>
-    <section><h3>Riesgos <span>{{ detail.risks|length }}</span></h3>{% for item in detail.risks %}<article class="relation-row"><strong>{{ item.masked_reference }}</strong><span>{{ item.state }} · {{ item.risk_type }}</span>{% for label, value in item.attributes %}<small>{{ label }}: {{ value }}</small>{% endfor %}</article>{% empty %}<p class="muted">Sin riesgos confirmados.</p>{% endfor %}</section>
+    <section><h3>Roles y asegurados <span>{{ detail.insured|length }}</span></h3>{% for item in detail.insured %}<article class="relation-row"><strong>{{ item.full_reference|default:item.masked_reference }}</strong><span>{{ item.role }} · {{ item.state }} · {{ item.branch }}</span>{% if item.policy_reference %}<small>Póliza: {{ item.full_policy_reference|default:item.policy_reference }}</small>{% endif %}</article>{% empty %}<p class="muted">Sin roles confirmados.</p>{% endfor %}</section>
+    <section><h3>Riesgos <span>{{ detail.risks|length }}</span></h3>{% for item in detail.risks %}<article class="relation-row"><strong>{{ item.full_reference|default:item.masked_reference }}</strong><span>{{ item.state }} · {{ item.risk_type }}</span>{% for label, value in item.attributes %}<small>{{ label }}: {{ value }}</small>{% endfor %}</article>{% empty %}<p class="muted">Sin riesgos confirmados.</p>{% endfor %}</section>
   </div>
 </details>
 
