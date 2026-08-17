@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from django.conf import settings
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, HttpResponseRedirect
 from django.utils.module_loading import import_string
 
 from .application_access import (
@@ -73,6 +73,14 @@ class TrustedIntranetAccessMiddleware:
                 )
                 return self._secured_response(request, application)
             category = result.category
+            if result.challenge_redirect:
+                logger.info(
+                    "tools_access result=challenge application=%s category=%s correlation=%s",
+                    application,
+                    category,
+                    correlation,
+                )
+                return HttpResponseRedirect(result.challenge_redirect)
         elif mode not in ALLOWED_ACCESS_MODES:
             category = "invalid_access_mode"
         else:

@@ -21,6 +21,7 @@ INHERITED_NAMESPACES = {
 class DelegatedAccessResult:
     allowed: bool
     category: str
+    challenge_redirect: str | None = None
 
 
 class DelegatedAccessValidator(Protocol):

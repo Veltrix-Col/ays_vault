@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from config.application_access import DelegatedAccessResult
+from config.application_access import DelegatedAccessResult, inherited_application_for_path
 from cotizacion_colectivos.dto import CompanyDetail, ContactSummary
 from cotizacion_colectivos.services.common import ColectivosServiceError, sign_record_id
 from vault.models import AuditEvent
@@ -184,3 +184,26 @@ class TrustedIntranetAccessTests(TestCase):
 class UnsafeLocalModeTests(TestCase):
     def test_local_public_is_rejected_outside_debug(self):
         self.assertEqual(self.client.get(reverse("soat:upload")).status_code, 403)
+
+
+class ExternalColectivosFormsAreNeverGatedTests(TestCase):
+    """Los formularios públicos de cotización (clientes externos, sin cuenta) no deben
+    quedar nunca detrás del login heredado de la intranet: viven en el namespace
+    'colectivos_external', deliberadamente fuera de INHERITED_NAMESPACES."""
+
+    def test_external_namespace_is_never_classified_as_inherited(self):
+        for path in (
+            reverse("colectivos_external:portal"),
+            reverse("colectivos_external:entry", args=["fake-token"]),
+            reverse("colectivos_external:individual_quotation", args=["fake-token"]),
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(inherited_application_for_path(path))
+
+    @override_settings(DEBUG=False, RUNNING_TESTS=False, TOOLS_ACCESS_MODE="trusted_intranet")
+    def test_external_form_is_reachable_even_with_no_sso_validator_configured(self):
+        # Sin validador configurado, trusted_intranet bloquea con 403 cualquier app
+        # heredada (ver test_missing_validator_fails_closed_for_inherited_tools). Este
+        # formulario externo, en cambio, debe seguir sirviendo su propia respuesta.
+        response = self.client.get(reverse("colectivos_external:entry", args=["fake-token"]))
+        self.assertEqual(response.status_code, 410)

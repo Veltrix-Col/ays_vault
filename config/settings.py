@@ -33,7 +33,7 @@ SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if 
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
 CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','conciliacion.apps.ConciliacionConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','conciliacion.apps.ConciliacionConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig','intranet_sso.apps.IntranetSsoConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','config.middleware.TrustedIntranetAccessMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
@@ -61,6 +61,17 @@ if TOOLS_ACCESS_MODE not in {'local_public','trusted_intranet'}:
 if TOOLS_ACCESS_MODE == 'local_public' and not DEBUG and not RUNNING_TESTS:
     raise ImproperlyConfigured('TOOLS_ACCESS_MODE=local_public solo se permite con DEBUG=true')
 TOOLS_DELEGATED_ACCESS_VALIDATOR=os.getenv('TOOLS_DELEGATED_ACCESS_VALIDATOR','').strip()
+INTRANET_SSO_VALIDATOR_PATH='intranet_sso.delegated_access.validate_intranet_session'
+INTRANET_SSO_PUBLIC_KEY=os.getenv('INTRANET_SSO_PUBLIC_KEY','').strip()
+INTRANET_SSO_AUTHORIZE_URL=os.getenv('INTRANET_SSO_AUTHORIZE_URL','').strip()
+INTRANET_SSO_AUDIENCE=os.getenv('INTRANET_SSO_AUDIENCE','bh.seguros.com').strip()
+INTRANET_SSO_ISSUER=os.getenv('INTRANET_SSO_ISSUER','seguros.com').strip()
+INTRANET_SSO_ASSERTION_MAX_AGE=int(os.getenv('INTRANET_SSO_ASSERTION_MAX_AGE','60'))
+INTRANET_SSO_SESSION_MAX_AGE=int(os.getenv('INTRANET_SSO_SESSION_MAX_AGE','2700'))
+INTRANET_SSO_COOKIE_NAME=os.getenv('INTRANET_SSO_COOKIE_NAME','intranet_sso').strip()
+if TOOLS_ACCESS_MODE=='trusted_intranet' and TOOLS_DELEGATED_ACCESS_VALIDATOR==INTRANET_SSO_VALIDATOR_PATH and not DEBUG and not RUNNING_TESTS:
+    if not INTRANET_SSO_PUBLIC_KEY or not INTRANET_SSO_AUTHORIZE_URL:
+        raise ImproperlyConfigured('INTRANET_SSO_PUBLIC_KEY e INTRANET_SSO_AUTHORIZE_URL son obligatorias en produccion con el validador de intranet_sso')
 CSRF_COOKIE_HTTPONLY=True; SESSION_COOKIE_HTTPONLY=True; SESSION_COOKIE_SAMESITE='Lax'; CSRF_COOKIE_SAMESITE='Lax'; X_FRAME_OPTIONS='DENY'; SECURE_CONTENT_TYPE_NOSNIFF=True; SECURE_REFERRER_POLICY='same-origin'
 SESSION_COOKIE_AGE=600; SESSION_SAVE_EVERY_REQUEST=True; SESSION_EXPIRE_AT_BROWSER_CLOSE=True
 SESSION_INACTIVITY_SECONDS=int(os.getenv('SESSION_INACTIVITY_SECONDS','600')); SESSION_ACTIVITY_THROTTLE_SECONDS=int(os.getenv('SESSION_ACTIVITY_THROTTLE_SECONDS','60'))
@@ -203,6 +214,7 @@ LOGGING = {
         'integrations.zoho': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
         'cotizacion_colectivos': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
         'application_access': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'intranet_sso': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
 EMAIL_PRODUCTION_ENV=APP_ENV.strip().lower() not in {'development','dev','test','testing'} and not RUNNING_TESTS
