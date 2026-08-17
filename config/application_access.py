@@ -22,6 +22,7 @@ class DelegatedAccessResult:
     allowed: bool
     category: str
     challenge_redirect: str | None = None
+    subject: str | None = None
 
 
 class DelegatedAccessValidator(Protocol):

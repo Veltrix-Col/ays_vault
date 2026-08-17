@@ -119,10 +119,11 @@ class ValidateIntranetSessionTests(TestCase):
         self.assertIsNotNone(result.challenge_redirect)
         self.assertIn("wp-json/intranet-sso", result.challenge_redirect)
 
-    def test_valid_cookie_is_allowed(self):
+    def test_valid_cookie_is_allowed_and_exposes_the_subject_email(self):
         value = signing.dumps({"sub": "empleado@seguros.com", "aud": AUDIENCE}, salt=SESSION_SALT)
         result = validate_intranet_session(request=self._request(value), application="soat")
         self.assertTrue(result.allowed)
+        self.assertEqual(result.subject, "empleado@seguros.com")
 
     def test_expired_cookie_offers_a_challenge_redirect(self):
         value = signing.dumps({"sub": "empleado@seguros.com", "aud": AUDIENCE}, salt=SESSION_SALT)
@@ -195,3 +196,4 @@ class MiddlewareChallengeRedirectTests(TestCase):
         self.client.cookies[_cookie_name()] = value
         response = self.client.get(reverse("soat:upload"))
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.delegated_access.subject, "empleado@seguros.com")

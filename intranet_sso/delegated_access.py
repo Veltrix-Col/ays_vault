@@ -53,7 +53,7 @@ def validate_intranet_session(*, request, application: str) -> DelegatedAccessRe
         return DelegatedAccessResult(False, "invalid_token")
     if payload.get("aud") != settings.INTRANET_SSO_AUDIENCE:
         return DelegatedAccessResult(False, "wrong_audience")
-    return DelegatedAccessResult(True, "validated")
+    return DelegatedAccessResult(True, "validated", subject=payload["sub"])
 
 
 def build_authorize_redirect_url(request, *, next_path: str) -> str:
