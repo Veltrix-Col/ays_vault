@@ -124,7 +124,7 @@ class UserProfile(models.Model):
 
 
 class PaymentCard(models.Model):
-    BRAND = [("VISA", "Visa"), ("MC", "Mastercard"), ("AMEX", "American Express")]
+    BRAND = [("VISA", "Visa"), ("MC", "Mastercard"), ("AMEX", "American Express"), ("DINERS", "Diners")]
     company_name = models.CharField(max_length=160, blank=True)
     client_name = models.CharField(max_length=140)
     cardholder_name = models.CharField(max_length=140)

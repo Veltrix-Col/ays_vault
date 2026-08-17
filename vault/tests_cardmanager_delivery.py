@@ -206,7 +206,7 @@ class CardManagerDeliveryTests(TestCase):
         instruction_text = " ".join(str(cell.value or "") for row in instructions.iter_rows() for cell in row)
         for header in HEADERS:
             self.assertIn(header, instruction_text)
-        self.assertIn("DINERS no está soportada", instruction_text)
+        self.assertIn("Diners", instruction_text)
         resaved = BytesIO()
         workbook.save(resaved)
         workbook.close()
@@ -224,6 +224,9 @@ class CardManagerDeliveryTests(TestCase):
             ("MASTER CARD", "5555555555554444", "MC"),
             ("AMEX", "378282246310005", "AMEX"),
             ("American Express", "378282246310005", "AMEX"),
+            ("DINERS", "30569309025904", "DINERS"),
+            ("Diners", "30569309025904", "DINERS"),
+            ("diners", "30569309025904", "DINERS"),
         )
         for supplied, pan, expected in cases:
             with self.subTest(supplied=supplied):
@@ -366,14 +369,20 @@ class CardManagerDeliveryTests(TestCase):
                 self.assertContains(response, "No se creó ninguna tarjeta")
                 self.assertEqual(PaymentCard.objects.count(), 0)
 
-    def test_diners_is_not_silently_supported(self):
+    def test_diners_is_supported_in_bulk_upload(self):
         response = self.authenticated_client(self.admin).post(
             reverse("vault:bulk_card_upload"),
-            {"file": self.workbook_upload([self.bulk_row(**{"Franquicia": "DINERS"})])},
+            {"file": self.workbook_upload([self.bulk_row(**{"Franquicia": "Diners", "Número de tarjeta": "30569309025904"})])},
         )
-        self.assertContains(response, "Fila 2")
-        self.assertContains(response, "opción válida")
-        self.assertEqual(PaymentCard.objects.count(), 0)
+        self.assertRedirects(response, reverse("vault:bulk_card_upload"))
+        self.assertEqual(PaymentCard.objects.get().brand, "DINERS")
+
+    def test_diners_is_supported_on_create_and_edit(self):
+        creation = CardForm(self.card_data(brand="DINERS", pan="30569309025904"))
+        self.assertTrue(creation.is_valid(), creation.errors)
+        card = creation.save(user=self.leader)
+        edition = CardEditForm(self.card_data(brand="DINERS", pan="", expiry="", code=""), instance=card)
+        self.assertTrue(edition.is_valid(), edition.errors)
 
     def test_bulk_reuses_required_card_expiry_and_brand_validation(self):
         cases = (

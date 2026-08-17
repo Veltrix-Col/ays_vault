@@ -92,7 +92,7 @@ def build_template():
     for row_number, column in enumerate(COLUMNS, start=2):
         instruction = column.instruction
         if column.header == "Franquicia":
-            instruction = f"{instruction} Opciones: {supported_text}. DINERS no está soportada actualmente."
+            instruction = f"{instruction} Opciones: {supported_text}."
         instructions.append((column.header, "Sí", instruction, column.safe_example))
         instructions.cell(row=row_number, column=3).alignment = Alignment(wrap_text=True, vertical="top")
         instructions.cell(row=row_number, column=4).alignment = Alignment(wrap_text=True, vertical="top")

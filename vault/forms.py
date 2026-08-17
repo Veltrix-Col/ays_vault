@@ -66,6 +66,8 @@ def detected_brand(number):
         return "MC"
     if number.startswith(("34", "37")):
         return "AMEX"
+    if number.startswith(("300", "301", "302", "303", "304", "305", "3095", "36", "38", "39")):
+        return "DINERS"
     return ""
 
 
