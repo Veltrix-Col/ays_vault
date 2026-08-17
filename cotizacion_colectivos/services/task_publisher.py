@@ -25,10 +25,19 @@ TASK_KIND = {
     "COTIZACION": "Cotización",
 }
 ALLOWED_TASK_FIELDS = frozenset({"Subject", "tipo_de_solicitud"})
+TEST_TASK_ALLOWED_FIELDS = frozenset({
+    "Subject", "tipo_de_solicitud", "rea", "Observaciones", "Responsable",
+    "Correo_responsable", "Fecha_de_solicitud_del_cliente",
+})
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
 SYNTHETIC_TEST_TASK = {
-    "Subject": "PRUEBA VELTRIX - NO GESTIONAR",
-    "tipo_de_solicitud": "Ingresos",
+    "Subject": "PRUEBA VELTRIX-CV-003 - COTIZACION - NO GESTIONAR",
+    "tipo_de_solicitud": "Cotización",
+    "rea": "Negocios Bienestar y Beneficios",
+    "Observaciones": "Prueba controlada de creación de Task desde A&S Vault. Validación de campos funcionales de Cotización. NO GESTIONAR.",
+    "Responsable": "Sara Rua Vargas",
+    "Correo_responsable": "sara.rua@segurosays.com",
+    "Fecha_de_solicitud_del_cliente": "2026-08-17",
 }
 
 
@@ -173,11 +182,13 @@ class GuardedSandboxTaskPublisher:
         return self._create_one(build_task_record(payload))
 
     def publish_test_task(self) -> Mapping[str, object]:
-        return self._create_one(SYNTHETIC_TEST_TASK)
+        return self._create_one(SYNTHETIC_TEST_TASK, allowed_fields=TEST_TASK_ALLOWED_FIELDS)
 
-    def _create_one(self, record: Mapping[str, object]) -> Mapping[str, object]:
+    def _create_one(
+        self, record: Mapping[str, object], *, allowed_fields: frozenset[str] = ALLOWED_TASK_FIELDS,
+    ) -> Mapping[str, object]:
         normalized = dict(record)
-        if set(normalized) != ALLOWED_TASK_FIELDS:
+        if set(normalized) != allowed_fields:
             raise ValidationError("El payload Tasks no coincide con el contrato autorizado.")
         try:
             # La fachada vuelve a comprobar write_enabled antes de construir el POST.
@@ -211,6 +222,8 @@ class GuardedSandboxTaskPublisher:
             "profile": self.profile,
             "module": "Tasks",
             "record_id": str(item.record_id),
+            "succeeded": bool(getattr(item, "succeeded", False)),
+            "code": str(getattr(item, "code", "") or ""),
         }
 
 

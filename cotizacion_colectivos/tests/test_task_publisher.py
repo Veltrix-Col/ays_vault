@@ -114,10 +114,17 @@ class TaskPublisherTests(TestCase):
 
         create.assert_called_once_with(module="Tasks", records=(SYNTHETIC_TEST_TASK,))
         self.assertEqual(SYNTHETIC_TEST_TASK, {
-            "Subject": "PRUEBA VELTRIX - NO GESTIONAR",
-            "tipo_de_solicitud": "Ingresos",
+            "Subject": "PRUEBA VELTRIX-CV-002 - COTIZACION - NO GESTIONAR",
+            "tipo_de_solicitud": "Cotización",
+            "rea": "Negocios Bienestar y Beneficios",
+            "Observaciones": "Prueba controlada de creación de Task desde A&S Vault. Validación de campos funcionales de Cotización. NO GESTIONAR.",
+            "Responsable": "Sara Rua Vargas",
+            "Correo_responsable": "sara.rua@segurosays.com",
+            "Fecha_de_solicitud_del_cliente": "2026-08-17",
         })
         self.assertEqual(result["record_id"], "700000000000000001")
+        self.assertTrue(result["succeeded"])
+        self.assertEqual(result["code"], "SUCCESS")
 
     def test_every_guard_blocks_before_get_zoho(self):
         cases = (
@@ -194,6 +201,11 @@ class TestTaskCommandTests(TestCase):
             zoho_code="INVALID_DATA",
             zoho_status="error",
             detail_keys=("api_name", "expected_data_type"),
+            detail_field="Fecha_de_solicitud_del_cliente",
+            detail_accepted_type="Date",
+            detail_given_type="str",
+            detail_class="Record",
+            detail_index=0,
             backend="sdk",
             operation="records.create",
             module="Tasks",
@@ -207,7 +219,8 @@ class TestTaskCommandTests(TestCase):
             "No se creó la Task (category=sdk; status_code=422; backend=sdk; "
             "operation=records.create; module=Tasks; sdk_exception_class=SDKException; "
             "sdk_code=MANDATORY_NOT_FOUND; zoho_code=INVALID_DATA; zoho_status=error; "
-            "detail_keys=[api_name, expected_data_type]; request_sent=unknown).",
+            "detail_keys=[api_name, expected_data_type]; field=Fecha_de_solicitud_del_cliente; "
+            "accepted_type=Date; given_type=str; class=Record; index=0; request_sent=unknown).",
         )
         for secret in (
             "access-token-secret", "refresh-token-secret", "client-secret-value",
@@ -233,7 +246,8 @@ class TestTaskCommandTests(TestCase):
             "No se creó la Task (category=sdk; status_code=unknown; backend=sdk; "
             "operation=records.create; module=Tasks; sdk_exception_class=SDKException; "
             "sdk_code=unknown; zoho_code=unknown; zoho_status=unknown; "
-            "detail_keys=none; request_sent=unknown).",
+            "detail_keys=none; field=unknown; accepted_type=unknown; given_type=unknown; "
+            "class=unknown; index=unknown; request_sent=unknown).",
         )
         self.assertNotIn("refresh-token-secret", diagnostic)
 
@@ -307,4 +321,6 @@ class TestTaskCommandTests(TestCase):
             "Profile: sandbox",
             "Module: Tasks",
             "Record ID: 7001",
+            "Succeeded: unknown",
+            "Code: unknown",
         ])

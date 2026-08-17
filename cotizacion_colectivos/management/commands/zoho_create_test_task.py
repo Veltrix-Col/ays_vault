@@ -43,6 +43,10 @@ def _safe_detail_keys(value) -> str:
     return f"[{', '.join(keys)}]" if keys else "none"
 
 
+def _safe_detail_index(value) -> str:
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else "unknown"
+
+
 def _safe_zoho_diagnostic(exc: ZohoError) -> str:
     values = (
         ("category", _safe_value(getattr(exc, "category", ""))),
@@ -55,6 +59,11 @@ def _safe_zoho_diagnostic(exc: ZohoError) -> str:
         ("zoho_code", _safe_value(getattr(exc, "zoho_code", ""))),
         ("zoho_status", _safe_value(getattr(exc, "zoho_status", ""))),
         ("detail_keys", _safe_detail_keys(getattr(exc, "detail_keys", ()))),
+        ("field", _safe_value(getattr(exc, "detail_field", ""))),
+        ("accepted_type", _safe_value(getattr(exc, "detail_accepted_type", ""))),
+        ("given_type", _safe_value(getattr(exc, "detail_given_type", ""))),
+        ("class", _safe_value(getattr(exc, "detail_class", ""))),
+        ("index", _safe_detail_index(getattr(exc, "detail_index", None))),
         ("request_sent", _request_sent(getattr(exc, "request_sent", None))),
     )
     return "No se creó la Task (" + "; ".join(
@@ -95,3 +104,5 @@ class Command(BaseCommand):
         self.stdout.write(f"Profile: {result['profile']}")
         self.stdout.write(f"Module: {result['module']}")
         self.stdout.write(f"Record ID: {result['record_id']}")
+        self.stdout.write(f"Succeeded: {result.get('succeeded', 'unknown')}")
+        self.stdout.write(f"Code: {result.get('code') or 'unknown'}")
