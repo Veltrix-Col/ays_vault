@@ -19,42 +19,67 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 
 from ays_zoho_sdk.exceptions import ZohoError
+from django.conf import settings
 from openpyxl import load_workbook
 
+from conciliador.ramos import obtener_ramo
+from conciliador.rules.valor import ComparacionExactaRule
 from conciliador.service import (
     ConciliacionArchivos,
     ConciliacionService,
     ConciliacionServiceError,
 )
-from conciliador.sources.zoho_api import resolver_id_poliza
+from conciliador.sources.zoho_api import resolver_cobros_poliza, resolver_id_poliza
 from integrations.zoho import get_zoho
 
 logger = logging.getLogger("conciliacion")
 
-# El boton "Facturar" enlaza directo al registro de la poliza en la interfaz
-# web de Zoho CRM. Facturar es una accion real de negocio: el enlace siempre
-# apunta a Produccion, sin importar en que perfil se corrio la conciliacion
-# (conciliar en Sandbox no debe llevar a facturar contra datos de prueba).
+# El boton "Facturar" enlaza directo a los Cobros (modulo Opeeraciones,
+# CustomModule6 en la interfaz web) de la poliza, con la poliza misma
+# (CustomModule4) como respaldo si no se encuentra ningun cobro. Facturar es
+# una accion real de negocio: los enlaces siempre apuntan a Produccion, sin
+# importar en que perfil se corrio la conciliacion (conciliar en Sandbox no
+# debe llevar a facturar contra datos de prueba).
 _ZOHO_CRM_WEB_ORG = "753703967"
 _ZOHO_CRM_POLIZAS_TAB = "CustomModule4"
+_ZOHO_CRM_COBROS_TAB = "CustomModule6"
 
 
-def _url_facturar(poliza_id: str) -> str:
+def _url_poliza(poliza_id: str) -> str:
     return f"https://crm.zoho.com/crm/org{_ZOHO_CRM_WEB_ORG}/tab/{_ZOHO_CRM_POLIZAS_TAB}/{poliza_id}"
 
 
-def _resolver_facturar_url(poliza: str) -> str | None:
+def _url_cobro(cobro_id: str) -> str:
+    return f"https://crm.zoho.com/crm/org{_ZOHO_CRM_WEB_ORG}/tab/{_ZOHO_CRM_COBROS_TAB}/{cobro_id}"
+
+
+def _resolver_poliza_url(poliza: str) -> str | None:
     try:
         zoho_produccion = get_zoho(profile="production")
         poliza_id = resolver_id_poliza(zoho_produccion, poliza=poliza)
     except ZohoError:
         logger.warning(
-            "No fue posible resolver el enlace de facturar para la póliza %s", poliza, exc_info=True
+            "No fue posible resolver el enlace de la póliza %s", poliza, exc_info=True
         )
         return None
     if not poliza_id:
         return None
-    return _url_facturar(poliza_id)
+    return _url_poliza(poliza_id)
+
+
+def _resolver_cobros(poliza: str) -> list[dict[str, object]] | None:
+    """None => no fue posible consultar Zoho (perfil Producción no disponible,
+    error de red, etc.). Lista vacía => se consultó correctamente pero la
+    póliza no tiene ninguna Operación/Cobro registrada."""
+    try:
+        zoho_produccion = get_zoho(profile="production")
+        candidatos = resolver_cobros_poliza(zoho_produccion, poliza=poliza)
+    except ZohoError:
+        logger.warning(
+            "No fue posible resolver los cobros para la póliza %s", poliza, exc_info=True
+        )
+        return None
+    return [{**candidato, "url": _url_cobro(candidato["id"])} for candidato in candidatos]
 
 
 class ConciliacionProcessingError(ValueError):
@@ -110,6 +135,18 @@ def _endurecer_xlsx(contenido: bytes) -> bytes:
         workbook.close()
 
 
+def _aplicar_umbral_valor_exacto(ramo_codigo: str) -> None:
+    """Sobreescribe `ComparacionExactaRule.umbral_pesos` (diferencia en pesos
+    por debajo de la cual una diferencia de valor no es incidente) con lo que
+    haya en `settings.CONCILIACION_UMBRAL_VALOR_EXACTO`, para poder ajustar el
+    umbral por configuracion sin tocar codigo. Mismo patron que ya usa
+    `cli.py` con `ComparacionEstadisticaRule.zscore_umbral`."""
+    umbral = settings.CONCILIACION_UMBRAL_VALOR_EXACTO
+    for regla in obtener_ramo(ramo_codigo).reglas:
+        if isinstance(regla, ComparacionExactaRule):
+            regla.umbral_pesos = umbral
+
+
 def procesar_conciliacion(
     *, ramo: str, poliza: str, archivos: dict, fuente: str = "excel", perfil_zoho: str = "sandbox",
 ) -> ConciliacionOutput:
@@ -118,6 +155,7 @@ def procesar_conciliacion(
     `fuente="api"`, relacion/personas se ignoran aunque vengan pobladas: se
     consultan directo a Zoho, filtradas por `poliza`."""
     started = monotonic()
+    _aplicar_umbral_valor_exacto(ramo)
 
     with TemporaryDirectory(prefix="ays-conciliacion-") as directorio:
         raiz = Path(directorio)
@@ -165,9 +203,10 @@ def procesar_conciliacion(
 
         contenido = _endurecer_xlsx(resultado.contenido_excel)
         reporte = resultado.reporte
-        # Solo tiene sentido resolver el enlace de facturar cuando la conciliación
-        # queda sin incidentes: es el único caso en que el frontend muestra el botón.
-        facturar_url = _resolver_facturar_url(poliza) if reporte.esta_vacio else None
+        # Solo tiene sentido resolver los cobros cuando la conciliación queda sin
+        # incidentes: es el único caso en que el frontend muestra la sección.
+        poliza_url = _resolver_poliza_url(poliza) if reporte.esta_vacio else None
+        cobros = _resolver_cobros(poliza) if reporte.esta_vacio else None
         summary = {
             "ramo": reporte.ramo,
             "periodo": reporte.periodo,
@@ -178,7 +217,8 @@ def procesar_conciliacion(
             "por_tipo": {str(k): int(v) for k, v in resultado.resumen.items()},
             "filename": resultado.nombre_archivo,
             "duration_seconds": round(monotonic() - started, 2),
-            "facturar_url": facturar_url,
+            "poliza_url": poliza_url,
+            "cobros": cobros,
         }
         return ConciliacionOutput(
             content=contenido,

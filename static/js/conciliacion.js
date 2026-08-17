@@ -23,22 +23,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const banner = document.querySelector("[data-result-banner]");
   const incidentsBox = document.querySelector("[data-result-incidents]");
   const incidentsList = document.querySelector("[data-incidents-list]");
-  const btnFacturar = document.querySelector("[data-action-facturar]");
   const btnDownload = document.querySelector("[data-action-download]");
   const btnReset = document.querySelector("[data-action-reset]");
 
-  const modal = document.querySelector("[data-facturar-modal]");
-  const modalClose = document.querySelector("[data-facturar-close]");
+  const cobrosSection = document.querySelector("[data-cobros-section]");
+  const cobrosEmpty = document.querySelector("[data-cobros-empty]");
+  const cobrosList = document.querySelector("[data-cobros-list]");
+  const polizaLink = document.querySelector("[data-poliza-link]");
 
   let objectUrl = null;
   let outputName = "Reporte_Conciliacion.xlsx";
-  let facturarUrl = null;
 
   // --- Slots dinámicos por ramo -------------------------------------------
   function updateSlots(ramo) {
     const slots = catalog[ramo] || [];
     slots.forEach((slot) => {
-      const zone = form.querySelector(`.conc-slot[data-slot="${slot.campo}"]`);
+      const zone = form.querySelector(`.tool-slot[data-slot="${slot.campo}"]`);
       if (!zone) return;
       const input = zone.querySelector('input[type="file"]');
       const label = zone.querySelector("[data-slot-label]");
@@ -49,7 +49,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (input) input.setAttribute("accept", slot.accept || "");
       if (label) label.innerHTML = slot.required
         ? escapeHtml(slot.label)
-        : `${escapeHtml(slot.label)} <span class="conc-optional">(opcional)</span>`;
+        : `${escapeHtml(slot.label)} <span class="tool-optional">(opcional)</span>`;
       if (help) help.textContent = slot.help || "";
       if (badge) badge.textContent = (slot.accept || "").toUpperCase().replace(/\./g, "");
       if (temporal) {
@@ -95,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Novedades: se oculta solo si el ramo tambien resuelve novedades por API
     // (vg_deudores no: su novedad viene del banco, sigue pidiendo el archivo).
-    const novedadesZone = form.querySelector('.conc-slot[data-slot="novedades"]');
+    const novedadesZone = form.querySelector('.tool-slot[data-slot="novedades"]');
     if (novedadesZone) {
       const ocultarNovedades = esApi && !!soporte.novedades;
       novedadesZone.hidden = ocultarNovedades;
@@ -112,7 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- Nombre de archivo seleccionado -------------------------------------
   form.querySelectorAll('input[type="file"]').forEach((input) => {
     input.addEventListener("change", () => {
-      const display = input.closest(".conc-slot")?.querySelector("[data-file-name]");
+      const display = input.closest(".tool-slot")?.querySelector("[data-file-name]");
       const file = input.files?.[0];
       if (display) {
         display.textContent = file
@@ -164,7 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     const sinIncidentes = summary.sin_incidentes === true || (summary.total_incidentes ?? 0) === 0;
-    banner.className = `conc-banner ${sinIncidentes ? "is-ok" : "is-warn"}`;
+    banner.className = `tool-banner ${sinIncidentes ? "is-ok" : "is-warn"}`;
     banner.textContent = sinIncidentes
       ? "Conciliación sin incidentes. Todo cuadra: puede continuar con la facturación."
       : `Se encontraron ${summary.total_incidentes} incidente(s). Revise y descargue el detalle antes de facturar.`;
@@ -182,18 +182,55 @@ document.addEventListener("DOMContentLoaded", () => {
       incidentsBox.hidden = true;
     }
 
-    facturarUrl = summary.facturar_url || null;
-    btnFacturar.hidden = !sinIncidentes;
+    renderCobros(summary);
     btnDownload.hidden = sinIncidentes;
     result.hidden = false;
     result.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function metaItem(label, value) {
-    const item = document.createElement("div"); item.className = "conc-meta-item";
+    const item = document.createElement("div"); item.className = "tool-meta-item";
     const strong = document.createElement("strong"); strong.textContent = value || "—";
     const span = document.createElement("span"); span.textContent = label;
     item.append(strong, span); return item;
+  }
+
+  // --- Cobros: lista de Operaciones de la poliza en Zoho (Produccion) ------
+  // Puede haber varias vigentes a la vez (por ramo, por cuota): se muestran
+  // todas con su vigencia para que quien concilia elija a cual ir, en vez de
+  // asumir una sola.
+  function renderCobros(summary) {
+    if (!cobrosSection) return;
+    const cobros = Array.isArray(summary.cobros) ? summary.cobros : null;
+    if (cobros === null) {
+      cobrosSection.hidden = true;
+      return;
+    }
+    cobrosSection.hidden = false;
+    cobrosList.replaceChildren(...cobros.map(cobroItem));
+    if (cobrosEmpty) cobrosEmpty.hidden = cobros.length > 0;
+    if (polizaLink) {
+      polizaLink.hidden = !summary.poliza_url;
+      polizaLink.href = summary.poliza_url || "#";
+    }
+  }
+
+  function cobroItem(cobro) {
+    const li = document.createElement("li"); li.className = "conc-cobro-item";
+    const link = document.createElement("a");
+    link.href = cobro.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+    const nombre = document.createElement("strong");
+    nombre.textContent = cobro.nombre || "Operación sin nombre";
+    const detalle = document.createElement("span");
+    detalle.textContent = [cobro.ramo, cobro.numero_cuota ? `Cuota ${cobro.numero_cuota}` : ""]
+      .filter(Boolean).join(" · ") || "Sin ramo/cuota registrados";
+    const vigencia = document.createElement("span");
+    vigencia.textContent = (cobro.vigencia_inicio || cobro.vigencia_fin)
+      ? `Vigencia: ${cobro.vigencia_inicio || "s/f"} – ${cobro.vigencia_fin || "s/f"}`
+      : "Vigencia no disponible";
+    link.append(nombre, detalle, vigencia);
+    li.append(link);
+    return li;
   }
 
   btnDownload?.addEventListener("click", () => {
@@ -211,22 +248,6 @@ document.addEventListener("DOMContentLoaded", () => {
     updateFuente();
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   });
-
-  // --- Facturar: enlace real a la poliza en Zoho CRM (Produccion) ----------
-  // Si no se pudo resolver el enlace (poliza no encontrada en Produccion,
-  // Zoho no disponible, etc.), se cae al modal explicando por que.
-  function openModal() { if (modal) { modal.hidden = false; modalClose?.focus(); } }
-  function closeModal() { if (modal) modal.hidden = true; }
-  btnFacturar?.addEventListener("click", () => {
-    if (facturarUrl) {
-      window.open(facturarUrl, "_blank", "noopener");
-    } else {
-      openModal();
-    }
-  });
-  modalClose?.addEventListener("click", closeModal);
-  modal?.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => (

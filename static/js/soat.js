@@ -48,7 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const summary = rawSummary ? JSON.parse(decodeURIComponent(escape(atob(rawSummary.replace(/-/g, "+").replace(/_/g, "/"))))) : {};
       grid.replaceChildren();
       Object.entries(labels).forEach(([key, label]) => {
-        const item = document.createElement("div"); item.className = "result-item";
+        const item = document.createElement("div"); item.className = "tool-meta-item";
         const value = document.createElement("strong"); value.textContent = String(summary[key] ?? 0);
         const caption = document.createElement("span"); caption.textContent = label;
         item.append(value, caption); grid.append(item);

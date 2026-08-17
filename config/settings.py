@@ -116,6 +116,9 @@ SOAT_MAX_ROWS=int(os.getenv('SOAT_MAX_ROWS','100000'))
 SOAT_MAX_COLUMNS=int(os.getenv('SOAT_MAX_COLUMNS','200'))
 CONCILIACION_APP_URL=os.getenv('CONCILIACION_APP_URL','').strip()
 CONCILIACION_MAX_UPLOAD_BYTES=int(os.getenv('CONCILIACION_MAX_UPLOAD_BYTES',str(25*1024*1024)))
+# Diferencia en pesos por debajo de la cual NO se reporta incidente al comparar
+# el valor cobrado contra el valor en Zoho (ComparacionExactaRule).
+CONCILIACION_UMBRAL_VALOR_EXACTO=float(os.getenv('CONCILIACION_UMBRAL_VALOR_EXACTO','10'))
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS',172800,300,604800)

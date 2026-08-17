@@ -13,6 +13,7 @@ from conciliador.domain.exceptions import RamoNoRegistradoError
 from conciliador.domain.models import ModoValor, RamoConfig
 from conciliador.parsing.periodo import inferir_periodo_desde_nombre_archivo
 from conciliador.rules.coberturas import SumaCoberturasRule
+from conciliador.rules.duplicados import IdentidadInconsistenteRule, NovedadContradictoriaRule
 from conciliador.rules.ingresos import IngresoNuevoSinPersonaRule
 from conciliador.rules.presencia import (
     ActivoAusenteEnCobroRule,
@@ -21,7 +22,7 @@ from conciliador.rules.presencia import (
     HuerfanoEnCobroRule,
 )
 from conciliador.rules.recibo import ReciboConciliacionRule
-from conciliador.rules.valor import ComparacionEstadisticaRule, ComparacionExactaRule
+from conciliador.rules.valor import ComparacionExactaRule
 from conciliador.sources.movilidad import cargar_cobro_movilidad
 from conciliador.sources.salud import cargar_cobro_salud, periodo_desde_porchat
 from conciliador.sources.vg import (
@@ -102,7 +103,7 @@ RAMOS: dict[str, RamoConfig] = {
         nombre="VG Voluntario",
         clave_col="clave",
         reglas=[*_REGLAS_PRESENCIA, ComparacionExactaRule(), IngresoNuevoSinPersonaRule(), SumaCoberturasRule(),
-                ReciboConciliacionRule()],
+                NovedadContradictoriaRule(), IdentidadInconsistenteRule(), ReciboConciliacionRule()],
         cargar_relacion=cargar_relacion_vg,
         cargar_cobro=cargar_cobro_vg,
         cargar_personas=cargar_personas_zoho,
@@ -125,8 +126,10 @@ RAMOS: dict[str, RamoConfig] = {
         codigo="vg_deudores",
         nombre="VG Deudores",
         clave_col="clave",
-        reglas=[*_REGLAS_PRESENCIA, ComparacionEstadisticaRule(), IngresoNuevoSinPersonaRule(), SumaCoberturasRule(),
-                ReciboConciliacionRule()],
+        # ComparacionEstadisticaRule (variacion % de valor vs. Zoho) desactivada
+        # temporalmente: por ahora genera demasiado ruido para ser accionable.
+        reglas=[*_REGLAS_PRESENCIA, IngresoNuevoSinPersonaRule(), SumaCoberturasRule(),
+                NovedadContradictoriaRule(), IdentidadInconsistenteRule(), ReciboConciliacionRule()],
         cargar_relacion=cargar_relacion_vg,
         cargar_cobro=cargar_cobro_vg,
         cargar_personas=cargar_personas_zoho,

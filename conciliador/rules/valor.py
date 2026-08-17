@@ -10,11 +10,18 @@ from conciliador.rules.base import RuleContext, buscar_novedad, incidente_base
 
 
 class ComparacionExactaRule:
-    """Cualquier diferencia >= 1 peso entre el valor de Zoho y el del cobro
-    se reporta. Sirve para ramos donde el valor deberia ser identico mes a
-    mes salvo error (Movilidad, Salud, VG Voluntario)."""
+    """Cualquier diferencia >= `umbral_pesos` entre el valor de Zoho y el del
+    cobro se reporta; por debajo del umbral se asume redondeo/ruido y no es
+    incidente. Sirve para ramos donde el valor deberia ser identico mes a mes
+    salvo error (Movilidad, Salud, VG Voluntario).
 
-    def __init__(self, umbral_pesos: float = 1.0):
+    `umbral_pesos` es mutable a proposito (no solo un parametro de __init__):
+    el backend Django (`conciliacion.services.processor`) lo sobreescribe en
+    cada corrida desde `settings.CONCILIACION_UMBRAL_VALOR_EXACTO`, para que
+    el umbral se pueda ajustar por configuracion sin tocar codigo. El mismo
+    patron ya lo usa `cli.py` con `ComparacionEstadisticaRule.zscore_umbral`."""
+
+    def __init__(self, umbral_pesos: float = 10.0):
         self.umbral_pesos = umbral_pesos
 
     def generar(self, ctx: RuleContext) -> list[Incidente]:

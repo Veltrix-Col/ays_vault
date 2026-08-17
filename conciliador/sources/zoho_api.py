@@ -75,6 +75,39 @@ def resolver_id_poliza(zoho: ZohoFacade, *, poliza: str) -> str | None:
     return str(pagina.records[0]["id"])
 
 
+_CAMPOS_COBROS = ("id, Name, Ramo, Numero_de_cuota, "
+                   "Certificado_Fecha_de_inicio_de_vigencia, Certificado_Fecha_de_Fin_de_vigencia")
+_LIMITE_COBROS = 50
+
+
+def resolver_cobros_poliza(zoho: ZohoFacade, *, poliza: str) -> list[dict[str, str | None]]:
+    """Candidatos de 'Cobro' (modulo `Opeeraciones`, tab `CustomModule6` en la
+    interfaz web de Zoho CRM) para una poliza.
+
+    Puede haber varias Operaciones vigentes al mismo tiempo para una misma
+    poliza (por ramo, por cuota): en vez de asumir una sola y arriesgar
+    enlazar a la equivocada, se devuelve la lista completa -- mas reciente
+    primero por vigencia -- para que quien concilia elija a cual ir con la
+    fecha de vigencia a la vista."""
+    poliza_segura = _escapar_coql(poliza)
+    query = (
+        f"select {_CAMPOS_COBROS} from Opeeraciones where P_liza.Name = '{poliza_segura}' "
+        "order by Certificado_Fecha_de_inicio_de_vigencia desc"
+    )
+    pagina = zoho.coql.execute(query, limit=_LIMITE_COBROS)
+    return [
+        {
+            "id": str(fila["id"]),
+            "nombre": fila.get("Name") or "",
+            "ramo": fila.get("Ramo") or "",
+            "numero_cuota": fila.get("Numero_de_cuota") or "",
+            "vigencia_inicio": fila.get("Certificado_Fecha_de_inicio_de_vigencia"),
+            "vigencia_fin": fila.get("Certificado_Fecha_de_Fin_de_vigencia"),
+        }
+        for fila in pagina.records
+    ]
+
+
 def cargar_personas_api(zoho: ZohoFacade, *, documentos: Iterable[str]) -> set[str]:
     """De los documentos recibidos (tipicamente la union de la relacion de
     asegurados y el archivo de cobro), devuelve el subconjunto que ya existe
