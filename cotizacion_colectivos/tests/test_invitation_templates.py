@@ -4,6 +4,8 @@ import hashlib
 import io
 import zipfile
 import inspect
+import tempfile
+import posixpath
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +14,7 @@ from xml.etree import ElementTree as ET
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
+from openpyxl import load_workbook
 
 from cotizacion_colectivos.dto import ContactSummary, GroupMember, PolicyDetail
 from cotizacion_colectivos.invitation_templates.catalog import (
@@ -116,6 +119,56 @@ class InvitationTemplateCatalogTests(TestCase):
         self.assertIn("load_policy_preparation", source)
         self.assertNotIn("PolicyService", source)
         self.assertNotIn("get_zoho", source)
+
+    def test_openpyxl_load_save_pure_is_not_byte_or_package_preserving(self):
+        # This is a diagnostic guard: the generator deliberately does not use
+        # openpyxl because a pure round-trip drops unsupported OOXML parts.
+        with tempfile.TemporaryDirectory() as directory:
+            for item in (
+                next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "sura_autos_quote"),
+                next(item for item in INVITATION_TEMPLATE_CATALOG if item.code == "allianz_autos_collective"),
+            ):
+                copy = Path(directory) / f"{item.code}.xlsx"
+                load_workbook(item.path).save(copy)
+                with zipfile.ZipFile(item.path) as original, zipfile.ZipFile(copy) as roundtrip:
+                    self.assertNotEqual(set(original.namelist()), set(roundtrip.namelist()))
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_generated_worksheets_keep_ignorable_namespace_prefixes_and_relationship_targets(self, workspace):
+        workspace.return_value = local_workspace()
+        for insurer in ("SURA", "ALLIANZ"):
+            content, _filename, content_type, errors = generate_invitation_templates(
+                TOKEN, insurer_code=insurer,
+            )
+            self.assertEqual(errors, ())
+            self.assertIn("spreadsheetml", content_type)
+            with zipfile.ZipFile(io.BytesIO(content)) as package:
+                names = set(package.namelist())
+                for name in names:
+                    if name.endswith(".xml") or name.endswith(".rels"):
+                        ET.fromstring(package.read(name))
+                for rels_name in (name for name in names if name.endswith(".rels")):
+                    rels = ET.fromstring(package.read(rels_name))
+                    if rels_name == "_rels/.rels":
+                        base = Path(".")
+                    else:
+                        source_part = rels_name.replace("/_rels/", "/").removesuffix(".rels")
+                        base = Path(source_part).parent
+                    for relationship in rels:
+                        target = relationship.get("Target", "")
+                        if target.startswith("/"):
+                            target_name = target.lstrip("/")
+                        else:
+                            target_name = posixpath.normpath(str((base / target).as_posix()))
+                        self.assertIn(target_name, names, (rels_name, target_name))
+                sheet = next(name for name in names if name.startswith("xl/worksheets/sheet1.xml"))
+                raw = package.read(sheet)
+                opening_start = raw.find(b"?>") + 2
+                opening = raw[opening_start:raw.find(b">", opening_start)]
+                self.assertIn(b"Ignorable=\"x14ac xr xr2 xr3\"", raw)
+                for prefix in (b"x14ac", b"xr", b"xr2", b"xr3"):
+                    self.assertIn(b"xmlns:" + prefix + b"=", opening)
+                self.assertTrue(load_workbook(io.BytesIO(content)).sheetnames)
 
 
 class InvitationTemplateGenerationTests(TestCase):

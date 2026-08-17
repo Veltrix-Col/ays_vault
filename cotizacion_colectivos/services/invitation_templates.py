@@ -27,6 +27,14 @@ NS_DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationship
 NS_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS_CUSTOM = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 ET.register_namespace("", NS_MAIN)
+ET.register_namespace("r", NS_DOC_REL)
+ET.register_namespace("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006")
+ET.register_namespace("x14ac", "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac")
+ET.register_namespace("xr", "http://schemas.microsoft.com/office/spreadsheetml/2014/revision")
+ET.register_namespace("xr2", "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2")
+ET.register_namespace("xr3", "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3")
+ET.register_namespace("xdr", "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing")
+ET.register_namespace("x14", "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main")
 SAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 BRANCH_INVITATION_SALT = "cotizacion_colectivos.branch_invitations.v1"
 
@@ -368,6 +376,36 @@ def _expand_template_rows(root: ET.Element, template: InvitationTemplate, last_r
         dimension.set("ref", re.sub(r"\d+$", str(last_row), dimension.get("ref", "")))
 
 
+def _serialize_worksheet(root: ET.Element) -> bytes:
+    # ElementTree drops declarations that are only referenced by mc:Ignorable.
+    # Restore those declarations on the serialized root so Excel can resolve
+    # extension namespaces after the sheet is rewritten.
+    data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    ignorable = root.get(
+        "{" + "http://schemas.openxmlformats.org/markup-compatibility/2006" + "}Ignorable",
+    )
+    if not ignorable:
+        return data
+    namespace_by_prefix = {
+        "x14ac": "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac",
+        "xr": "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
+        "xr2": "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2",
+        "xr3": "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3",
+    }
+    xml_declaration_end = data.find(b"?>")
+    opening_end = data.find(b">", xml_declaration_end + 2)
+    if opening_end < 0:
+        raise ValueError("worksheet-root")
+    opening = data[:opening_end]
+    suffix = bytearray()
+    for prefix in ignorable.split():
+        uri = namespace_by_prefix.get(prefix)
+        declaration = f' xmlns:{prefix}="{uri}"'.encode("ascii") if uri else b""
+        if declaration and f"xmlns:{prefix}=".encode("ascii") not in opening:
+            suffix.extend(declaration)
+    return data[:opening_end] + bytes(suffix) + data[opening_end:]
+
+
 def _column_number(value: str) -> int:
     result = 0
     for character in value:
@@ -441,7 +479,7 @@ def _patch_xlsx(template: InvitationTemplate, fixed, rows) -> bytes:
                 )
             for coordinate, value in values.items():
                 _set_cell(root, coordinate, value)
-            replacements[part] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            replacements[part] = _serialize_worksheet(root)
         # Some official masters retain hidden properties from a previous quote.
         # Keep the package relationship valid but remove every custom value from
         # the distributable copy. The source file remains byte-for-byte intact.
