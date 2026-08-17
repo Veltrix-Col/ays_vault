@@ -279,6 +279,14 @@ class OptionalAccessEmailForm(forms.Form):
     )
 
 
+class IndividualAccessPrepareForm(OptionalAccessEmailForm):
+    responsible = forms.ChoiceField(
+        label="Responsable de la solicitud",
+        required=True,
+        choices=(),
+    )
+
+
 class ExternalOTPForm(forms.Form):
     code = forms.RegexField(label="Código de verificación", regex=r"^\d{6}$", max_length=6, min_length=6, widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "one-time-code"}))
 

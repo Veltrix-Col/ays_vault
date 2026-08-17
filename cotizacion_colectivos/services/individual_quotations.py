@@ -11,14 +11,17 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
-from vault.crypto import encrypt
+from vault.crypto import decrypt, encrypt
 
 from ..models import (
     AdjuntoCotizacionIndividual,
     CotizacionIndividual,
     NotificacionCotizacionIndividual,
 )
+from .task_publisher import ColectivosTaskPayload, enqueue_task, publish_task_outbox
+from .search import PersonSearchService
 from ..quotation_forms.catalog import get_policy_branch_schema
 from ..quotation_forms.security import sign_policy_context
 
@@ -217,6 +220,8 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         attachment_count=len(files),
         created_by=actor,
     )
+    task_context = context or {}
+    task_fields = captured_fields
     root = (Path(settings.COLECTIVOS_PRIVATE_ROOT) / "individual_quotations").resolve()
     root.mkdir(parents=True, exist_ok=True)
     created_paths = []
@@ -262,4 +267,100 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         for path in created_paths:
             path.unlink(missing_ok=True)
         raise
+    outbox = enqueue_task(
+        source=quotation,
+        payload=ColectivosTaskPayload(
+            request_kind="COTIZACION",
+            source_kind="quotation",
+            policy_context=str(task_context.get("policy_label") or ""),
+            branch_code=str(schema.code),
+            local_reference=str(quotation.public_id),
+            has_attachments=bool(files),
+            subject=" · ".join(filter(None, (
+                "Cotización", str(task_context.get("branch_name") or schema.name),
+                str(task_context.get("affiliate_label") or task_fields.get("nombre") or task_fields.get("name") or ""),
+                str(task_fields.get("placa") or task_fields.get("plate") or ""),
+            ))),
+            area=str(task_context.get("task_area") or ""),
+            observations=_individual_task_observations(task_context, task_fields, cleaned_data.get("normalized_items") or {}),
+            responsible=str(task_context.get("task_responsible") or ""),
+            responsible_email=str(task_context.get("task_responsible_email") or ""),
+            requested_date=str(quotation.created_at.date() if quotation.created_at else timezone.localdate()),
+        ),
+        event_version=1,
+    )
+    # La respuesta ya quedó dentro de la transacción; publicar sólo después del
+    # commit evita Tasks huérfanas si falla el guardado local o un adjunto.
+    transaction.on_commit(lambda outbox_id=outbox.pk: publish_task_outbox(outbox_id))
     return quotation
+
+
+def _individual_task_observations(context, fields, groups) -> str:
+    lines = [f"Solicitud de cotización individual - {context.get('branch_name') or 'ramo no informado'}." ]
+    for key, label in (("nombre", "Asegurado"), ("documento", "Documento"), ("declared_company", "Empresa")):
+        value = str(fields.get(key) or context.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}: {value}")
+    labels = {
+        "plate": "Placa", "placa": "Placa", "brand": "Marca", "line": "Referencia",
+        "model": "Modelo", "city": "Ciudad", "name": "Asegurado", "document": "Documento",
+        "insured_name": "Asegurado", "insured_document": "Documento",
+    }
+    technical = {"public_id", "token", "otp", "hash", "id", "source_id", "creator_id"}
+    for rows in groups.values() if isinstance(groups, dict) else ():
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, dict):
+                continue
+            values = " · ".join(
+                f"{labels.get(key, key.replace('_', ' ').capitalize())}: {value}"
+                for key, value in row.items()
+                if key not in technical and str(value or "").strip()
+            )
+            if values:
+                lines.append(values)
+    return "\n".join(lines)[:2000]
+
+
+@transaction.atomic
+def accept_individual_quotation(*, quotation: CotizacionIndividual, actor) -> CotizacionIndividual:
+    locked = CotizacionIndividual.objects.select_for_update().get(pk=quotation.pk)
+    metadata = dict(locked.safe_metadata or {})
+    acceptance = dict(metadata.get("acceptance") or {})
+    if acceptance.get("status") != "accepted":
+        acceptance.update({
+            "status": "accepted",
+            "accepted_at": timezone.now().isoformat(),
+            "accepted_by": int(actor.pk) if actor is not None else None,
+        })
+        metadata["acceptance"] = acceptance
+        locked.safe_metadata = metadata
+        locked.save(update_fields=("safe_metadata",))
+    return locked
+
+
+def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=None) -> dict[str, object]:
+    payload = json.loads(decrypt(quotation.encrypted_payload))
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    document = str(context.get("requester_document") or fields.get("documento") or "").strip()
+    if not document:
+        result = {"status": "pending_identifier"}
+    else:
+        results = tuple((person_service or PersonSearchService()).search(document))
+        if len(results) == 1:
+            person = results[0]
+            result = {
+                "status": "found",
+                "display_name": person.full_name,
+                "masked_document": person.masked_document,
+                "detail_token": person.detail_token,
+            }
+        elif not results:
+            result = {"status": "not_found"}
+        else:
+            result = {"status": "ambiguous", "count": len(results)}
+    quotation.refresh_from_db(fields=("safe_metadata",))
+    metadata = dict(quotation.safe_metadata or {})
+    metadata["person_lookup"] = result
+    CotizacionIndividual.objects.filter(pk=quotation.pk).update(safe_metadata=metadata)
+    return result

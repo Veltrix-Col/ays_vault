@@ -432,11 +432,13 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(invitations_page, "Salud colectivo")
         self.assertContains(individual_page, "Salud colectivo")
 
+    @patch("cotizacion_colectivos.views.resolve_task_responsible_email", return_value="responsable@example.test")
+    @patch("cotizacion_colectivos.views.task_responsible_options", return_value=(Mock(actual_value="RESP-1", display_value="Responsable Demo"),))
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
-    def test_individual_link_is_generated_from_policy_and_hmac_affiliate_without_zoho_id(self, _service):
+    def test_individual_link_is_generated_from_policy_and_hmac_affiliate_without_zoho_id(self, _service, _options, _email):
         response = self.client.post(reverse(
             "cotizacion_colectivos:policy_individual_access", args=[TOKEN],
-        ), {"recipient": "cliente@example.test"})
+        ), {"recipient": "cliente@example.test", "responsible": "RESP-1"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Enlace listo para compartir")
         self.assertContains(response, "/solicitudes/colectivos/externa/cotizacion-individual/")

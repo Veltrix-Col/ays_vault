@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -18,13 +19,18 @@ from cotizacion_colectivos.models import (
     AccesoCotizacionIndividual,
     AdjuntoCotizacionIndividual,
     CotizacionIndividual,
+    ColectivosTaskOutbox,
     NotificacionCotizacionIndividual,
 )
 from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema
 from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
 from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
 from cotizacion_colectivos.services.individual_access import generate_individual_access, issue_individual_otp
-from cotizacion_colectivos.services.individual_quotations import build_policy_context
+from cotizacion_colectivos.services.individual_quotations import (
+    accept_individual_quotation,
+    build_policy_context,
+    resolve_accepted_person,
+)
 from cotizacion_colectivos.services.common import sign_record_id
 
 
@@ -313,6 +319,46 @@ class IndividualQuotationTests(TestCase):
         self.assertContains(detail, "Personas")
         self.assertNotContains(detail, "requester_name")
         self.assertNotContains(detail, "people")
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_response_creates_one_quote_task_and_acceptance_person_states_are_local(self, workspace):
+        workspace.return_value = self.workspace("salud")
+        response = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[self.access_token()]),
+            {"items_payload": json.dumps({"people": [self.person("1")]})},
+        )
+        self.assertEqual(response.status_code, 302)
+        quotation = CotizacionIndividual.objects.get()
+        self.assertEqual(quotation.task_outbox.count(), 1)
+        self.assertEqual(quotation.task_outbox.get().event_kind, "COTIZACION")
+        accept_individual_quotation(quotation=quotation, actor=self.actor)
+        accept_individual_quotation(quotation=quotation, actor=self.actor)
+        self.assertEqual(quotation.task_outbox.count(), 1)
+        person = SimpleNamespace(
+            full_name="Afiliada Demo", masked_document="•••001", detail_token="signed-person-token",
+        )
+        with patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService") as service:
+            service.return_value.search.return_value = (person,)
+            result = resolve_accepted_person(quotation=quotation)
+        self.assertEqual(result["status"], "found")
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "accepted")
+        self.assertEqual(quotation.safe_metadata["person_lookup"]["status"], "found")
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_person_lookup_does_not_auto_select_missing_or_ambiguous_results(self, workspace):
+        workspace.return_value = self.workspace("salud")
+        self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[self.access_token()]),
+            {"items_payload": json.dumps({"people": [self.person("1")]})},
+        )
+        quotation = CotizacionIndividual.objects.get()
+        accept_individual_quotation(quotation=quotation, actor=self.actor)
+        with patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService") as service:
+            service.return_value.search.return_value = ()
+            self.assertEqual(resolve_accepted_person(quotation=quotation)["status"], "not_found")
+            service.return_value.search.return_value = (SimpleNamespace(full_name="A", masked_document="•••001", detail_token="a"), SimpleNamespace(full_name="B", masked_document="•••002", detail_token="b"))
+            self.assertEqual(resolve_accepted_person(quotation=quotation)["status"], "ambiguous")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_mobility_accepts_multiple_vehicles_and_encrypted_attachment(self, workspace):

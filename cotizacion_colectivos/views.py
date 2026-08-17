@@ -24,7 +24,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 from django.template.loader import render_to_string
 
-from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
+from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from .excel import build_current_policy_workbook
@@ -62,8 +62,11 @@ from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
     affiliate_options,
     build_policy_context,
+    accept_individual_quotation,
+    resolve_accepted_person,
 )
 from .services.individual_access import generate_individual_access
+from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
 
@@ -863,6 +866,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
     mode = resolve_tool_mode(request)
     individual_schema = None
     individual_affiliates = ()
+    task_responsibles = ()
     if mode.code == INDIVIDUAL_MODE:
         try:
             individual_schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
@@ -870,6 +874,10 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
             pass
         else:
             individual_affiliates = affiliate_options(members)
+            try:
+                task_responsibles = task_responsible_options()
+            except ValidationError:
+                task_responsibles = ()
     context = {
         "detail": detail,
         # Signed record tokens are short-lived capabilities and must come from
@@ -905,6 +913,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "colectivos_mode": mode,
         "individual_schema": individual_schema,
         "individual_affiliates": individual_affiliates,
+        "task_responsibles": task_responsibles,
     }
     context.update(extra_context or {})
     if hasattr(service, "timings"):
@@ -1021,9 +1030,14 @@ def policy_individual_access(request, token):
         options = affiliate_options(members)
         affiliate_key = str(request.POST.get("affiliate_key") or "")
         actor = get_internal_actor(request, create=True)
-        email_form = OptionalAccessEmailForm({"recipient": request.POST.get("recipient", "")})
+        responsible_options = task_responsible_options()
+        choices = [(item.actual_value, item.display_value) for item in responsible_options]
+        email_form = IndividualAccessPrepareForm(request.POST)
+        email_form.fields["responsible"].choices = choices
         if not email_form.is_valid():
-            raise ValidationError("Debe indicar un correo válido para proteger el acceso con OTP.")
+            raise ValidationError("Seleccione un responsable y un correo válido para proteger el acceso con OTP.")
+        responsible = next(item for item in responsible_options if item.actual_value == email_form.cleaned_data["responsible"])
+        responsible_email = resolve_task_responsible_email(responsible)
         schema, _context_token, payload = build_policy_context(
             policy_token=token,
             detail=detail,
@@ -1031,6 +1045,12 @@ def policy_individual_access(request, token):
             affiliate_key=affiliate_key,
             creator_id=actor.pk,
         )
+        payload.update({
+            "task_responsible": responsible.actual_value,
+            "task_responsible_display": responsible.display_value,
+            "task_responsible_email": responsible_email,
+            "task_area": "Negocios Bienestar y Beneficios",
+        })
         generated = generate_individual_access(
             context=payload,
             actor=actor,
@@ -1049,6 +1069,7 @@ def policy_individual_access(request, token):
                 started=started,
                 extra_context={
                     "individual_access_error": str(getattr(exc, "message", exc)),
+                    "task_responsibles": locals().get("responsible_options", ()),
                 },
             )
         return render(request, "cotizacion_colectivos/detail_error.html", {
@@ -1892,6 +1913,23 @@ def request_detail(request, public_id):
             "attachment_count": latest_response.attachments.count(),
         }
     latest_outbox = item.task_outbox.order_by("-updated_at", "-pk").first()
+    zoho_tasks = []
+    for outbox in item.task_outbox.order_by("event_kind", "-updated_at", "-pk"):
+        remote_id = ""
+        if outbox.status == outbox.Status.PUBLISHED and outbox.encrypted_remote_id:
+            try:
+                remote_id = decrypt(outbox.encrypted_remote_id)
+            except ValueError:
+                remote_id = "No disponible"
+        zoho_tasks.append({
+            "kind": outbox.event_kind,
+            "type": {"INCLUSION": "Ingresos", "RETIRO": "Retiros", "COTIZACION": "Cotización"}.get(outbox.event_kind, outbox.event_kind),
+            "status": outbox.get_status_display(),
+            "task_id": remote_id,
+            "last_attempt": outbox.updated_at if outbox.attempts else None,
+            "attempts": outbox.attempts,
+            "safe_error": outbox.safe_error_code,
+        })
     zoho_summary = {
         "status": latest_outbox.get_status_display() if latest_outbox else "No preparada",
         "last_attempt": latest_outbox.updated_at if latest_outbox and latest_outbox.attempts else None,
@@ -1926,6 +1964,7 @@ def request_detail(request, public_id):
         "can_view_responses": can_view_responses,
         "response_summary": response_summary,
         "zoho_summary": zoho_summary,
+        "zoho_tasks": tuple(zoho_tasks),
         **_environment_context(),
     })
 
@@ -2301,6 +2340,26 @@ def individual_notification_read(request, notification_id):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def individual_accept(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.get(public_id=public_id)
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError) as exc:
+        raise Http404("Respuesta no encontrada") from exc
+    actor = get_internal_actor(request, create=True)
+    quotation = accept_individual_quotation(quotation=quotation, actor=actor)
+    try:
+        resolve_accepted_person(quotation=quotation)
+        messages.success(request, "Cotización aceptada; se verificó la persona en Zoho.")
+    except Exception:
+        messages.warning(request, "Cotización aceptada; no fue posible completar la consulta de persona.")
+    return redirect("cotizacion_colectivos:individual_expedient", token=sign_receipt(quotation.public_id))
+
+
+@never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
     if not has_internal_permission(request, "view_individual_quotation"):
@@ -2336,6 +2395,9 @@ def individual_expedient(request, token):
             ),
         })
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    safe_metadata = quotation.safe_metadata or {}
+    acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
+    person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
     access = quotation.external_access
     try:
         recipient = decrypt(access.encrypted_recipient)
@@ -2373,6 +2435,11 @@ def individual_expedient(request, token):
         "latest_outbox": latest_outbox,
         "remote_task_id": remote_task_id,
         "history": tuple(history),
+        "acceptance": acceptance,
+        "person_lookup": person_lookup,
+        "individual_token": token,
+        "person_creation_blocked": True,
+        "policy_creation_blocked": True,
         "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
         **_environment_context(),
     })

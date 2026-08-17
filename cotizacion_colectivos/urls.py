@@ -46,6 +46,7 @@ urlpatterns = [
     path("polizas/<str:token>/solicitudes/crear/", views.request_create, name="request_create"),
     path("solicitudes/", views.request_list, name="request_list"),
     path("solicitudes/cotizacion-individual/<str:token>/", views.individual_expedient, name="individual_expedient"),
+    path("solicitudes/cotizacion-individual/<str:token>/aceptar/", views.individual_accept, name="individual_accept"),
     path("solicitudes/<str:public_id>/", views.request_detail, name="request_detail"),
     path("solicitudes/<str:public_id>/estado/", views.request_transition, name="request_transition"),
     path("solicitudes/<str:public_id>/editar/", views.request_edit, name="request_edit"),

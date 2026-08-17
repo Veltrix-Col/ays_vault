@@ -86,6 +86,7 @@ def generate_individual_access(*, context: dict, actor, recipient: str) -> Gener
         safe_metadata={
             "branch": str(context.get("branch_slug") or "")[:24],
             "schema_version": int(context.get("schema_version") or 0),
+            "task_responsible_display": str(context.get("task_responsible_display") or "")[:120],
         },
     )
     return GeneratedIndividualAccess(access=access, token=f"{selector}.{secret}")
