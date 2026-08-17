@@ -58,6 +58,7 @@ class CotizacionIndividual(models.Model):
     context_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     item_count = models.PositiveSmallIntegerField(default=0)
     attachment_count = models.PositiveSmallIntegerField(default=0)
+    safe_metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

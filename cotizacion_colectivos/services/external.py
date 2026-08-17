@@ -33,6 +33,7 @@ from ..models import (
     RespuestaSolicitudColectivo,
     SolicitudColectivo,
 )
+from .task_publisher import ColectivosTaskPayload, enqueue_task
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
@@ -513,6 +514,43 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     request = locked.request
     request.transition_to(request.Status.ANSWERED)
     request.save(update_fields=("status", "updated_at"))
+    kinds = set()
+    for change in locked.changes.all():
+        if change.action == CambioSolicitudColectivo.Action.INCLUDE:
+            kinds.add("INCLUSION")
+        elif change.action == CambioSolicitudColectivo.Action.RETIRE:
+            kinds.add("RETIRO")
+    for kind in sorted(kinds):
+        label = "Ingreso" if kind == "INCLUSION" else "Retiro"
+        observations = [f"Solicitud de {label.lower()} de {request.branch_name or 'ramo no informado'}." ]
+        for change in locked.changes.all():
+            if ((kind == "INCLUSION" and change.action != CambioSolicitudColectivo.Action.INCLUDE)
+                    or (kind == "RETIRO" and change.action != CambioSolicitudColectivo.Action.RETIRE)):
+                continue
+            values = []
+            for field, encrypted in (("documento", change.encrypted_new_value), ("observaciones", change.encrypted_observation)):
+                if encrypted:
+                    try:
+                        value = decrypt(encrypted).strip()
+                    except (TypeError, ValueError):
+                        value = ""
+                    if value:
+                        values.append(f"{field}: {value}")
+            if values:
+                observations.append(" · ".join(values))
+        enqueue_task(
+            source=request,
+            payload=ColectivosTaskPayload(
+                request_kind=kind,
+                source_kind="request",
+                policy_context=str(request.public_id),
+                branch_code=str(request.branch_code),
+                local_reference=str(request.public_id),
+                subject=f"{label} · {request.branch_name or 'Ramo'} · {request.client_label or 'Cliente'}"[:255],
+                observations="\n".join(observations)[:2000],
+            ),
+            event_version=locked.version,
+        )
     access.status = access.Status.USED
     access.used_for_submission_at = now
     access.save(update_fields=("status", "used_for_submission_at"))

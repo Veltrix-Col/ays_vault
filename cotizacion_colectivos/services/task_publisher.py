@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from integrations.zoho import get_zoho
-from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
+from integrations.zoho.exceptions import ZohoAPIError, ZohoError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
 from vault.crypto import decrypt, encrypt
 
@@ -24,11 +24,13 @@ TASK_KIND = {
     "RETIRO": "Retiros",
     "COTIZACION": "Cotización",
 }
-ALLOWED_TASK_FIELDS = frozenset({"Subject", "tipo_de_solicitud"})
-TEST_TASK_ALLOWED_FIELDS = frozenset({
+BASE_TASK_FIELDS = frozenset({"Subject", "tipo_de_solicitud"})
+CONFIRMED_TASK_FIELDS = frozenset({
     "Subject", "tipo_de_solicitud", "rea", "Observaciones", "Responsable",
     "Correo_responsable", "Fecha_de_solicitud_del_cliente",
 })
+ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
+TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
 SYNTHETIC_TEST_TASK = {
     "Subject": "PRUEBA VELTRIX-CV-003 - COTIZACION - NO GESTIONAR",
@@ -63,6 +65,12 @@ class ColectivosTaskPayload:
     branch_code: str
     local_reference: str
     has_attachments: bool = False
+    subject: str = ""
+    area: str = ""
+    observations: str = ""
+    responsible: str = ""
+    responsible_email: str = ""
+    requested_date: str = ""
 
 
 class ColectivosTaskPublisher(Protocol):
@@ -80,10 +88,19 @@ def build_task_record(payload: ColectivosTaskPayload) -> dict[str, str]:
     reference = str(payload.local_reference or "").strip()
     if not reference or len(reference) > 80 or any(ord(char) < 32 for char in reference):
         raise ValidationError("La referencia local no es válida.")
-    return {
-        "Subject": f"Colectivos · {task_kind} · {reference}"[:255],
+    record = {
+        "Subject": (str(payload.subject or "").strip() or f"Colectivos · {task_kind} · {reference}")[:255],
         "tipo_de_solicitud": task_kind,
     }
+    optional = {
+        "rea": payload.area,
+        "Observaciones": payload.observations,
+        "Responsable": payload.responsible,
+        "Correo_responsable": payload.responsible_email,
+        "Fecha_de_solicitud_del_cliente": payload.requested_date,
+    }
+    record.update({key: str(value).strip() for key, value in optional.items() if str(value or "").strip()})
+    return record
 
 
 def sanitized_dry_run(payload: ColectivosTaskPayload, *, profile: str) -> dict[str, object]:
@@ -188,7 +205,7 @@ class GuardedSandboxTaskPublisher:
         self, record: Mapping[str, object], *, allowed_fields: frozenset[str] = ALLOWED_TASK_FIELDS,
     ) -> Mapping[str, object]:
         normalized = dict(record)
-        if set(normalized) != allowed_fields:
+        if not BASE_TASK_FIELDS.issubset(normalized) or set(normalized) - allowed_fields:
             raise ValidationError("El payload Tasks no coincide con el contrato autorizado.")
         try:
             # La fachada vuelve a comprobar write_enabled antes de construir el POST.
@@ -235,3 +252,56 @@ def get_task_publisher(
     if getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
         return GuardedSandboxTaskPublisher(profile=profile, confirmation=confirmation)
     return DisabledColectivosTaskPublisher()
+
+
+def publish_task_outbox(outbox_id: int) -> None:
+    """Publish one already-persisted intent, without retries or cross-profile writes."""
+    if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
+        return
+    with transaction.atomic():
+        item = ColectivosTaskOutbox.objects.select_for_update().get(pk=outbox_id)
+        if item.status != item.Status.PENDING:
+            return
+        item.attempts += 1
+        item.save(update_fields=("attempts", "updated_at"))
+        try:
+            record = json.loads(decrypt(item.encrypted_payload))
+            payload = ColectivosTaskPayload(
+                request_kind=item.event_kind,
+                source_kind="quotation" if item.quotation_id else "request",
+                policy_context="",
+                branch_code="",
+                local_reference=str(getattr(item.quotation, "public_id", "") or getattr(item.request, "public_id", "")),
+                subject=str(record.get("Subject") or ""),
+                area=str(record.get("rea") or ""),
+                observations=str(record.get("Observaciones") or ""),
+                responsible=str(record.get("Responsable") or ""),
+                responsible_email=str(record.get("Correo_responsable") or ""),
+                requested_date=str(record.get("Fecha_de_solicitud_del_cliente") or ""),
+            )
+            result = get_task_publisher(
+                profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+                confirmation=str(getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "")),
+            ).publish(payload)
+        except TaskPublicationUncertain:
+            item.status = item.Status.RECONCILE
+            item.safe_error_code = "UNCERTAIN"
+            item.save(update_fields=("status", "safe_error_code", "updated_at"))
+            return
+        except (TaskPublishingDisabled, TaskPublicationRejected, ZohoError, ValidationError) as exc:
+            item.status = item.Status.BLOCKED
+            item.safe_error_code = str(
+                getattr(exc, "category", None) or getattr(exc, "code", None) or "PUBLISH_BLOCKED"
+            )[:40]
+            item.save(update_fields=("status", "safe_error_code", "updated_at"))
+            return
+        remote_id = str(result.get("record_id") or "").strip()
+        if not remote_id:
+            item.status = item.Status.BLOCKED
+            item.safe_error_code = "MISSING_REMOTE_ID"
+            item.save(update_fields=("status", "safe_error_code", "updated_at"))
+            return
+        item.status = item.Status.PUBLISHED
+        item.encrypted_remote_id = encrypt(remote_id)
+        item.safe_error_code = ""
+        item.save(update_fields=("status", "encrypted_remote_id", "safe_error_code", "updated_at"))

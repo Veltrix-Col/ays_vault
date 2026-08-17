@@ -25,7 +25,13 @@ from cotizacion_colectivos.services.task_publisher import (
     dry_run_outbox,
     enqueue_task,
     get_task_publisher,
+    publish_task_outbox,
     sanitized_dry_run,
+)
+from cotizacion_colectivos.services.task_responsibles import (
+    TaskResponsibleOption,
+    resolve_task_responsible_email,
+    task_responsible_options,
 )
 
 
@@ -89,6 +95,48 @@ class TaskPublisherTests(TestCase):
             payload = ColectivosTaskPayload(kind, "company", "", "91", "local")
             self.assertEqual(build_task_record(payload)["tipo_de_solicitud"], expected)
 
+    def test_real_quote_payload_is_exactly_the_confirmed_contract(self):
+        payload = ColectivosTaskPayload(
+            request_kind="COTIZACION", source_kind="quotation", policy_context="",
+            branch_code="40", local_reference="COL-LOCAL", subject="Cotización · Movilidad · Persona · ABC123",
+            area="Negocios Bienestar y Beneficios", observations="Solicitud de cotización individual - Movilidad.",
+            responsible="Sara Rua Vargas", responsible_email="sara.rua@segurosays.com",
+            requested_date="2026-08-17",
+        )
+        self.assertEqual(set(build_task_record(payload)), {
+            "Subject", "tipo_de_solicitud", "rea", "Observaciones", "Responsable",
+            "Correo_responsable", "Fecha_de_solicitud_del_cliente",
+        })
+
+    def test_responsible_options_use_metadata_actual_and_display_values(self):
+        field = SimpleNamespace(api_name="Responsable", pick_list_values=(
+            {"actual_value": "Sara Rua Vargas", "display_value": "Sara Rua Vargas · A&S"},
+        ))
+        with patch("cotizacion_colectivos.services.task_responsibles.cached_metadata_fields", return_value=(field,)):
+            options = task_responsible_options(zoho=SimpleNamespace())
+        self.assertEqual(options[0].actual_value, "Sara Rua Vargas")
+        self.assertEqual(options[0].display_value, "Sara Rua Vargas · A&S")
+
+    def test_responsible_email_requires_one_exact_employees_match(self):
+        search = Mock()
+        search.by_field.return_value = SimpleNamespace(records=(
+            {"id": "700000000000000001", "Name": "Sara Rua Vargas", "Email": "sara.rua@segurosays.com"},
+        ))
+        email = resolve_task_responsible_email(
+            TaskResponsibleOption("Sara Rua Vargas", "Sara Rua Vargas · A&S"),
+            zoho=SimpleNamespace(search=search),
+        )
+        self.assertEqual(email, "sara.rua@segurosays.com")
+        search.by_field.return_value = SimpleNamespace(records=(
+            {"id": "700000000000000001", "Name": "Sara Rua Vargas", "Email": "a@example.test"},
+            {"id": "700000000000000002", "Name": "Sara Rua Vargas", "Email": "b@example.test"},
+        ))
+        with self.assertRaises(ValidationError):
+            resolve_task_responsible_email(
+                TaskResponsibleOption("Sara Rua Vargas", "Sara Rua Vargas"),
+                zoho=SimpleNamespace(search=search),
+            )
+
     def test_real_collective_flows_do_not_call_the_publisher(self):
         paths = (
             "cotizacion_colectivos/services/external.py",
@@ -103,6 +151,33 @@ class TaskPublisherTests(TestCase):
             self.assertNotIn("publish_test_task", source, path)
 
     @override_settings(**ENABLED_WRITE)
+    @patch("cotizacion_colectivos.services.task_publisher.get_task_publisher")
+    def test_outbox_success_is_published_once_and_stores_remote_id(self, factory):
+        publisher = Mock()
+        publisher.publish.return_value = {"record_id": "700000000000000001", "succeeded": True, "code": "SUCCESS"}
+        factory.return_value = publisher
+        item = enqueue_task(source=self.request, payload=self.payload)
+        publish_task_outbox(item.pk)
+        item.refresh_from_db()
+        self.assertEqual(item.status, item.Status.PUBLISHED)
+        self.assertEqual(item.attempts, 1)
+        self.assertTrue(item.encrypted_remote_id)
+        publisher.publish.assert_called_once()
+
+    @override_settings(**ENABLED_WRITE)
+    @patch("cotizacion_colectivos.services.task_publisher.get_task_publisher")
+    def test_outbox_uncertain_is_reconcile_without_retry(self, factory):
+        publisher = Mock()
+        publisher.publish.side_effect = TaskPublicationUncertain("uncertain")
+        factory.return_value = publisher
+        item = enqueue_task(source=self.request, payload=self.payload)
+        publish_task_outbox(item.pk)
+        item.refresh_from_db()
+        self.assertEqual(item.status, item.Status.RECONCILE)
+        self.assertEqual(item.attempts, 1)
+        publisher.publish.assert_called_once()
+
+    @override_settings(**ENABLED_WRITE)
     @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
     def test_enabled_sandbox_calls_create_once_with_exact_synthetic_payload(self, get_zoho):
         create = Mock(return_value=successful_write())
@@ -114,7 +189,7 @@ class TaskPublisherTests(TestCase):
 
         create.assert_called_once_with(module="Tasks", records=(SYNTHETIC_TEST_TASK,))
         self.assertEqual(SYNTHETIC_TEST_TASK, {
-            "Subject": "PRUEBA VELTRIX-CV-002 - COTIZACION - NO GESTIONAR",
+            "Subject": "PRUEBA VELTRIX-CV-003 - COTIZACION - NO GESTIONAR",
             "tipo_de_solicitud": "Cotización",
             "rea": "Negocios Bienestar y Beneficios",
             "Observaciones": "Prueba controlada de creación de Task desde A&S Vault. Validación de campos funcionales de Cotización. NO GESTIONAR.",
