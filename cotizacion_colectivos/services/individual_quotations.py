@@ -285,7 +285,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
             observations=_individual_task_observations(task_context, task_fields, cleaned_data.get("normalized_items") or {}),
             responsible=str(task_context.get("task_responsible") or ""),
             responsible_email=str(task_context.get("task_responsible_email") or ""),
-            requested_date=str(quotation.created_at.date() if quotation.created_at else timezone.localdate()),
+            requested_date=str(quotation.submitted_at.date() if quotation.submitted_at else timezone.localdate()),
         ),
         event_version=1,
     )

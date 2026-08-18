@@ -331,6 +331,16 @@ class IndividualQuotationTests(TestCase):
         quotation = CotizacionIndividual.objects.get()
         self.assertEqual(quotation.task_outbox.count(), 1)
         self.assertEqual(quotation.task_outbox.get().event_kind, "COTIZACION")
+        self.assertEqual(
+            json.loads(decrypt(quotation.task_outbox.get().encrypted_payload))["Fecha_de_solicitud_del_cliente"],
+            quotation.submitted_at.date().isoformat(),
+        )
+        legacy_detail = self.client.get(reverse(
+            "cotizacion_colectivos:individual_expedient",
+            args=[sign_receipt(quotation.public_id)],
+        ))
+        self.assertEqual(legacy_detail.status_code, 200)
+        self.assertContains(legacy_detail, "Responsable no disponible en este registro legado.")
         accept_individual_quotation(quotation=quotation, actor=self.actor)
         accept_individual_quotation(quotation=quotation, actor=self.actor)
         self.assertEqual(quotation.task_outbox.count(), 1)

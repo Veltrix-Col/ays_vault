@@ -40,7 +40,13 @@ def task_responsible_options(*, zoho=None) -> tuple[TaskResponsibleOption, ...]:
     for item in getattr(field, "pick_list_values", ()) or ():
         actual = _value(item, "actual_value") or _value(item, "display_value")
         display = _value(item, "display_value") or actual
-        if actual and display and actual not in seen:
+        if (
+            actual
+            and display
+            and actual not in {"-None-", "None"}
+            and display not in {"-None-", "None"}
+            and actual not in seen
+        ):
             seen.add(actual)
             options.append(TaskResponsibleOption(actual, display))
     if not options:

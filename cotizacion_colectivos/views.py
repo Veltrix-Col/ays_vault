@@ -876,7 +876,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
             individual_affiliates = affiliate_options(members)
             try:
                 task_responsibles = task_responsible_options()
-            except ValidationError:
+            except (ValidationError, ColectivosServiceError):
                 task_responsibles = ()
     context = {
         "detail": detail,
@@ -2394,7 +2394,14 @@ def individual_expedient(request, token):
                 for row in rows
             ),
         })
-    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    context = dict(payload.get("context")) if isinstance(payload.get("context"), dict) else {}
+    # Contextos firmados anteriores no tienen todavía la metadata de Task.
+    # Normalizar aquí evita que el template trate claves opcionales como obligatorias.
+    for optional_key in (
+        "task_responsible", "task_responsible_display", "task_responsible_email",
+        "task_area",
+    ):
+        context.setdefault(optional_key, "")
     safe_metadata = quotation.safe_metadata or {}
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
