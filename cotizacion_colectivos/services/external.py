@@ -5,7 +5,7 @@ import hmac
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
@@ -114,8 +114,10 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     next_version = (locked.external_accesses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
     configured_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
     maximum_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS)
-    deadline_expiry = timezone.make_aware(datetime.combine(locked.deadline, time.max))
-    expires_at = min(configured_expiry, maximum_expiry, deadline_expiry)
+    # The public link contract is elapsed time from generation.  The internal
+    # request deadline is a workflow reminder and must not shorten a valid
+    # 48-hour external link at midnight.
+    expires_at = min(configured_expiry, maximum_expiry)
     access = AccesoExternoSolicitudColectivo.objects.create(
         request=locked, selector=selector, token_hash=_token_hash(secret), created_by=actor,
         version=next_version, channel="MANUAL", purpose="CLIENT_RESPONSE",
@@ -223,7 +225,7 @@ def resolve_token(token: str) -> AccesoExternoSolicitudColectivo:
         access.request.Status.LOADED_ZOHO,
     }:
         raise ExternalAccessError("El acceso no está disponible.")
-    if access.expires_at <= timezone.now() or access.request.deadline < timezone.localdate():
+    if access.expires_at <= timezone.now():
         access.status = access.Status.EXPIRED
         access.save(update_fields=("status",))
         raise ExternalAccessError("El acceso ha expirado.")
@@ -307,7 +309,7 @@ def authorize_direct_access(access: AccesoExternoSolicitudColectivo) -> str:
     if locked.status not in {locked.Status.ACTIVE, locked.Status.VERIFIED}:
         raise ExternalAccessError("El acceso no está disponible.")
     now = timezone.now()
-    if locked.expires_at <= now or locked.request.deadline < timezone.localdate():
+    if locked.expires_at <= now:
         raise ExternalAccessError("El acceso ha expirado.")
     if locked.request.status not in {
         locked.request.Status.READY,
@@ -393,7 +395,6 @@ def resolve_external_session(cookie: str) -> AccesoExternoSolicitudColectivo:
     if (
         access.status != access.Status.VERIFIED
         or access.expires_at <= timezone.now()
-        or access.request.deadline < timezone.localdate()
         or access.request.status in {access.request.Status.CLOSED, access.request.Status.CANCELLED, access.request.Status.EXPIRED}
     ):
         raise ExternalAccessError("La sesión externa no está disponible.")

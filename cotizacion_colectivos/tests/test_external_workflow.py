@@ -453,6 +453,16 @@ class ExternalWorkflowTests(TestCase):
             after + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS),
         )
 
+    @override_settings(COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800, COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=604800)
+    def test_link_ttl_is_elapsed_48_hours_even_when_deadline_is_today(self):
+        self.request.deadline = timezone.localdate() + timedelta(days=1)
+        self.request.save(update_fields=("deadline",))
+        before = timezone.now()
+        generated = self.access()
+        self.assertGreaterEqual(generated.access.expires_at, before + timedelta(hours=47, minutes=59))
+        self.assertLessEqual(generated.access.expires_at, before + timedelta(hours=48, seconds=2))
+        self.assertEqual(resolve_token(generated.token).pk, generated.access.pk)
+
     def test_otp_expires_exactly_with_access_and_email_uses_local_deadline(self):
         generated = self.access()
         expected_expiry = generated.access.expires_at

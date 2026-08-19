@@ -101,6 +101,14 @@ def process_deadlines(*, now=None, limit=None, dry_run=False) -> DeadlineResult:
             preview.save(update_fields=("status", "consumed_at", "encrypted_payload"))
             transaction.on_commit(lambda path=preview.stored_path: _delete(path))
         for request in expired_requests:
+            # An internal due date must not invalidate an external link before
+            # its own elapsed 48-hour TTL.  The link is the client contract;
+            # the request deadline remains an operational reminder.
+            if request.external_accesses.filter(
+                status__in=[AccesoExternoSolicitudColectivo.Status.ACTIVE, AccesoExternoSolicitudColectivo.Status.VERIFIED],
+                expires_at__gt=now,
+            ).exists():
+                continue
             request.transition_to(request.Status.EXPIRED)
             request.save(update_fields=("status", "updated_at"))
             request.external_accesses.filter(status__in=[AccesoExternoSolicitudColectivo.Status.ACTIVE, AccesoExternoSolicitudColectivo.Status.VERIFIED]).update(status=AccesoExternoSolicitudColectivo.Status.EXPIRED, otp_hash="", otp_expires_at=None)

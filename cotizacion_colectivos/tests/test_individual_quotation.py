@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from vault.crypto import decrypt
@@ -179,6 +179,16 @@ class IndividualQuotationTests(TestCase):
         self.assertNotEqual(generated.access.otp_hash, "654321")
         self.assertNotIn("654321", repr(generated.access.__dict__))
         self.assertNotIn("654321", repr(notification_logger.mock_calls))
+
+    @override_settings(COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800)
+    def test_individual_link_ttl_is_elapsed_48_hours(self):
+        context = unsign_policy_context(self.context_token())
+        generated = generate_individual_access(context=context, actor=self.actor, recipient="demo@example.test")
+        self.assertAlmostEqual(
+            (generated.access.expires_at - generated.access.created_at).total_seconds(),
+            172800,
+            delta=2,
+        )
 
     def test_individual_otp_uses_edited_email_instead_of_zoho_original(self):
         original = "original-zoho@example.test"
