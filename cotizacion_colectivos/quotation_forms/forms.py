@@ -37,10 +37,12 @@ class IndividualQuotationForm(forms.Form):
         self.context = context or {}
         super().__init__(*args, **kwargs)
         locked_fields = set(self.context.get("locked_fields") or ())
+        existing_person = bool(self.context.get("affiliate_key"))
         for definition in schema.fields:
+            required = definition.required and not existing_person
             self.fields[definition.key] = forms.CharField(
                 label=definition.label,
-                required=definition.required,
+                required=required,
                 max_length=180,
                 initial=self.context.get(definition.key, ""),
                 disabled=definition.key in locked_fields,
@@ -56,7 +58,7 @@ class IndividualQuotationForm(forms.Form):
             elif definition.kind == "choice":
                 self.fields[definition.key] = forms.ChoiceField(
                     label=definition.label,
-                    required=definition.required,
+                    required=required,
                     choices=(("", "Seleccione"),) + tuple((item, item) for item in definition.choices),
                     initial=self.context.get(definition.key, ""),
                     disabled=definition.key in locked_fields,
@@ -70,9 +72,10 @@ class IndividualQuotationForm(forms.Form):
             )
 
     @staticmethod
-    def _clean_value(definition: FieldSchema, raw):
+    def _clean_value(definition: FieldSchema, raw, *, required=None):
+        required = definition.required if required is None else required
         value = str(raw or "").strip()
-        if definition.required and not value:
+        if required and not value:
             raise forms.ValidationError("Este campo es obligatorio.")
         if len(value) > 180 or any(ord(character) < 32 for character in value):
             raise forms.ValidationError("El valor no es válido.")
@@ -99,7 +102,8 @@ class IndividualQuotationForm(forms.Form):
         for definition in self.schema.fields:
             try:
                 cleaned[definition.key] = self._clean_value(
-                    definition, cleaned.get(definition.key)
+                    definition, cleaned.get(definition.key),
+                    required=definition.required and not bool(self.context.get("affiliate_key")),
                 )
             except forms.ValidationError as exc:
                 self.add_error(definition.key, exc)

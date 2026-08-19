@@ -33,6 +33,7 @@ from cotizacion_colectivos.services.individual_quotations import (
     create_individual_quotation,
     resolve_accepted_person,
 )
+from cotizacion_colectivos.services.person_contract import build_contact_payload
 from cotizacion_colectivos.services.common import sign_record_id
 
 
@@ -302,6 +303,53 @@ class IndividualQuotationTests(TestCase):
         self.assertIn("last_name", form.fields)
         self.assertNotIn("requester_name", form.fields)
 
+    def test_new_person_requires_all_canonical_requester_fields(self):
+        schema = get_branch_schema("movilidad")
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2",
+                "requester_id_type": "CC", "requester_document": "999999999",
+                "requester_birth_date": "2009-02-10",
+                "requester_email": "c.vargas0419@example.com",
+                "requester_phone": "3186235929", "collective_context": "Demo",
+                "items_payload": json.dumps({"vehicles": [self.vehicle("1")]}),
+            }, schema=schema, context={},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["first_name"], "Camilo 2")
+        incomplete = dict(form.data)
+        incomplete["requester_email"] = ""
+        self.assertFalse(IndividualQuotationForm(incomplete, schema=schema, context={}).is_valid())
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_new_person_payload_reaches_contacts_without_missing_identity(self, service):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2",
+                "requester_id_type": "CC", "requester_document": "999999999",
+                "requester_birth_date": "2009-02-10",
+                "requester_email": "c.vargas0419@example.com",
+                "requester_phone": "3186235929",
+                "normalized_items": {"vehicles": [self.vehicle("1"), self.vehicle("2"), self.vehicle("3")]},
+                "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        result = resolve_accepted_person(quotation=quotation)
+        candidate = result["candidate"]
+        self.assertEqual(result["missing_fields"], ())
+        self.assertEqual(candidate["First_Name"], "Camilo 2")
+        self.assertEqual(candidate["Last_Name"], "Vargas 2")
+        contact = build_contact_payload(candidate)
+        self.assertEqual(contact["N_mero_de_ID"], "999999999")
+        self.assertEqual(contact["Tipo_ID"], "CC")
+        self.assertEqual(contact["Date_of_Birth"], "2009-02-10")
+        self.assertEqual(contact["Email"], "c.vargas0419@example.com")
+        self.assertEqual(contact["Phone"], "3186235929")
+
     def test_health_first_person_can_use_requester_without_repeating_identity_fields(self):
         schema = get_branch_schema("salud")
         form = IndividualQuotationForm(
@@ -406,7 +454,7 @@ class IndividualQuotationTests(TestCase):
             cleaned_data={
                 "first_name": "Camilo 2", "last_name": "Vargas 2",
                 "requester_id_type": "CC", "requester_document": "11111111",
-                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "requester_birth_date": "1990-01-01", "requester_email": "camilo@example.test", "requester_phone": "3000000000",
                 "collective_context": "Colectiva Demo", "normalized_items": {"people": []},
                 "attachments": [],
             },
@@ -495,10 +543,10 @@ class IndividualQuotationTests(TestCase):
             schema=schema,
             cleaned_data={
                 "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
-                "requester_document": "444444444", "requester_email": "camilo@example.test",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01", "requester_email": "camilo@example.test",
                 "normalized_items": {"people": [
                     {"use_requester": "Sí"},
-                    {"first_name": "Maria", "last_name": "Gomez", "id_type": "CC", "document": "555555555"},
+                    {"first_name": "Maria", "last_name": "Gomez", "id_type": "CC", "document": "555555555", "birth_date": "1992-03-04", "email": "maria@example.test", "phone": "3110000000"},
                 ]}, "attachments": [],
             }, actor=self.actor, context=context,
         )

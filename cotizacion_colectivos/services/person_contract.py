@@ -30,15 +30,60 @@ CONTACT_REQUIRED = frozenset({"Last_Name", "Tipo_de_persona", "Tipo_ID", "N_mero
 PERSON_STATUS = {"FOUND", "NOT_FOUND", "AMBIGUOUS", "TYPE_MISMATCH", "INVALID_INPUT"}
 
 
+@dataclass(frozen=True)
+class PersonCandidate:
+    """Canonical person identity produced by a ramo-specific adapter."""
+
+    first_name: str = ""
+    last_name: str = ""
+    document_type: str = ""
+    document: str = ""
+    date_of_birth: object = ""
+    email: str = ""
+    phone: str = ""
+    mobile: str = ""
+    role: str = "Persona principal"
+    source: str = "quotation"
+
+    def as_contact_data(self) -> dict[str, object]:
+        return {
+            "First_Name": self.first_name,
+            "Last_Name": self.last_name,
+            "Tipo_ID": self.document_type,
+            "N_mero_de_ID": self.document,
+            "Date_of_Birth": self.date_of_birth,
+            "Email": self.email,
+            "Phone": self.phone,
+            "Mobile": self.mobile,
+        }
+
+    def as_metadata(self) -> dict[str, object]:
+        return {
+            **self.as_contact_data(),
+            "role": self.role,
+            "source": self.source,
+        }
+
+
 def contact_missing_fields(data: Mapping[str, object]) -> tuple[str, ...]:
-    """Return the real allowlist fields still needed, without name heuristics."""
+    """Return all fields required for the new-person workflow."""
+    if isinstance(data, PersonCandidate):
+        data = data.as_contact_data()
     missing = []
+    if not str(data.get("First_Name") or "").strip():
+        missing.append("Nombres")
     if not str(data.get("Last_Name") or "").strip():
         missing.append("Apellidos")
     if not str(data.get("Tipo_ID") or "").strip():
         missing.append("Tipo de identificación")
     if not str(data.get("N_mero_de_ID") or "").strip():
         missing.append("Número de identificación")
+    if not str(data.get("Date_of_Birth") or "").strip():
+        missing.append("Fecha de nacimiento")
+    if not str(data.get("Email") or "").strip():
+        missing.append("Correo electrónico")
+    if not str(data.get("Phone") or data.get("Mobile") or "").strip():
+        missing.append("Teléfono")
     return tuple(missing)
 
 

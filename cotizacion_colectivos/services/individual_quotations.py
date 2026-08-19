@@ -23,7 +23,7 @@ from ..models import (
 )
 from .task_publisher import ColectivosTaskPayload, enqueue_task, publish_task_outbox
 from .search import PersonSearchService
-from .person_contract import contact_missing_fields
+from .person_contract import PersonCandidate, contact_missing_fields
 from ..quotation_forms.catalog import get_policy_branch_schema
 from ..quotation_forms.security import sign_policy_context
 
@@ -466,8 +466,9 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
         # reutiliza la identidad general; las siguientes son independientes.
         groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
         rows = groups.get("people", ()) if isinstance(groups.get("people"), list) else ()
-        if requester_document and not rows:
+        if requester_document:
             add_candidate(requester_document, requester_data)
+        person_offset = 1 if requester_document else 0
         for position, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
                 continue
@@ -486,7 +487,7 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
                 "Email": row.get("email") or "",
                 "Mobile": row.get("mobile") or row.get("phone") or "",
                 "Phone": row.get("phone") or "",
-                "role": f"Persona {position}",
+                "role": f"Persona {position + person_offset}",
             })
     else:
         # Mantener la semántica histórica para Vida, Exequial y SOAT. No
@@ -529,8 +530,26 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
             lookups.append({"status": "found", "document": document, "display_name": person.full_name, "masked_document": person.masked_document, "detail_token": person.detail_token})
         elif not results:
             data = candidate_data.get(document, {"N_mero_de_ID": document})
-            missing = contact_missing_fields(data)
-            lookups.append({"status": "not_found", "document": document, "display_name": data.get("label", "Persona"), "role": data.get("role", "Persona"), "missing_fields": missing, "has_complete_data": not missing})
+            candidate = PersonCandidate(
+                first_name=str(data.get("First_Name") or "").strip(),
+                last_name=str(data.get("Last_Name") or "").strip(),
+                document_type=str(data.get("Tipo_ID") or "").strip(),
+                document=str(data.get("N_mero_de_ID") or document).strip(),
+                date_of_birth=data.get("Date_of_Birth") or "",
+                email=str(data.get("Email") or "").strip(),
+                phone=str(data.get("Phone") or "").strip(),
+                mobile=str(data.get("Mobile") or "").strip(),
+                role=str(data.get("role") or "Persona"),
+                source="individual_quotation",
+            )
+            missing = contact_missing_fields(candidate)
+            lookups.append({
+                "status": "not_found", "document": document,
+                "display_name": data.get("label", "Persona"),
+                "role": candidate.role, "missing_fields": missing,
+                "has_complete_data": not missing,
+                "candidate": candidate.as_metadata(),
+            })
         else:
             lookups.append({"status": "ambiguous", "document": document, "count": len(results)})
     result = lookups[0] if lookups else {"status": "pending_identifier"}

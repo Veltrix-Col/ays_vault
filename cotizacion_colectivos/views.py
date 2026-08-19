@@ -71,7 +71,7 @@ from .services.task_responsibles import resolve_task_responsible_email, task_res
 from .services.task_publisher import publish_task_outbox
 from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
-    get_contacts_publisher,
+    contact_missing_fields, get_contacts_publisher,
 )
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
@@ -2418,25 +2418,14 @@ def individual_create_person(request, token):
     try:
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
-        payload = json.loads(decrypt(quotation.encrypted_payload))
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
-        corrections = (quotation.safe_metadata or {}).get("person_corrections", {})
-        document_hint = str(request.POST.get("document") or fields.get("requester_document") or fields.get("documento") or fields.get("document") or "").strip()
-        correction = corrections.get(document_hint, {}) if isinstance(corrections, dict) else {}
-        if isinstance(correction, dict):
-            fields = {**fields, **correction}
-        first_name = str(fields.get("First_Name") or fields.get("first_name") or "").strip()
-        last_name = str(fields.get("Last_Name") or fields.get("last_name") or "").strip()
-        data = {
-            "First_Name": first_name,
-            "Last_Name": last_name,
-            "Tipo_ID": str(fields.get("Tipo_ID") or fields.get("tipo_id") or "").strip(),
-            "N_mero_de_ID": str(fields.get("N_mero_de_ID") or fields.get("documento") or "").strip(),
-            "Date_of_Birth": fields.get("Date_of_Birth") or fields.get("fecha_nacimiento") or "",
-            "Email": fields.get("Email") or fields.get("correo") or "",
-            "Mobile": fields.get("Mobile") or fields.get("celular") or "",
-            "Phone": fields.get("Phone") or fields.get("telefono") or "",
-        }
+        resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db(fields=("safe_metadata",))
+        people = quotation.safe_metadata.get("people_lookup") or ()
+        document_hint = str(request.POST.get("document") or (people[0].get("document") if people else "")).strip()
+        selected = next((item for item in people if str(item.get("document") or "") == document_hint), None)
+        data = dict(selected.get("candidate") or {}) if isinstance(selected, dict) else {}
+        if not data:
+            raise ValidationError("No se encontró un candidato Persona válido para crear.")
         result = get_contacts_publisher(
             profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
             confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
@@ -2642,12 +2631,13 @@ def individual_expedient(request, token):
         if person.get("status") == "not_found":
             correction = corrections.get(str(person.get("document") or ""), {})
             person.setdefault("missing_fields", tuple())
+            candidate = dict(person.get("candidate") or {})
             if isinstance(correction, dict):
-                missing = []
-                if not str(correction.get("Last_Name") or "").strip(): missing.append("Apellidos")
-                if not str(correction.get("Tipo_ID") or "").strip(): missing.append("Tipo de identificación")
-                if not str(correction.get("N_mero_de_ID") or person.get("document") or "").strip(): missing.append("Número de identificación")
-                person["missing_fields"] = tuple(missing)
+                candidate.update(correction)
+            if candidate:
+                candidate.setdefault("N_mero_de_ID", person.get("document") or "")
+                person["candidate"] = candidate
+                person["missing_fields"] = contact_missing_fields(candidate)
             person["has_complete_data"] = not person.get("missing_fields")
     if people_lookup:
         person_lookup = people_lookup[0]

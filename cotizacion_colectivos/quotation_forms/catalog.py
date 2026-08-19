@@ -47,13 +47,13 @@ ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro 
 REQUESTER_FIELDS = (
     # Los registros nuevos capturan la identidad estructurada.  requester_name
     # sólo se conserva al leer contextos/snapshots históricos.
-    FieldSchema("first_name", "Nombres", required=False),
-    FieldSchema("last_name", "Apellidos", required=False),
+    FieldSchema("first_name", "Nombres"),
+    FieldSchema("last_name", "Apellidos"),
     FieldSchema("requester_id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("requester_document", "Identificación", "document"),
-    FieldSchema("requester_birth_date", "Fecha de nacimiento", "date", required=False),
-    FieldSchema("requester_email", "Correo electrónico", "email", required=False),
-    FieldSchema("requester_phone", "Teléfono", "tel", required=False),
+    FieldSchema("requester_birth_date", "Fecha de nacimiento", "date"),
+    FieldSchema("requester_email", "Correo electrónico", "email"),
+    FieldSchema("requester_phone", "Teléfono", "tel"),
     FieldSchema("collective_context", "Colectiva o tomador", required=False, help_text="Se precarga cuando el enlace se genera desde un cliente."),
 )
 
