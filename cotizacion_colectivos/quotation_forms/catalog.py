@@ -69,6 +69,7 @@ PERSON_FIELDS = (
 )
 
 HEALTH_PERSON_FIELDS = (
+    FieldSchema("use_requester", "Usar datos del solicitante", "choice", required=False, choices=("Sí", "No")),
     FieldSchema("name", "Nombre"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("document", "Identificación", "document"),
@@ -100,6 +101,7 @@ VEHICLE_FIELDS = (
     FieldSchema("insured_name", "Nombre del asegurado"),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),
+    FieldSchema("insured_is_different", "Es una persona distinta del solicitante", "choice", required=False, choices=("Sí", "No")),
 )
 
 
@@ -111,6 +113,7 @@ BRANCH_SCHEMAS = (
         REQUESTER_FIELDS,
         (RepeatableSchema("vehicles", "vehículo", "Vehículos", "Agregar vehículo", VEHICLE_FIELDS),),
         ("Matrícula o tarjeta de propiedad", "Otros soportes"),
+        version=2,
     ),
     BranchSchema(
         "SALUD", "salud", "Salud",
@@ -119,7 +122,7 @@ BRANCH_SCHEMAS = (
         REQUESTER_FIELDS,
         (RepeatableSchema("people", "persona", "Personas", "Agregar persona", HEALTH_PERSON_FIELDS),),
         ("Otros soportes solicitados por A&S",),
-        version=2,
+        version=3,
     ),
     BranchSchema(
         "VIDA", "vida", "Vida",

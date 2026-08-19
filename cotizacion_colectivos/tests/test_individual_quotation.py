@@ -302,6 +302,23 @@ class IndividualQuotationTests(TestCase):
         self.assertIn("last_name", form.fields)
         self.assertNotIn("requester_name", form.fields)
 
+    def test_health_first_person_can_use_requester_without_repeating_identity_fields(self):
+        schema = get_branch_schema("salud")
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "collective_context": "Colectiva Demo",
+                "items_payload": json.dumps({"people": [{
+                    "use_requester": "Sí", "employment_relationship": "Empleado",
+                    "relationship": "Titular", "currently_health_insured": "No",
+                }]}),
+            }, schema=schema, context={},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["normalized_items"]["people"][0]["document"], "444444444")
+
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_health_multiple_people_submit_encrypted_notifies_and_never_calls_zoho(self, get_zoho, workspace):
@@ -400,6 +417,98 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(result["status"], "not_found")
         self.assertEqual(result["missing_fields"], ())
         self.assertTrue(result["has_complete_data"])
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_mobility_uses_requester_as_primary_and_does_not_let_vehicle_overwrite_it(self, service):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        context.update({
+            "requester_name": "Camilo 2 Vargas 2", "requester_id_type": "CC",
+            "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+            "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+        })
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2",
+                "requester_id_type": "CC", "requester_document": "444444444",
+                "requester_birth_date": "1990-01-01", "requester_email": "camilo@example.test",
+                "requester_phone": "3000000000", "normalized_items": {"vehicles": [
+                    {"insured_name": "Camilo Asegurado", "insured_id_type": "CC", "insured_document": "1019059650", "insured_is_different": "Sí"},
+                    {"insured_name": "Camilo 2 Vargas 2", "insured_id_type": "CC", "insured_document": "444444444"},
+                ]}, "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        result = resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db()
+        people = quotation.safe_metadata["people_lookup"]
+        self.assertEqual([item["document"] for item in people], ["444444444", "1019059650"])
+        self.assertEqual(people[0]["display_name"], "Camilo 2 Vargas 2")
+        self.assertEqual(people[0]["role"], "Persona principal")
+        self.assertEqual(result["document"], "444444444")
+        self.assertEqual(people[0]["missing_fields"], [])
+        self.assertIn("Apellidos", people[1]["missing_fields"])
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_mobility_multiple_vehicles_reuse_primary_unless_insured_document_differs(self, service):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "normalized_items": {"vehicles": [
+                    {"insured_document": "444444444", "insured_id_type": "CC", "insured_name": "Camilo Vargas"},
+                    {"insured_document": "444444444", "insured_id_type": "CC", "insured_name": "Camilo Vargas"},
+                ]}, "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db()
+        self.assertEqual([item["document"] for item in quotation.safe_metadata["people_lookup"]], ["444444444"])
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_mobility_different_vehicle_insured_is_ignored_without_explicit_marker(self, service):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "normalized_items": {"vehicles": [
+                    {"insured_document": "1019059650", "insured_id_type": "CC", "insured_name": "Asegurado distinto"},
+                ]}, "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db()
+        self.assertEqual([item["document"] for item in quotation.safe_metadata["people_lookup"]], ["444444444"])
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_health_first_person_can_reuse_requester_and_second_is_independent(self, service):
+        schema = get_branch_schema("salud")
+        context = unsign_policy_context(self.context_token())
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_email": "camilo@example.test",
+                "normalized_items": {"people": [
+                    {"use_requester": "Sí"},
+                    {"first_name": "Maria", "last_name": "Gomez", "id_type": "CC", "document": "555555555"},
+                ]}, "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db()
+        people = quotation.safe_metadata["people_lookup"]
+        self.assertEqual([item["document"] for item in people], ["444444444", "555555555"])
+        self.assertEqual(people[0]["missing_fields"], [])
+        self.assertEqual(people[1]["missing_fields"], [])
 
     @patch("cotizacion_colectivos.services.individual_quotations.publish_task_outbox")
     def test_complete_responsible_schedules_quote_task_once(self, publish):

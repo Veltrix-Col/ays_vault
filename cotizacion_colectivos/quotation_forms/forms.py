@@ -127,10 +127,24 @@ class IndividualQuotationForm(forms.Form):
                 if not isinstance(row, dict):
                     self.add_error("items_payload", f"{group.singular.title()} {position}: información inválida.")
                     continue
+                source_row = dict(row)
+                use_requester = (
+                    group.key == "people" and self.schema.slug == "salud" and position == 1
+                    and row.get("use_requester") in {True, 1, "1", "Sí", "Si", "sí", "si"}
+                )
+                if use_requester:
+                    source_row.update({
+                        "name": " ".join(filter(None, (
+                            cleaned.get("first_name"), cleaned.get("last_name"),
+                        ))) or self.context.get("requester_name", ""),
+                        "id_type": cleaned.get("requester_id_type") or self.context.get("requester_id_type", ""),
+                        "document": cleaned.get("requester_document") or self.context.get("requester_document", ""),
+                        "birth_date": cleaned.get("requester_birth_date") or self.context.get("requester_birth_date", ""),
+                    })
                 normalized_row = {}
                 for definition in group.fields:
                     try:
-                        normalized_row[definition.key] = self._clean_value(definition, row.get(definition.key))
+                        normalized_row[definition.key] = self._clean_value(definition, source_row.get(definition.key))
                     except forms.ValidationError as exc:
                         self.add_error("items_payload", f"{group.singular.title()} {position} — {definition.label}: {exc.message}")
                 if group.key == "vehicles":

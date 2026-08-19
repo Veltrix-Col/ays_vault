@@ -400,48 +400,120 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
     payload = json.loads(decrypt(quotation.encrypted_payload))
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    schema_slug = str(payload.get("schema") or quotation.branch_slug or "").strip().casefold()
     candidates = []
     candidate_data = {}
-    requester_document = str(context.get("requester_document") or fields.get("requester_document") or "").strip()
-    if requester_document:
-        candidate_data[requester_document] = {
-            "label": str(
-                " ".join(filter(None, (fields.get("first_name"), fields.get("last_name"))))
-                or context.get("requester_name") or fields.get("requester_name") or "Solicitante"
-            ),
-            "First_Name": fields.get("first_name") or fields.get("First_Name") or fields.get("requester_first_name") or context.get("first_name") or "",
-            "Last_Name": fields.get("last_name") or fields.get("Last_Name") or fields.get("requester_last_name") or context.get("last_name") or "",
-            "Tipo_ID": context.get("requester_id_type") or context.get("Tipo_ID") or fields.get("requester_id_type") or fields.get("Tipo_ID") or "",
-            "N_mero_de_ID": requester_document,
-            "Email": context.get("requester_email") or fields.get("requester_email") or "",
-            "Mobile": context.get("requester_phone") or fields.get("requester_phone") or "",
-            "role": "Solicitante",
-        }
-        candidates.append(requester_document)
-    for value in (fields.get("documento"), fields.get("document")):
-        value = str(value or "").strip()
-        if value and value not in candidates:
-            candidates.append(value)
-    groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
-    for rows in groups.values():
-        for row in rows if isinstance(rows, list) else ():
+    requester_document = str(
+        fields.get("requester_document") or context.get("requester_document")
+        or fields.get("N_mero_de_ID") or ""
+    ).strip()
+    requester_data = {
+        "label": str(
+            " ".join(filter(None, (
+                fields.get("first_name") or fields.get("First_Name"),
+                fields.get("last_name") or fields.get("Last_Name"),
+            )))
+            or context.get("requester_name") or fields.get("requester_name") or "Solicitante"
+        ),
+        "First_Name": fields.get("first_name") or fields.get("First_Name") or fields.get("requester_first_name") or context.get("first_name") or "",
+        "Last_Name": fields.get("last_name") or fields.get("Last_Name") or fields.get("requester_last_name") or context.get("last_name") or "",
+        "Tipo_ID": fields.get("requester_id_type") or fields.get("Tipo_ID") or context.get("requester_id_type") or context.get("Tipo_ID") or "",
+        "N_mero_de_ID": requester_document,
+        "Date_of_Birth": fields.get("requester_birth_date") or fields.get("Date_of_Birth") or context.get("requester_birth_date") or "",
+        "Email": fields.get("requester_email") or fields.get("Email") or context.get("requester_email") or "",
+        "Mobile": fields.get("requester_phone") or fields.get("Mobile") or fields.get("Phone") or context.get("requester_phone") or "",
+        "Phone": fields.get("Phone") or fields.get("requester_phone") or context.get("requester_phone") or "",
+        "role": "Persona principal",
+    }
+
+    def add_candidate(document, data):
+        document = str(document or "").strip()
+        if not document:
+            return
+        if document not in candidates:
+            candidates.append(document)
+        candidate_data.setdefault(document, {}).update(data)
+        candidate_data[document].setdefault("N_mero_de_ID", document)
+
+    # Movilidad siempre empieza por la identidad general del formulario. Los
+    # vehículos son riesgos; sólo un asegurado explícitamente distinto se
+    # agrega como candidato adicional y nunca sustituye al principal.
+    if schema_slug == "movilidad":
+        if requester_document:
+            add_candidate(requester_document, requester_data)
+        groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
+        for row in groups.get("vehicles", ()) if isinstance(groups.get("vehicles"), list) else ():
             if not isinstance(row, dict):
                 continue
-            for key in ("documento", "document", "insured_document", "id_number"):
-                value = str(row.get(key) or "").strip()
-                if value and value not in candidates:
-                    candidates.append(value)
-                if value:
-                    candidate_data.setdefault(value, {
-                        "label": str(row.get("name") or row.get("insured_name") or "Persona"),
-                        "First_Name": row.get("first_name") or row.get("insured_first_name") or "",
-                        "Last_Name": row.get("last_name") or row.get("insured_last_name") or "",
-                        "Tipo_ID": row.get("id_type") or row.get("insured_id_type") or "",
-                        "N_mero_de_ID": value,
-                        "Email": row.get("email") or "",
-                        "Mobile": row.get("mobile") or row.get("phone") or "",
-                        "role": "Asegurado del vehículo" if key == "insured_document" else "Persona relacionada",
-                    })
+            insured_document = str(row.get("insured_document") or "").strip()
+            explicit_different = row.get("insured_is_different") in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
+            if not explicit_different or not insured_document or insured_document == requester_document:
+                continue
+            add_candidate(insured_document, {
+                "label": str(row.get("insured_name") or "Asegurado del vehículo"),
+                "First_Name": row.get("insured_first_name") or row.get("first_name") or "",
+                "Last_Name": row.get("insured_last_name") or row.get("last_name") or "",
+                "Tipo_ID": row.get("insured_id_type") or row.get("id_type") or "",
+                "N_mero_de_ID": insured_document,
+                "Date_of_Birth": row.get("insured_birth_date") or row.get("birth_date") or "",
+                "Email": row.get("insured_email") or row.get("email") or "",
+                "Mobile": row.get("insured_mobile") or row.get("mobile") or row.get("phone") or "",
+                "Phone": row.get("insured_phone") or row.get("phone") or "",
+                "role": "Asegurado del vehículo",
+            })
+    elif schema_slug == "salud":
+        # Salud puede tener varias personas. La primera puede declarar que
+        # reutiliza la identidad general; las siguientes son independientes.
+        groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
+        rows = groups.get("people", ()) if isinstance(groups.get("people"), list) else ()
+        if requester_document and not rows:
+            add_candidate(requester_document, requester_data)
+        for position, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            use_requester = row.get("use_requester") in {True, 1, "1", "Sí", "Si", "sí", "si"}
+            if position == 1 and use_requester and requester_document:
+                add_candidate(requester_document, {**requester_data, "role": "Persona 1 · solicitante"})
+                continue
+            document = row.get("document") or row.get("N_mero_de_ID")
+            add_candidate(document, {
+                "label": str(row.get("name") or " ".join(filter(None, (row.get("first_name"), row.get("last_name")))) or "Persona"),
+                "First_Name": row.get("first_name") or row.get("First_Name") or "",
+                "Last_Name": row.get("last_name") or row.get("Last_Name") or "",
+                "Tipo_ID": row.get("id_type") or row.get("Tipo_ID") or "",
+                "N_mero_de_ID": document,
+                "Date_of_Birth": row.get("birth_date") or row.get("Date_of_Birth") or "",
+                "Email": row.get("email") or "",
+                "Mobile": row.get("mobile") or row.get("phone") or "",
+                "Phone": row.get("phone") or "",
+                "role": f"Persona {position}",
+            })
+    else:
+        # Mantener la semántica histórica para Vida, Exequial y SOAT. No
+        # reinterpretar nombres antiguos ni aplicar reglas de Movilidad.
+        if requester_document:
+            add_candidate(requester_document, requester_data)
+        for value in (fields.get("documento"), fields.get("document")):
+            add_candidate(value, {"N_mero_de_ID": str(value or "").strip(), "role": "Persona relacionada"})
+    groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
+    if schema_slug not in {"movilidad", "salud"}:
+        for rows in groups.values():
+            for row in rows if isinstance(rows, list) else ():
+                if not isinstance(row, dict):
+                    continue
+                for key in ("documento", "document", "insured_document", "id_number"):
+                    value = str(row.get(key) or "").strip()
+                    if value:
+                        add_candidate(value, {
+                            "label": str(row.get("name") or row.get("insured_name") or "Persona"),
+                            "First_Name": row.get("first_name") or row.get("insured_first_name") or "",
+                            "Last_Name": row.get("last_name") or row.get("insured_last_name") or "",
+                            "Tipo_ID": row.get("id_type") or row.get("insured_id_type") or "",
+                            "N_mero_de_ID": value,
+                            "Email": row.get("email") or "",
+                            "Mobile": row.get("mobile") or row.get("phone") or "",
+                            "role": "Persona relacionada",
+                        })
     quotation.refresh_from_db(fields=("safe_metadata",))
     corrections = (quotation.safe_metadata or {}).get("person_corrections", {})
     if isinstance(corrections, dict):
