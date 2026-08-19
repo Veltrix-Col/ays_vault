@@ -384,7 +384,7 @@ class TestTaskCommandTests(TestCase):
         ) as factory:
             call_command(
                 "zoho_create_test_task", profile="sandbox",
-                confirm=SANDBOX_WRITE_CONFIRMATION, stdout=stdout,
+                confirm=SANDBOX_WRITE_CONFIRMATION, stdout=stdout, no_color=True,
             )
 
         factory.assert_called_once_with(

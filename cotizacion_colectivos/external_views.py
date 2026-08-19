@@ -431,6 +431,17 @@ def portal(request):
         return _clear_external_cookie(render(request, "cotizacion_colectivos/external/unavailable.html", status=403))
     response_query_started = time.monotonic()
     latest = access.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).prefetch_related("changes").first()
+    saved_preview = []
+    if latest:
+        for change in latest.changes.all():
+            if not change.encrypted_new_value:
+                continue
+            try:
+                value = decrypt(change.encrypted_new_value).strip()
+            except (TypeError, ValueError):
+                value = ""
+            if value:
+                saved_preview.append({"action": change.get_action_display(), "field": change.functional_field, "value": value})
     branch = COLLECTIVE_BRANCH_CONFIG.get(access.request.branch_code)
     response_query_ms = round((time.monotonic() - response_query_started) * 1000)
     grouping_started = time.monotonic()
@@ -459,6 +470,8 @@ def portal(request):
         "relation_roles": RELATION_ROLE_CHOICES,
         "relationship_choices": RELATIONSHIP_CHOICES,
         "insured_state_choices": INSURED_STATE_CHOICES,
+        "saved": request.GET.get("saved") == "1",
+        "saved_preview": tuple(saved_preview),
     }
     template_started = time.monotonic()
     html = render_to_string("cotizacion_colectivos/external/portal.html", context, request=request)
@@ -535,7 +548,7 @@ def save_draft(request):
         save_response(access=access, rows=_posted_rows(request, access.request), observations=request.POST.get("client_observations", ""))
     except ExternalAccessError as exc:
         return HttpResponse(str(exc.messages[0] if exc.messages else "No fue posible guardar."), status=400)
-    return redirect("colectivos_external:portal")
+    return redirect(f"{reverse('colectivos_external:portal')}?saved=1")
 
 
 @never_cache

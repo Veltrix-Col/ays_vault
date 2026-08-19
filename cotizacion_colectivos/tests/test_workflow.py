@@ -495,4 +495,4 @@ class RequestWorkflowTests(TestCase):
         self.assertContains(page, "identificador técnico")
         self.assertContains(page, '<details class="workspace-card technical-disclosure">', html=False)
         self.assertNotContains(page, '<details open class="workspace-card technical-disclosure">', html=False)
-        self.assertContains(page, "No disponible: faltan layout y reglas obligatorias confirmadas.")
+        self.assertContains(page, "Contrato de layout pendiente")

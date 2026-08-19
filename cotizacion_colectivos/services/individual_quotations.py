@@ -339,28 +339,39 @@ def accept_individual_quotation(*, quotation: CotizacionIndividual, actor) -> Co
 
 
 def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=None) -> dict[str, object]:
+    """Resolve each explicit document candidate without assuming one person per quote."""
     payload = json.loads(decrypt(quotation.encrypted_payload))
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
-    document = str(context.get("requester_document") or fields.get("documento") or "").strip()
-    if not document:
-        result = {"status": "pending_identifier"}
-    else:
-        results = tuple((person_service or PersonSearchService()).search(document))
+    candidates = []
+    for value in (context.get("requester_document"), fields.get("documento"), fields.get("document")):
+        value = str(value or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
+    for rows in groups.values():
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, dict):
+                continue
+            for key in ("documento", "document", "insured_document", "id_number"):
+                value = str(row.get(key) or "").strip()
+                if value and value not in candidates:
+                    candidates.append(value)
+    service = person_service or PersonSearchService()
+    lookups = []
+    for document in candidates:
+        results = tuple(service.search(document))
         if len(results) == 1:
             person = results[0]
-            result = {
-                "status": "found",
-                "display_name": person.full_name,
-                "masked_document": person.masked_document,
-                "detail_token": person.detail_token,
-            }
+            lookups.append({"status": "found", "document": document, "display_name": person.full_name, "masked_document": person.masked_document, "detail_token": person.detail_token})
         elif not results:
-            result = {"status": "not_found"}
+            lookups.append({"status": "not_found", "document": document})
         else:
-            result = {"status": "ambiguous", "count": len(results)}
+            lookups.append({"status": "ambiguous", "document": document, "count": len(results)})
+    result = lookups[0] if lookups else {"status": "pending_identifier"}
     quotation.refresh_from_db(fields=("safe_metadata",))
     metadata = dict(quotation.safe_metadata or {})
     metadata["person_lookup"] = result
+    metadata["people_lookup"] = lookups
     CotizacionIndividual.objects.filter(pk=quotation.pk).update(safe_metadata=metadata)
     return result

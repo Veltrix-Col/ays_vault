@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -104,19 +105,46 @@ class PackageBoundaryTests(SimpleTestCase):
 
     def test_does_not_expose_write_services(self):
         root = Path(__file__).resolve().parents[1]
-        source = "\n".join(
-            path.read_text("utf-8")
-            for path in root.rglob("*.py")
-            if "tests" not in path.parts
-        )
-        for forbidden in (
-            "def create(",
-            "def update(",
-            "def delete(",
-            "def upsert(",
-            "def write(",
-            "def upload(",
-            "def attach(",
-            "sync_to_zoho",
+        exports = (root / "services" / "__init__.py").read_text("utf-8")
+        for exported in (
+            "CompanySearchService", "PersonSearchService", "EntityDetailService", "PolicyService",
         ):
-            self.assertNotIn(forbidden, source)
+            self.assertIn(exported, exports)
+        self.assertNotIn("GuardedSandboxTaskPublisher", exports)
+        self.assertNotIn("GuardedSandboxContactPublisher", exports)
+
+        allowed_publishers = {
+            (root / "services" / "task_publisher.py").resolve(),
+            (root / "services" / "person_contract.py").resolve(),
+        }
+        write_calls = []
+        direct_http_write = []
+        for path in root.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            source = path.read_text("utf-8")
+            tree = ast.parse(source, filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    chain = []
+                    current = node.func
+                    while isinstance(current, ast.Attribute):
+                        chain.append(current.attr)
+                        current = current.value
+                    if isinstance(current, ast.Name):
+                        chain.append(current.id)
+                    dotted = ".".join(reversed(chain))
+                    if dotted in {"records.create", "records.update"}:
+                        write_calls.append(path.resolve())
+                    if dotted in {"requests.post", "requests.put", "requests.patch", "requests.delete", "httpx.post", "httpx.put", "httpx.patch", "httpx.delete"}:
+                        direct_http_write.append(path)
+        self.assertTrue(write_calls)
+        self.assertTrue(set(write_calls).issubset(allowed_publishers))
+        self.assertEqual(direct_http_write, [])
+
+        task_source = (root / "services" / "task_publisher.py").read_text("utf-8")
+        contact_source = (root / "services" / "person_contract.py").read_text("utf-8")
+        for source in (task_source, contact_source):
+            self.assertIn("sandbox", source)
+            self.assertIn("write_enabled", source)
+            self.assertIn("confirmation", source)

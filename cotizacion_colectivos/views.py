@@ -67,6 +67,11 @@ from .services.individual_quotations import (
 )
 from .services.individual_access import generate_individual_access
 from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
+from .services.task_publisher import publish_task_outbox
+from .services.person_contract import (
+    ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
+    get_contacts_publisher,
+)
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
 
@@ -1922,6 +1927,7 @@ def request_detail(request, public_id):
             except ValueError:
                 remote_id = "No disponible"
         zoho_tasks.append({
+            "outbox_id": outbox.pk,
             "kind": outbox.event_kind,
             "type": {"INCLUSION": "Ingresos", "RETIRO": "Retiros", "COTIZACION": "Cotización"}.get(outbox.event_kind, outbox.event_kind),
             "status": outbox.get_status_display(),
@@ -1967,6 +1973,27 @@ def request_detail(request, public_id):
         "zoho_tasks": tuple(zoho_tasks),
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def request_publish_task(request, public_id, outbox_id):
+    if not has_internal_permission(request, "approve_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(SolicitudColectivo, public_id=public_id)
+    outbox = get_object_or_404(ColectivosTaskOutbox, pk=outbox_id, request=item)
+    if outbox.status == outbox.Status.PUBLISHED:
+        messages.info(request, "La Task ya fue publicada.")
+    else:
+        publish_task_outbox(outbox.pk)
+        outbox.refresh_from_db()
+        if outbox.status == outbox.Status.PUBLISHED:
+            messages.success(request, "Task publicada correctamente en Zoho Sandbox.")
+        elif outbox.status == outbox.Status.RECONCILE:
+            messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
+        else:
+            messages.error(request, "La Task no pudo publicarse; revise el estado del expediente.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
 
 
 def _access_status_display(access) -> str:
@@ -2360,6 +2387,44 @@ def individual_accept(request, token):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def individual_create_person(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        first_name = str(fields.get("First_Name") or fields.get("first_name") or "").strip()
+        last_name = str(fields.get("Last_Name") or fields.get("last_name") or "").strip()
+        data = {
+            "First_Name": first_name,
+            "Last_Name": last_name,
+            "Tipo_ID": str(fields.get("Tipo_ID") or fields.get("tipo_id") or "").strip(),
+            "N_mero_de_ID": str(fields.get("N_mero_de_ID") or fields.get("documento") or "").strip(),
+            "Date_of_Birth": fields.get("Date_of_Birth") or fields.get("fecha_nacimiento") or "",
+            "Email": fields.get("Email") or fields.get("correo") or "",
+            "Mobile": fields.get("Mobile") or fields.get("celular") or "",
+            "Phone": fields.get("Phone") or fields.get("telefono") or "",
+        }
+        result = get_contacts_publisher(
+            profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+            confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
+        ).create(data)
+        metadata = dict(quotation.safe_metadata or {})
+        metadata["person_lookup"] = {"status": "found", "created": True, "detail_token": sign_record_id(result["record_id"], "person")}
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
+        messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
+        raise Http404("Respuesta no encontrada")
+    except (ContactPublicationUncertain, ContactPublishingDisabled, ContactPublicationRejected, ValidationError) as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
     if not has_internal_permission(request, "view_individual_quotation"):
@@ -2405,6 +2470,15 @@ def individual_expedient(request, token):
     safe_metadata = quotation.safe_metadata or {}
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
+    if person_lookup.get("status") == "not_found":
+        person_lookup = dict(person_lookup)
+        fields_payload = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        person_lookup["has_complete_data"] = bool(
+            (fields_payload.get("First_Name") or fields_payload.get("first_name"))
+            and (fields_payload.get("Last_Name") or fields_payload.get("last_name"))
+            and (fields_payload.get("Tipo_ID") or fields_payload.get("tipo_id"))
+            and (fields_payload.get("N_mero_de_ID") or fields_payload.get("documento"))
+        )
     access = quotation.external_access
     try:
         recipient = decrypt(access.encrypted_recipient)

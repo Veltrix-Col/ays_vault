@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import unicodedata
 
 from django.core.exceptions import ValidationError
 
@@ -20,6 +21,11 @@ def _value(item, key: str) -> str:
     if isinstance(item, dict):
         return str(item.get(key) or "").strip()
     return str(getattr(item, key, "") or "").strip()
+
+
+def _fold(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    return "".join(char for char in text if not unicodedata.combining(char)).casefold().strip()
 
 
 def task_responsible_options(*, zoho=None) -> tuple[TaskResponsibleOption, ...]:
@@ -64,16 +70,20 @@ def resolve_task_responsible_email(option: TaskResponsibleOption, *, zoho=None) 
                 continue
             page = facade.search.by_field(
                 module="Empleados", field="Name", value=candidate,
-                fields=("id", "Name", "Email"), page=1, limit=2,
+                fields=("id", "Name", "Email", "Estado"), page=1, limit=5,
             )
             records.extend(page.records)
     except ZohoError as exc:
         raise translate_zoho_error(exc) from exc
     unique = {str(record.get("id")): record for record in records if record.get("id")}
+    wanted = {_fold(option.actual_value), _fold(option.display_value)} - {""}
     matches = [
         record for record in unique.values()
-        if str(record.get("Name") or "").strip() in {option.actual_value, option.display_value}
+        if _fold(str(record.get("Name") or "")) in wanted
     ]
+    active = [record for record in matches if _fold(str(record.get("Estado") or "")) == "activo"]
+    if len(active) == 1:
+        matches = active
     if len(matches) != 1:
         raise ValidationError(
             "No fue posible asociar el responsable seleccionado con un correo corporativo en Zoho."

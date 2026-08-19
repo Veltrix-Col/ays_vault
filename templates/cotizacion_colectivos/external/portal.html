@@ -18,6 +18,8 @@
   <p>Enviar la respuesta no modifica automáticamente Zoho ni la póliza.</p>
   <p>Si tiene dudas, {{ contact_channel }}</p>
 </section>
+{% if saved %}<p class="external-card status-message status-message--success" role="status">Sus cambios se guardaron correctamente. Revise la previsualización actual antes de enviar la respuesta.</p>{% endif %}
+{% if saved and saved_preview %}<section class="external-card" aria-labelledby="saved-preview-heading"><h2 id="saved-preview-heading">Previsualización de cambios guardados</h2><ul>{% for item in saved_preview %}<li><strong>{{ item.action }} · {{ item.field|capfirst }}:</strong> {{ item.value }}</li>{% endfor %}</ul></section>{% endif %}
 <section class="external-card external-card--steps">
   <h2>¿Qué debo hacer?</h2>
   <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Solicite el retiro de un integrante existente o agregue un nuevo ingreso.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
