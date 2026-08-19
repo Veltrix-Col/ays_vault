@@ -45,7 +45,7 @@ ACTION_TO_ADJUSTMENT = {
     CambioSolicitudColectivo.Action.INCLUDE: "INCLUSION",
 }
 EDITABLE_FIELDS = {
-    "tipo_id", "documento", "nombre", "rol", "plan", "parentesco",
+    "tipo_id", "documento", "nombre", "nombres", "apellidos", "rol", "plan", "parentesco",
     "fecha_nacimiento", "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo",
     "observaciones", "ciudad", "direccion", "tipo_uso",
     "anio_construccion", "descripcion", "valor_asegurado", "vehiculo",
@@ -460,9 +460,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 fields["tipo_id"] not in CONTACT_ID_TYPE_CHOICES
                 or fields["rol"] not in RELATION_ROLE_CHOICES
                 or not fields["documento"].isdigit()
-                or not fields["nombre"]
+                or not fields["nombres"]
+                or not fields["apellidos"]
             ):
-                raise ExternalAccessError("El ingreso requiere identificación y nombre válidos.")
+                raise ExternalAccessError("El ingreso requiere nombres, apellidos, identificación y documento válidos.")
         if fields["parentesco"] and fields["parentesco"] not in RELATIONSHIP_CHOICES:
             raise ExternalAccessError("El parentesco seleccionado no es válido.")
         if fields["estado"] and fields["estado"] not in INSURED_STATE_CHOICES:
@@ -504,8 +505,14 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     locked = RespuestaSolicitudColectivo.objects.select_for_update().select_related("request", "access").get(pk=response.pk)
     if locked.status == locked.Status.SUBMITTED:
         return locked
+    valid_novelties = locked.changes.filter(
+        action__in=(CambioSolicitudColectivo.Action.INCLUDE, CambioSolicitudColectivo.Action.RETIRE, CambioSolicitudColectivo.Action.MODIFY),
+        validation_status__in=(CambioSolicitudColectivo.Validation.VALID, CambioSolicitudColectivo.Validation.WARNING),
+    )
     if locked.status != locked.Status.DRAFT or not declaration or locked.changes.filter(validation_status=CambioSolicitudColectivo.Validation.INVALID).exists():
         raise ExternalAccessError("La respuesta no está lista para enviar.")
+    if not valid_novelties.exists():
+        raise ExternalAccessError("No hay cambios preparados para enviar.")
     now = timezone.now()
     locked.status = locked.Status.SUBMITTED
     locked.declaration_confirmed = True
@@ -528,14 +535,20 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
                     or (kind == "RETIRO" and change.action != CambioSolicitudColectivo.Action.RETIRE)):
                 continue
             values = []
-            for field, encrypted in (("documento", change.encrypted_new_value), ("observaciones", change.encrypted_observation)):
-                if encrypted:
-                    try:
-                        value = decrypt(encrypted).strip()
-                    except (TypeError, ValueError):
-                        value = ""
-                    if value:
-                        values.append(f"{field}: {value}")
+            if change.encrypted_new_value:
+                try:
+                    value = decrypt(change.encrypted_new_value).strip()
+                except (TypeError, ValueError):
+                    value = ""
+                if value:
+                    values.append(f"{change.functional_field}: {value}")
+            if change.encrypted_observation:
+                try:
+                    value = decrypt(change.encrypted_observation).strip()
+                except (TypeError, ValueError):
+                    value = ""
+                if value:
+                    values.append(f"observaciones: {value}")
             if values:
                 observations.append(" · ".join(values))
         enqueue_task(
@@ -562,7 +575,6 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
         f"El cliente respondió una novedad de la póliza {request.masked_policy_reference}.",
         str(locked.version),
     )
-    transaction.on_commit(lambda: _send_submission_receipt(access.pk, request.public_id))
     return locked
 
 

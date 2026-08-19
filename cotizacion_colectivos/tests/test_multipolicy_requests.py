@@ -139,7 +139,7 @@ class MultiPolicyRequestTests(TestCase):
             access=self.access,
             rows=[{
                 "record": "", "policy": str(self.mobility.pk), "action": "INCLUIR",
-                "tipo_id": "CC", "documento": "123456", "nombre": "Persona",
+                "tipo_id": "CC", "documento": "123456", "nombres": "Persona", "apellidos": "Demo",
                 "rol": "Asegurado", "fecha_efectiva": "2026-09-01",
             }],
             observations="",
@@ -150,7 +150,7 @@ class MultiPolicyRequestTests(TestCase):
                 access=self.access,
                 rows=[{
                     "record": "", "policy": "999999", "action": "INCLUIR",
-                    "tipo_id": "CC", "documento": "123456", "nombre": "Persona",
+                    "tipo_id": "CC", "documento": "123456", "nombres": "Persona", "apellidos": "Demo",
                     "rol": "Asegurado", "fecha_efectiva": "2026-09-01",
                 }],
                 observations="",

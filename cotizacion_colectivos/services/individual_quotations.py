@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import secrets
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,8 +23,12 @@ from ..models import (
 )
 from .task_publisher import ColectivosTaskPayload, enqueue_task, publish_task_outbox
 from .search import PersonSearchService
+from .person_contract import contact_missing_fields
 from ..quotation_forms.catalog import get_policy_branch_schema
 from ..quotation_forms.security import sign_policy_context
+
+
+logger = logging.getLogger("cotizacion_colectivos")
 
 
 def _normalized(value: object) -> str:
@@ -193,6 +198,10 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
 def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     files = validate_attachments(cleaned_data.get("attachments") or [])
     captured_fields = {field.key: cleaned_data.get(field.key, "") for field in schema.fields}
+    # Mantener una copia de lectura para expedientes históricos; el formulario
+    # nuevo ya no muestra este nombre redundante.
+    if context and context.get("requester_name"):
+        captured_fields["requester_name"] = str(context["requester_name"])[:180]
     if (context or {}).get("requires_declared_company"):
         captured_fields["declared_company"] = cleaned_data.get("declared_company", "")
     public_payload = {
@@ -209,6 +218,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         str((context or {}).get("affiliate_key") or ""),
     ))
     context_hash = hashlib.sha256(context_material.encode()).hexdigest() if context else ""
+    task_context = context or {}
     quotation = CotizacionIndividual.objects.create(
         branch_code=schema.code,
         branch_slug=schema.slug,
@@ -219,8 +229,13 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         item_count=sum(len(items) for items in cleaned_data["normalized_items"].values()),
         attachment_count=len(files),
         created_by=actor,
+        safe_metadata={
+            "task_responsible": str(task_context.get("task_responsible") or "")[:120],
+            "task_responsible_display": str(task_context.get("task_responsible_display") or "")[:120],
+            "task_responsible_email": str(task_context.get("task_responsible_email") or "")[:254],
+            "task_responsible_email_status": "resolved" if task_context.get("task_responsible_email") else "pending",
+        },
     )
-    task_context = context or {}
     task_fields = captured_fields
     root = (Path(settings.COLECTIVOS_PRIVATE_ROOT) / "individual_quotations").resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -289,9 +304,15 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         ),
         event_version=1,
     )
-    # La respuesta ya quedó dentro de la transacción; publicar sólo después del
-    # commit evita Tasks huérfanas si falla el guardado local o un adjunto.
-    transaction.on_commit(lambda outbox_id=outbox.pk: publish_task_outbox(outbox_id))
+    # La respuesta siempre queda persistida. Una Task de Cotización no se
+    # publica con un contrato incompleto: el analista podrá resolver luego el
+    # responsable/correo desde el expediente y publicar de forma controlada.
+    if not (str(task_context.get("task_responsible") or "").strip() and
+            str(task_context.get("task_responsible_email") or "").strip()):
+        outbox.safe_error_code = "RESPONSIBLE_EMAIL_PENDING"
+        outbox.save(update_fields=("safe_error_code", "updated_at"))
+    else:
+        transaction.on_commit(lambda outbox_id=outbox.pk: publish_task_outbox(outbox_id))
     return quotation
 
 
@@ -338,13 +359,66 @@ def accept_individual_quotation(*, quotation: CotizacionIndividual, actor) -> Co
     return locked
 
 
+def update_quotation_responsible(*, quotation: CotizacionIndividual, option, email: str) -> CotizacionIndividual:
+    """Update only the pending Task contract, never the client's response."""
+    email = str(email or "").strip()
+    if email and ("@" not in email or len(email) > 254):
+        raise ValidationError("El correo del responsable no es válido.")
+    with transaction.atomic():
+        locked = CotizacionIndividual.objects.select_for_update().get(pk=quotation.pk)
+        metadata = dict(locked.safe_metadata or {})
+        metadata["task_responsible"] = str(getattr(option, "actual_value", "") or "").strip()
+        metadata["task_responsible_display"] = str(getattr(option, "display_value", "") or "").strip()
+        metadata["task_responsible_email"] = email
+        metadata["task_responsible_email_status"] = "resolved" if email else "pending"
+        locked.safe_metadata = metadata
+        locked.save(update_fields=("safe_metadata",))
+        outbox = locked.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
+        responsible_block = outbox is not None and outbox.safe_error_code == "RESPONSIBLE_EMAIL_PENDING"
+        if outbox is not None and (
+            outbox.status == outbox.Status.PENDING
+            or (outbox.status == outbox.Status.BLOCKED and responsible_block)
+        ):
+            record = json.loads(decrypt(outbox.encrypted_payload))
+            record["Responsable"] = metadata["task_responsible"]
+            record["Correo_responsable"] = email
+            serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            outbox.encrypted_payload = encrypt(serialized)
+            outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
+            outbox.status = outbox.Status.PENDING
+            outbox.safe_error_code = "" if email else "RESPONSIBLE_EMAIL_PENDING"
+            outbox.save(update_fields=("encrypted_payload", "payload_checksum", "status", "safe_error_code", "updated_at"))
+        logger.info(
+            "individual_responsible_updated quotation_id=%s outbox_existing=%s email_resolved=%s",
+            str(locked.public_id), bool(outbox), bool(email),
+        )
+        return locked
+
+
 def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=None) -> dict[str, object]:
     """Resolve each explicit document candidate without assuming one person per quote."""
     payload = json.loads(decrypt(quotation.encrypted_payload))
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     candidates = []
-    for value in (context.get("requester_document"), fields.get("documento"), fields.get("document")):
+    candidate_data = {}
+    requester_document = str(context.get("requester_document") or fields.get("requester_document") or "").strip()
+    if requester_document:
+        candidate_data[requester_document] = {
+            "label": str(
+                " ".join(filter(None, (fields.get("first_name"), fields.get("last_name"))))
+                or context.get("requester_name") or fields.get("requester_name") or "Solicitante"
+            ),
+            "First_Name": fields.get("first_name") or fields.get("First_Name") or fields.get("requester_first_name") or context.get("first_name") or "",
+            "Last_Name": fields.get("last_name") or fields.get("Last_Name") or fields.get("requester_last_name") or context.get("last_name") or "",
+            "Tipo_ID": context.get("requester_id_type") or context.get("Tipo_ID") or fields.get("requester_id_type") or fields.get("Tipo_ID") or "",
+            "N_mero_de_ID": requester_document,
+            "Email": context.get("requester_email") or fields.get("requester_email") or "",
+            "Mobile": context.get("requester_phone") or fields.get("requester_phone") or "",
+            "role": "Solicitante",
+        }
+        candidates.append(requester_document)
+    for value in (fields.get("documento"), fields.get("document")):
         value = str(value or "").strip()
         if value and value not in candidates:
             candidates.append(value)
@@ -357,6 +431,23 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
                 value = str(row.get(key) or "").strip()
                 if value and value not in candidates:
                     candidates.append(value)
+                if value:
+                    candidate_data.setdefault(value, {
+                        "label": str(row.get("name") or row.get("insured_name") or "Persona"),
+                        "First_Name": row.get("first_name") or row.get("insured_first_name") or "",
+                        "Last_Name": row.get("last_name") or row.get("insured_last_name") or "",
+                        "Tipo_ID": row.get("id_type") or row.get("insured_id_type") or "",
+                        "N_mero_de_ID": value,
+                        "Email": row.get("email") or "",
+                        "Mobile": row.get("mobile") or row.get("phone") or "",
+                        "role": "Asegurado del vehículo" if key == "insured_document" else "Persona relacionada",
+                    })
+    quotation.refresh_from_db(fields=("safe_metadata",))
+    corrections = (quotation.safe_metadata or {}).get("person_corrections", {})
+    if isinstance(corrections, dict):
+        for document, correction in corrections.items():
+            if isinstance(correction, dict):
+                candidate_data.setdefault(str(document), {}).update(correction)
     service = person_service or PersonSearchService()
     lookups = []
     for document in candidates:
@@ -365,7 +456,9 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
             person = results[0]
             lookups.append({"status": "found", "document": document, "display_name": person.full_name, "masked_document": person.masked_document, "detail_token": person.detail_token})
         elif not results:
-            lookups.append({"status": "not_found", "document": document})
+            data = candidate_data.get(document, {"N_mero_de_ID": document})
+            missing = contact_missing_fields(data)
+            lookups.append({"status": "not_found", "document": document, "display_name": data.get("label", "Persona"), "role": data.get("role", "Persona"), "missing_fields": missing, "has_complete_data": not missing})
         else:
             lookups.append({"status": "ambiguous", "document": document, "count": len(results)})
     result = lookups[0] if lookups else {"status": "pending_identifier"}

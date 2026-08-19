@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from cotizacion_colectivos.dto import (
     BranchSummary,
     CompanyDetail,
@@ -41,6 +43,9 @@ from .mappings import (
     RISKS_MODULE,
     RISK_DETAIL_FIELDS,
 )
+
+
+logger = logging.getLogger("cotizacion_colectivos")
 
 
 def _text(value: object, default: str = "") -> str:
@@ -146,10 +151,18 @@ class EntityDetailService:
                 record_id=record_id,
                 fields=CONTACT_DETAIL_FIELDS,
             )
-        except ZohoError:
+        except ZohoError as exc:
             # El SDK oficial puede fallar al resolver el detalle aunque Search
             # esté disponible. El fallback sigue siendo cerrado: mismo módulo,
             # ID firmado validado y lista fija de campos.
+            logger.warning(
+                "colectivos_contact_detail_fallback application=cotizacion_colectivos "
+                "operation=record_get module=Contacts error=%s status_code=%s "
+                "zoho_code=%s sdk_exception_class=%s request_sent=%s profile=%s",
+                getattr(exc, "category", "unknown"), getattr(exc, "status_code", None),
+                getattr(exc, "zoho_code", None), getattr(exc, "sdk_exception_class", None),
+                getattr(exc, "request_sent", None), self.profile,
+            )
             try:
                 page = self.zoho.search.by_criteria(
                     module=CONTACTS_MODULE,

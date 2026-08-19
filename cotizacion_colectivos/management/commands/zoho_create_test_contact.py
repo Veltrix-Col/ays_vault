@@ -3,6 +3,9 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 
 from integrations.zoho.exceptions import ZohoError
+from cotizacion_colectivos.management.commands.zoho_create_test_task import (
+    _safe_zoho_diagnostic,
+)
 
 from cotizacion_colectivos.services.person_contract import (
     ContactPublicationRejected,
@@ -10,6 +13,13 @@ from cotizacion_colectivos.services.person_contract import (
     ContactPublishingDisabled,
     get_contacts_publisher,
 )
+
+
+def _safe_contact_diagnostic(exc: ZohoError) -> str:
+    """Reuse the allowlisted SDK metadata diagnostic without exposing payloads."""
+    return _safe_zoho_diagnostic(exc).replace(
+        "No se creó la Task (", "No se creó el Contact (", 1,
+    )
 
 
 class Command(BaseCommand):
@@ -35,8 +45,7 @@ class Command(BaseCommand):
         except ContactPublicationUncertain as exc:
             raise CommandError("Contact no confirmado; requiere conciliación.") from exc
         except ZohoError as exc:
-            category = str(getattr(exc, "category", "blocked") or "blocked")[:40]
-            raise CommandError(f"No se creó el Contact ({category}).") from exc
+            raise CommandError(_safe_contact_diagnostic(exc)) from exc
         except (ContactPublishingDisabled, ContactPublicationRejected) as exc:
             raise CommandError(f"No se creó el Contact ({type(exc).__name__}).") from exc
         self.stdout.write(self.style.SUCCESS("Contact creado correctamente"))

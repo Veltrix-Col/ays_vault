@@ -282,9 +282,43 @@ class OptionalAccessEmailForm(forms.Form):
 class IndividualAccessPrepareForm(OptionalAccessEmailForm):
     responsible = forms.ChoiceField(
         label="Responsable de la solicitud",
-        required=True,
+        required=False,
         choices=(),
     )
+
+
+class PersonCompletionForm(forms.Form):
+    """Datos estructurados que faltan para preparar un Contact.
+
+    Se mantiene separado de la respuesta cifrada del cliente: completar datos
+    es una corrección operativa interna y auditable.
+    """
+
+    first_name = forms.CharField(label="Nombres", required=False, max_length=120)
+    last_name = forms.CharField(label="Apellidos", required=False, max_length=120)
+    id_type = forms.ChoiceField(
+        label="Tipo de identificación", required=False,
+        choices=(('', "Seleccione"), ("CC", "CC"), ("CE", "CE"), ("EX", "EX"),
+                 ("NIT", "NIT"), ("NUIP", "NUIP"), ("PAS", "PAS"),
+                 ("PEP", "PEP"), ("PP", "PP"), ("PPT", "PPT"),
+                 ("RC", "RC"), ("TI", "TI")),
+    )
+    document = forms.CharField(label="Número de identificación", required=False, max_length=40)
+    birth_date = forms.DateField(label="Fecha de nacimiento", required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    email = forms.EmailField(label="Correo", required=False, max_length=254)
+    mobile = forms.CharField(label="Móvil", required=False, max_length=24)
+    phone = forms.CharField(label="Teléfono", required=False, max_length=24)
+    consent = forms.ChoiceField(label="Tratamiento de datos", required=False, choices=(('', "No modificar"), ("Si", "Sí"), ("No", "No")))
+
+    def clean(self):
+        cleaned = super().clean()
+        if not cleaned.get("last_name"):
+            self.add_error("last_name", "Indique los apellidos para crear la persona.")
+        if not cleaned.get("id_type"):
+            self.add_error("id_type", "Indique el tipo de identificación.")
+        if not cleaned.get("document"):
+            self.add_error("document", "Indique el número de identificación.")
+        return cleaned
 
 
 class ExternalOTPForm(forms.Form):

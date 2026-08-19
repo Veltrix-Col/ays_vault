@@ -45,7 +45,10 @@ GENDER_CHOICES = ("Femenino", "Masculino", "Otro", "Prefiero no indicar")
 ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro familiar")
 
 REQUESTER_FIELDS = (
-    FieldSchema("requester_name", "Nombre del solicitante"),
+    # Los registros nuevos capturan la identidad estructurada.  requester_name
+    # sólo se conserva al leer contextos/snapshots históricos.
+    FieldSchema("first_name", "Nombres", required=False),
+    FieldSchema("last_name", "Apellidos", required=False),
     FieldSchema("requester_id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("requester_document", "Identificación", "document"),
     FieldSchema("requester_birth_date", "Fecha de nacimiento", "date", required=False),

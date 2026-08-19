@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.test import Client, TestCase, override_settings
 from django.urls import resolve, reverse
 from django.utils import timezone
@@ -444,6 +445,18 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "/solicitudes/colectivos/externa/cotizacion-individual/")
         self.assertNotContains(response, POLICY_ID)
         self.assertNotContains(response, "100000890")
+
+    @patch("cotizacion_colectivos.views.resolve_task_responsible_email", side_effect=ValidationError("No fue posible asociar el responsable seleccionado con un correo corporativo en Zoho."))
+    @patch("cotizacion_colectivos.views.task_responsible_options", return_value=(Mock(actual_value="RESP-1", display_value="Responsable Demo"),))
+    @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
+    def test_responsible_without_email_does_not_block_client_link(self, _service, _options, _email):
+        response = self.client.post(
+            reverse("cotizacion_colectivos:policy_individual_access", args=[TOKEN]),
+            {"recipient": "cliente@example.test", "responsible": "RESP-1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Enlace listo para compartir")
+        self.assertContains(response, "El enlace puede generarse")
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_legacy_single_policy_endpoint_remains_compatible_and_reuses_request(self, _service):

@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -29,6 +30,7 @@ from cotizacion_colectivos.services.individual_access import generate_individual
 from cotizacion_colectivos.services.individual_quotations import (
     accept_individual_quotation,
     build_policy_context,
+    create_individual_quotation,
     resolve_accepted_person,
 )
 from cotizacion_colectivos.services.common import sign_record_id
@@ -292,6 +294,14 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("declaración de asegurabilidad", serialized)
         self.assertNotIn("historia clínica", serialized)
 
+    def test_current_individual_form_uses_structured_name_fields_without_duplicate_full_name(self):
+        schema = get_branch_schema("salud")
+        context = unsign_policy_context(self.context_token())
+        form = IndividualQuotationForm(schema=schema, context=context)
+        self.assertIn("first_name", form.fields)
+        self.assertIn("last_name", form.fields)
+        self.assertNotIn("requester_name", form.fields)
+
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     @patch("cotizacion_colectivos.zoho.get_zoho")
     def test_health_multiple_people_submit_encrypted_notifies_and_never_calls_zoho(self, get_zoho, workspace):
@@ -369,6 +379,139 @@ class IndividualQuotationTests(TestCase):
             self.assertEqual(resolve_accepted_person(quotation=quotation)["status"], "not_found")
             service.return_value.search.return_value = (SimpleNamespace(full_name="A", masked_document="•••001", detail_token="a"), SimpleNamespace(full_name="B", masked_document="•••002", detail_token="b"))
             self.assertEqual(resolve_accepted_person(quotation=quotation)["status"], "ambiguous")
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_structured_requester_fields_reach_person_contract_without_false_missing(self, service):
+        schema = get_branch_schema("salud")
+        context = unsign_policy_context(self.context_token())
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2",
+                "requester_id_type": "CC", "requester_document": "11111111",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "collective_context": "Colectiva Demo", "normalized_items": {"people": []},
+                "attachments": [],
+            },
+            actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        result = resolve_accepted_person(quotation=quotation)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(result["missing_fields"], ())
+        self.assertTrue(result["has_complete_data"])
+
+    @patch("cotizacion_colectivos.services.individual_quotations.publish_task_outbox")
+    def test_complete_responsible_schedules_quote_task_once(self, publish):
+        schema = get_branch_schema("salud")
+        context = unsign_policy_context(self.context_token())
+        context.update({
+            "task_responsible": "Sara Rua Vargas",
+            "task_responsible_display": "Sara Rua Vargas",
+            "task_responsible_email": "sara@example.test",
+            "task_area": "Negocios Bienestar y Beneficios",
+        })
+        with self.captureOnCommitCallbacks(execute=True):
+            quotation = create_individual_quotation(
+                schema=schema,
+                cleaned_data={"first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC", "requester_document": "11111111", "normalized_items": {"people": []}, "attachments": []},
+                actor=self.actor, context=context,
+            )
+        publish.assert_called_once_with(quotation.task_outbox.get().pk)
+
+    def _pending_responsible_quotation(self):
+        schema = get_branch_schema("salud")
+        context = unsign_policy_context(self.context_token())
+        return create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Persona", "last_name": "Pendiente",
+                "requester_id_type": "CC", "requester_document": "11111111",
+                "normalized_items": {"people": []}, "attachments": [],
+            },
+            actor=self.actor, context=context,
+        )
+
+    def test_responsible_correction_reuses_outbox_and_publishes_once(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", return_value="ana@example.test"
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value},
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_called_once_with(outbox.pk)
+        self.assertEqual(CotizacionIndividual.objects.get(pk=quotation.pk).task_outbox.get().pk, outbox.pk)
+        self.assertEqual(CotizacionIndividual.objects.get(pk=quotation.pk).task_outbox.count(), 1)
+        outbox.refresh_from_db()
+        self.assertEqual(outbox.status, outbox.Status.PENDING)
+        self.assertEqual(outbox.safe_error_code, "")
+        self.assertEqual(json.loads(decrypt(outbox.encrypted_payload))["Correo_responsable"], "ana@example.test")
+
+    def test_responsible_without_email_keeps_outbox_blocked_without_publish(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        option = SimpleNamespace(actual_value="Sin Correo", display_value="Sin Correo")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", side_effect=ValidationError("sin correo")
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value},
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_not_called()
+        outbox.refresh_from_db()
+        self.assertEqual(outbox.status, outbox.Status.PENDING)
+        self.assertEqual(outbox.safe_error_code, "RESPONSIBLE_EMAIL_PENDING")
+
+    def test_published_outbox_is_not_republished_when_responsible_changes(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        outbox.status = outbox.Status.PUBLISHED
+        outbox.save(update_fields=("status",))
+        option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", return_value="ana@example.test"
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value},
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_not_called()
+
+    def test_unrelated_blocked_outbox_is_not_retried_by_responsible_change(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        outbox.status = outbox.Status.BLOCKED
+        outbox.safe_error_code = "AUTHENTICATION"
+        outbox.save(update_fields=("status", "safe_error_code"))
+        option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", return_value="ana@example.test"
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value},
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_not_called()
+        outbox.refresh_from_db()
+        self.assertEqual(outbox.status, outbox.Status.BLOCKED)
+        self.assertEqual(outbox.safe_error_code, "AUTHENTICATION")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_mobility_accepts_multiple_vehicles_and_encrypted_attachment(self, workspace):

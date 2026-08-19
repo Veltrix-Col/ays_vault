@@ -30,6 +30,18 @@ CONTACT_REQUIRED = frozenset({"Last_Name", "Tipo_de_persona", "Tipo_ID", "N_mero
 PERSON_STATUS = {"FOUND", "NOT_FOUND", "AMBIGUOUS", "TYPE_MISMATCH", "INVALID_INPUT"}
 
 
+def contact_missing_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Return the real allowlist fields still needed, without name heuristics."""
+    missing = []
+    if not str(data.get("Last_Name") or "").strip():
+        missing.append("Apellidos")
+    if not str(data.get("Tipo_ID") or "").strip():
+        missing.append("Tipo de identificación")
+    if not str(data.get("N_mero_de_ID") or "").strip():
+        missing.append("Número de identificación")
+    return tuple(missing)
+
+
 def _fold(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     return "".join(char for char in text if not unicodedata.combining(char)).strip().casefold()

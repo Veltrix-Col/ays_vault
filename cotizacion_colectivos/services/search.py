@@ -90,10 +90,15 @@ class _BaseSearchService:
             logger.warning(
                 "colectivos_search_api application=cotizacion_colectivos "
                 "entity=%s operation=search_api duration_ms=%d results=0 "
-                "error=%s profile=%s",
+                "error=%s status_code=%s zoho_code=%s sdk_exception_class=%s "
+                "request_sent=%s profile=%s",
                 self.entity_kind,
                 round((time.monotonic() - started) * 1000),
                 exc.category,
+                getattr(exc, "status_code", None),
+                getattr(exc, "zoho_code", None),
+                getattr(exc, "sdk_exception_class", None),
+                getattr(exc, "request_sent", None),
                 self.profile,
             )
             raise

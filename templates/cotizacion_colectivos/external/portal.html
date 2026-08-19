@@ -81,7 +81,8 @@
     <input type="hidden" name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}" value="Asegurado">
     <label>Tipo de identificación<select name="{% if section.policy %}include_{{ section.policy.pk }}_tipo_id{% else %}include_tipo_id{% endif %}"><option value="">Seleccione</option>{% for choice in contact_id_types %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
     <label>Documento<input name="{% if section.policy %}include_{{ section.policy.pk }}_documento{% else %}include_documento{% endif %}" inputmode="numeric" maxlength="30"></label>
-    <label>Nombre completo<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombre{% else %}include_nombre{% endif %}" maxlength="180"></label>
+    <label>Nombres<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombres{% else %}include_nombres{% endif %}" maxlength="120"></label>
+    <label>Apellidos<input name="{% if section.policy %}include_{{ section.policy.pk }}_apellidos{% else %}include_apellidos{% endif %}" maxlength="120"></label>
     <label>Fecha de nacimiento<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_nacimiento{% else %}include_fecha_nacimiento{% endif %}"></label>
     <label>Fecha solicitada de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}" required></label>
     <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>

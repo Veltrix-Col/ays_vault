@@ -24,7 +24,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 from django.template.loader import render_to_string
 
-from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
+from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from .excel import build_current_policy_workbook
@@ -64,6 +64,7 @@ from .services.individual_quotations import (
     build_policy_context,
     accept_individual_quotation,
     resolve_accepted_person,
+    update_quotation_responsible,
 )
 from .services.individual_access import generate_individual_access
 from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
@@ -90,6 +91,8 @@ def _transition_permission(target):
 
 
 RESPONSE_FIELD_LABELS = {
+    "nombres": "Nombres",
+    "apellidos": "Apellidos",
     "tipo_id": "Tipo de identificación",
     "documento": "Número de identificación",
     "nombre": "Nombre completo",
@@ -1041,8 +1044,20 @@ def policy_individual_access(request, token):
         email_form.fields["responsible"].choices = choices
         if not email_form.is_valid():
             raise ValidationError("Seleccione un responsable y un correo válido para proteger el acceso con OTP.")
-        responsible = next(item for item in responsible_options if item.actual_value == email_form.cleaned_data["responsible"])
-        responsible_email = resolve_task_responsible_email(responsible)
+        responsible_value = str(email_form.cleaned_data.get("responsible") or "").strip()
+        responsible = next(
+            (item for item in responsible_options if item.actual_value == responsible_value),
+            None,
+        )
+        responsible_email = ""
+        responsible_error = ""
+        if responsible is not None:
+            try:
+                responsible_email = resolve_task_responsible_email(responsible)
+            except ValidationError as exc:
+                # El correo del responsable es un dato interno de la Task; no
+                # puede impedir que el cliente reciba su enlace/OTP.
+                responsible_error = str(exc)
         schema, _context_token, payload = build_policy_context(
             policy_token=token,
             detail=detail,
@@ -1051,8 +1066,8 @@ def policy_individual_access(request, token):
             creator_id=actor.pk,
         )
         payload.update({
-            "task_responsible": responsible.actual_value,
-            "task_responsible_display": responsible.display_value,
+            "task_responsible": responsible.actual_value if responsible else "",
+            "task_responsible_display": responsible.display_value if responsible else "",
             "task_responsible_email": responsible_email,
             "task_area": "Negocios Bienestar y Beneficios",
         })
@@ -1075,6 +1090,7 @@ def policy_individual_access(request, token):
                 extra_context={
                     "individual_access_error": str(getattr(exc, "message", exc)),
                     "task_responsibles": locals().get("responsible_options", ()),
+                    "responsible_warning": locals().get("responsible_error", ""),
                 },
             )
         return render(request, "cotizacion_colectivos/detail_error.html", {
@@ -1106,6 +1122,7 @@ def policy_individual_access(request, token):
                 (item for item in options if item.key == affiliate_key), None,
             ),
             "individual_generated_for_new_person": not affiliate_key,
+            "responsible_warning": responsible_error,
         },
     )
 
@@ -1714,12 +1731,18 @@ def request_list(request):
             individual_entries.append(access)
             operational_entries.append(access)
 
-    operational_entries.sort(key=lambda item: (
-        0 if item.inbox_requires_attention else 1,
-        -item.inbox_last_activity.timestamp(),
-        item.inbox_kind,
-        -item.pk,
-    ))
+    sort_mode = str(request.GET.get("sort") or "recent").strip().lower()
+    if sort_mode == "oldest":
+        operational_entries.sort(key=lambda item: (item.inbox_last_activity.timestamp(), item.pk))
+    elif sort_mode == "attention":
+        operational_entries.sort(key=lambda item: (
+            0 if item.inbox_requires_attention else 1,
+            -item.inbox_last_activity.timestamp(), item.pk,
+        ))
+    else:
+        # La bandeja es cronológica por defecto; la prioridad de gestión se
+        # expresa en estado/acento, no reordena silenciosamente la actividad.
+        operational_entries.sort(key=lambda item: (-item.inbox_last_activity.timestamp(), -item.pk))
     page = Paginator(operational_entries, 25).get_page(request.GET.get("page"))
     query = request.GET.copy()
     query.pop("page", None)
@@ -1730,6 +1753,7 @@ def request_list(request):
             "form": form,
             "page": page,
             "filter_query": query.urlencode(),
+            "sort_mode": sort_mode,
             "unread_count": len(unread_request_ids) + sum(
                 1 for item in individual_entries if item.has_unread_response
             ),
@@ -2396,6 +2420,11 @@ def individual_create_person(request, token):
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
         payload = json.loads(decrypt(quotation.encrypted_payload))
         fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        corrections = (quotation.safe_metadata or {}).get("person_corrections", {})
+        document_hint = str(request.POST.get("document") or fields.get("requester_document") or fields.get("documento") or fields.get("document") or "").strip()
+        correction = corrections.get(document_hint, {}) if isinstance(corrections, dict) else {}
+        if isinstance(correction, dict):
+            fields = {**fields, **correction}
         first_name = str(fields.get("First_Name") or fields.get("first_name") or "").strip()
         last_name = str(fields.get("Last_Name") or fields.get("last_name") or "").strip()
         data = {
@@ -2425,6 +2454,138 @@ def individual_create_person(request, token):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def individual_complete_person(request, token):
+    """Store operational person corrections separately from the client response."""
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        form = PersonCompletionForm(request.POST)
+        if not form.is_valid():
+            for error in form.errors.values():
+                messages.warning(request, " ".join(str(item) for item in error))
+            return redirect("cotizacion_colectivos:individual_expedient", token=token)
+        data = form.cleaned_data
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        document = str(data.get("document") or fields.get("requester_document") or "").strip()
+        if not document:
+            messages.warning(request, "Indique el número de identificación para guardar los datos.")
+            return redirect("cotizacion_colectivos:individual_expedient", token=token)
+        metadata = dict(quotation.safe_metadata or {})
+        corrections = dict(metadata.get("person_corrections") or {})
+        corrections[document] = {
+            "label": "Persona completada por analista",
+            "First_Name": str(data.get("first_name") or "").strip(),
+            "Last_Name": str(data.get("last_name") or "").strip(),
+            "Tipo_ID": str(data.get("id_type") or "").strip(),
+            "N_mero_de_ID": document,
+            "Email": str(data.get("email") or "").strip(),
+            "Mobile": str(data.get("mobile") or "").strip(),
+            "Phone": str(data.get("phone") or "").strip(),
+            "Date_of_Birth": data.get("birth_date").isoformat() if data.get("birth_date") else "",
+            **({"Tratamiento_de_datos": data["consent"]} if data.get("consent") in {"Si", "No"} else {}),
+            "updated_at": timezone.now().isoformat(),
+            "updated_by": int(get_internal_actor(request, create=True).pk),
+        }
+        metadata["person_corrections"] = corrections
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
+        resolve_accepted_person(quotation=quotation)
+        messages.success(request, "Datos de la persona guardados; se volvió a validar en Zoho.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
+        raise Http404("Respuesta no encontrada")
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_update_responsible(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        options = task_responsible_options()
+        option = next((item for item in options if item.actual_value == str(request.POST.get("responsible") or "").strip()), None)
+        if option is None:
+            raise ValidationError("Seleccione un responsable válido.")
+        try:
+            email = resolve_task_responsible_email(option)
+        except ValidationError:
+            # El correo del responsable es necesario para publicar la Task,
+            # pero no debe impedir corregir/guardar el responsable desde el
+            # expediente. El bloqueo queda explícito en el outbox.
+            email = ""
+        update_quotation_responsible(quotation=quotation, option=option, email=email)
+        outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
+        publish_scheduled = False
+        publish_result = "none"
+        if email and outbox is not None and outbox.status == outbox.Status.PENDING:
+            publish_scheduled = True
+            publish_task_outbox(outbox.pk)
+            outbox.refresh_from_db()
+            if outbox.status == outbox.Status.PUBLISHED:
+                publish_result = "published"
+            elif outbox.status == outbox.Status.RECONCILE:
+                publish_result = "reconcile"
+            elif outbox.status == outbox.Status.BLOCKED:
+                publish_result = "blocked"
+            else:
+                publish_result = "none"
+        elif outbox is not None and outbox.status == outbox.Status.RECONCILE:
+            publish_result = "reconcile"
+        elif outbox is not None and outbox.status == outbox.Status.PUBLISHED:
+            publish_result = "published"
+        elif outbox is not None and outbox.status == outbox.Status.BLOCKED:
+            publish_result = "blocked"
+        logger.info(
+            "individual_responsible_publish quotation_id=%s outbox_existing=%s responsible_resolved=%s email_resolved=%s publish_scheduled=%s publish_result=%s",
+            str(quotation.public_id), bool(outbox), bool(getattr(option, "actual_value", "")), bool(email), publish_scheduled, publish_result,
+        )
+        if publish_result == "published":
+            messages.success(request, "Responsable actualizado y Task publicada correctamente.")
+        elif not email:
+            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Task.")
+        elif publish_result == "reconcile":
+            messages.warning(request, "Responsable actualizado; la Task requiere conciliación y no se reintentará automáticamente.")
+        elif publish_result == "blocked":
+            messages.warning(request, "Responsable actualizado; la Task permanece bloqueada por una causa operativa previa.")
+        else:
+            messages.success(request, "Responsable actualizado; la Task quedó lista para publicación controlada.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_publish_task(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
+        if outbox is None:
+            messages.warning(request, "Todavía no existe una intención de Task para publicar.")
+        else:
+            publish_task_outbox(outbox.pk)
+            outbox.refresh_from_db()
+            if outbox.status == outbox.Status.PUBLISHED:
+                messages.success(request, "Task publicada correctamente.")
+            elif outbox.status == outbox.Status.RECONCILE:
+                messages.warning(request, "La publicación quedó en conciliación; no se reintentará automáticamente.")
+            else:
+                messages.warning(request, "La Task no pudo publicarse; revise el estado operativo.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
     if not has_internal_permission(request, "view_individual_quotation"):
@@ -2439,6 +2600,9 @@ def individual_expedient(request, token):
         raise Http404("Respuesta no encontrada") from exc
     schema = get_branch_schema(quotation.branch_slug)
     field_labels = {item.key: item.label for item in schema.fields}
+    # Sólo aparece al leer respuestas históricas; el formulario nuevo ya no
+    # lo ofrece porque usa Nombres y Apellidos separados.
+    field_labels.setdefault("requester_name", "Nombre del solicitante")
     field_labels["declared_company"] = "Empresa a la cual pertenece"
     group_schemas = {item.key: item for item in schema.repeatables}
     display_fields = tuple(
@@ -2470,15 +2634,23 @@ def individual_expedient(request, token):
     safe_metadata = quotation.safe_metadata or {}
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
-    if person_lookup.get("status") == "not_found":
-        person_lookup = dict(person_lookup)
-        fields_payload = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
-        person_lookup["has_complete_data"] = bool(
-            (fields_payload.get("First_Name") or fields_payload.get("first_name"))
-            and (fields_payload.get("Last_Name") or fields_payload.get("last_name"))
-            and (fields_payload.get("Tipo_ID") or fields_payload.get("tipo_id"))
-            and (fields_payload.get("N_mero_de_ID") or fields_payload.get("documento"))
-        )
+    people_lookup = [dict(item) for item in (safe_metadata.get("people_lookup") or ()) if isinstance(item, dict)]
+    if not people_lookup and person_lookup:
+        people_lookup = [dict(person_lookup)]
+    corrections = safe_metadata.get("person_corrections") if isinstance(safe_metadata.get("person_corrections"), dict) else {}
+    for person in people_lookup:
+        if person.get("status") == "not_found":
+            correction = corrections.get(str(person.get("document") or ""), {})
+            person.setdefault("missing_fields", tuple())
+            if isinstance(correction, dict):
+                missing = []
+                if not str(correction.get("Last_Name") or "").strip(): missing.append("Apellidos")
+                if not str(correction.get("Tipo_ID") or "").strip(): missing.append("Tipo de identificación")
+                if not str(correction.get("N_mero_de_ID") or person.get("document") or "").strip(): missing.append("Número de identificación")
+                person["missing_fields"] = tuple(missing)
+            person["has_complete_data"] = not person.get("missing_fields")
+    if people_lookup:
+        person_lookup = people_lookup[0]
     access = quotation.external_access
     try:
         recipient = decrypt(access.encrypted_recipient)
@@ -2486,6 +2658,12 @@ def individual_expedient(request, token):
         recipient = "No disponible"
     outboxes = tuple(quotation.task_outbox.all())
     latest_outbox = max(outboxes, key=lambda row: (row.updated_at, row.pk)) if outboxes else None
+    task_responsibles = ()
+    if latest_outbox and not (context.get("task_responsible") or safe_metadata.get("task_responsible")):
+        try:
+            task_responsibles = task_responsible_options()
+        except Exception:
+            task_responsibles = ()
     remote_task_id = ""
     if latest_outbox and latest_outbox.encrypted_remote_id:
         try:
@@ -2509,6 +2687,8 @@ def individual_expedient(request, token):
         "schema": schema,
         "access": access,
         "individual_context": context,
+        "task_responsible_display": str(safe_metadata.get("task_responsible_display") or ""),
+        "task_responsible_email": str(safe_metadata.get("task_responsible_email") or ""),
         "recipient": recipient,
         "declared_company": payload.get("fields", {}).get("declared_company", ""),
         "display_fields": display_fields,
@@ -2518,6 +2698,8 @@ def individual_expedient(request, token):
         "history": tuple(history),
         "acceptance": acceptance,
         "person_lookup": person_lookup,
+        "people_lookup": tuple(people_lookup),
+        "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,
         "policy_creation_blocked": True,

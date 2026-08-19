@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
+from integrations.zoho.exceptions import ZohoSDKError
 
 from cotizacion_colectivos.services.person_contract import (
     ContactsDryRunPublisher,
@@ -12,6 +13,30 @@ from cotizacion_colectivos.services.person_contract import (
 
 
 class PersonContractTests(SimpleTestCase):
+    def test_contact_command_diagnostic_is_sanitized_and_allowlisted(self):
+        from cotizacion_colectivos.management.commands.zoho_create_test_contact import _safe_contact_diagnostic
+
+        diagnostic = _safe_contact_diagnostic(ZohoSDKError(
+            "access-token-secret refresh-token-secret person@example.test 123456789",
+            status_code=401, detail_keys=("api_name", "Email"), detail_field="Email",
+            detail_accepted_type="str", detail_given_type="str", detail_class="Record",
+            detail_index=0, backend="sdk", operation="records.create", module="Contacts",
+            sdk_exception_class="SDKException", sdk_code="AUTHENTICATION_ERROR",
+            zoho_code="INVALID_TOKEN", zoho_status="error", request_sent=None,
+        ))
+        self.assertIn("category=sdk", diagnostic)
+        self.assertIn("module=Contacts", diagnostic)
+        self.assertNotIn("access-token-secret", diagnostic)
+        self.assertNotIn("refresh-token-secret", diagnostic)
+        self.assertNotIn("person@example.test", diagnostic)
+        self.assertNotIn("123456789", diagnostic)
+
+    def test_contact_command_diagnostic_uses_unknown_for_unavailable_values(self):
+        from cotizacion_colectivos.management.commands.zoho_create_test_contact import _safe_contact_diagnostic
+
+        diagnostic = _safe_contact_diagnostic(ZohoSDKError("secret"))
+        self.assertIn("status_code=unknown", diagnostic)
+        self.assertIn("request_sent=unknown", diagnostic)
     def test_payload_allowlist_requires_last_name_and_excludes_full_name_and_group(self):
         payload = build_contact_payload({
             "First_Name": "Ana", "Last_Name": "Pérez", "Tipo_ID": "CC",

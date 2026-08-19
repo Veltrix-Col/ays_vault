@@ -21,6 +21,7 @@ from cotizacion_colectivos.models import (
     AccesoExternoSolicitudColectivo,
     AdjuntoSolicitudColectivo,
     CambioSolicitudColectivo,
+    ColectivosTaskOutbox,
     RespuestaSolicitudColectivo,
     RevisionSolicitudColectivo,
     SolicitudColectivo,
@@ -182,16 +183,24 @@ class ExternalWorkflowTests(TestCase):
             reverse("colectivos_external:submit"),
             {"declaration": "on", "client_observations": ""},
         )
-        self.assertEqual(response.status_code, 200)
-        submitted = self.request.responses.get()
-        self.assertEqual(submitted.status, submitted.Status.SUBMITTED)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("No hay cambios preparados para enviar.", response.content.decode())
+        self.assertFalse(self.request.responses.exists())
+        self.assertFalse(ColectivosTaskOutbox.objects.exists())
         self.request.refresh_from_db()
-        self.assertEqual(self.request.status, self.request.Status.ANSWERED)
-        notification = NotificacionColectivos.objects.get(
-            notification_type="CLIENT_RESPONSE"
+        self.assertNotEqual(self.request.status, self.request.Status.ANSWERED)
+        self.assertFalse(NotificacionColectivos.objects.filter(notification_type="CLIENT_RESPONSE").exists())
+
+    @patch("cotizacion_colectivos.services.external._send_submission_receipt")
+    def test_valid_novelty_submit_never_sends_automatic_response_receipt(self, receipt):
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{"record": str(self.record.public_key), "action": "RETIRAR", "fecha_retiro": "2026-09-01"}],
+            observations="",
         )
-        self.assertEqual(notification.title, "Novedad recibida")
-        self.assertNotIn("revisión interna", notification.message.lower())
+        submit_response(access=access, response=response, declaration=True)
+        receipt.assert_not_called()
 
     def test_otp_endpoint_rejects_an_unissued_code(self):
         generated = self.access()
@@ -576,7 +585,8 @@ class ExternalWorkflowTests(TestCase):
                 "action": "INCLUIR",
                 "tipo_id": "CC",
                 "documento": "12345678",
-                "nombre": "Persona de prueba",
+                "nombres": "Persona",
+                "apellidos": "de prueba",
                 "rol": "Asegurado",
                 "fecha_nacimiento": "1990-01-01",
                 "fecha_ingreso": "2026-09-01",

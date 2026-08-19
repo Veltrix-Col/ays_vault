@@ -103,6 +103,13 @@ class IndividualQuotationForm(forms.Form):
                 )
             except forms.ValidationError as exc:
                 self.add_error(definition.key, exc)
+        # Una persona nueva no puede llegar a Contacts sin identidad
+        # estructurada.  Contextos antiguos con un afiliado ya identificado
+        # pueden seguir siendo leídos aunque no tengan estos campos nuevos.
+        if not self.context.get("affiliate_key"):
+            for key, label in (("first_name", "Nombres"), ("last_name", "Apellidos")):
+                if key in self.fields and not str(cleaned.get(key) or "").strip():
+                    self.add_error(key, f"{label}: este campo es obligatorio para una persona nueva.")
         try:
             raw_groups = json.loads(cleaned.get("items_payload") or "{}")
         except (TypeError, json.JSONDecodeError):

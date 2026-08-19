@@ -7,7 +7,7 @@
 </header>
 
 <section class="search-panel operational-filters" aria-labelledby="inbox-filter-title">
-  <form method="get">
+  <form method="get" id="inbox-sort-form">
     <div class="operational-filter-primary">
       <p><label for="{{ form.query.id_for_label }}">Buscar</label>{{ form.query }}<small>Cliente, póliza completa, persona, ramo o código interno.</small></p>
       <p><label for="{{ form.status.id_for_label }}">Estado</label>{{ form.status }}</p>
@@ -33,7 +33,7 @@
 </section>
 
 <section class="operational-inbox" aria-labelledby="requests-title">
-  <div class="section-heading"><div><span class="eyebrow">Actividad operacional</span><h2 id="requests-title">Expedientes</h2></div><span>{{ page.paginator.count }}</span></div>
+  <div class="section-heading"><div><span class="eyebrow">Actividad operacional</span><h2 id="requests-title">Expedientes</h2></div><label class="inbox-sort">Ordenar <select name="sort" onchange="this.form.submit()" form="inbox-sort-form"><option value="recent"{% if sort_mode == "recent" %} selected{% endif %}>Más recientes</option><option value="oldest"{% if sort_mode == "oldest" %} selected{% endif %}>Más antiguos</option><option value="attention"{% if sort_mode == "attention" %} selected{% endif %}>Requiere gestión primero</option></select></label><span>{{ page.paginator.count }}</span></div>
   <div class="operational-request-list">
   {% for item in page %}
     <article class="operational-request-card operational-request-card--{{ item.inbox_status_tone }}{% if item.has_unread_response %} operational-request-card--unread{% endif %}" data-inbox-kind="{{ item.inbox_kind }}">

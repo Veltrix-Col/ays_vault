@@ -494,7 +494,7 @@ def _posted_rows(request, request_obj):
         "plan", "parentesco", "fecha_nacimiento", "fecha_efectiva", "fecha_ingreso",
         "fecha_retiro", "motivo", "observaciones", "ciudad", "direccion",
         "tipo_uso", "anio_construccion", "descripcion", "valor_asegurado",
-        "vehiculo", "placa", "marca", "modelo", "estado",
+        "vehiculo", "placa", "marca", "modelo", "estado", "nombres", "apellidos",
     )
     rows = []
     functional_keys = tuple(
@@ -561,14 +561,11 @@ def submit(request):
         if not form.is_valid():
             raise ExternalAccessError("La respuesta no está lista para enviar.")
         if response is None:
-            response = save_response(
-                access=access,
-                rows=[],
-                observations=request.POST.get("client_observations", ""),
-            )
+            raise ExternalAccessError("No hay cambios preparados para enviar.")
         submit_response(access=access, response=response, declaration=form.cleaned_data["declaration"])
-    except ExternalAccessError:
-        return HttpResponse("La respuesta no está lista para enviar.", status=400)
+    except ExternalAccessError as exc:
+        message = str(exc.messages[0] if exc.messages else "La respuesta no está lista para enviar.")
+        return HttpResponse(message, status=400)
     return _clear_external_cookie(render(request, "cotizacion_colectivos/external/submitted.html", {"public_id": access.request.public_id}))
 
 

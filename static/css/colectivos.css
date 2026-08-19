@@ -160,6 +160,7 @@
   .detail-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-grid { grid-template-columns: 1fr; }
 }
+.inbox-sort{display:flex;align-items:center;gap:8px;color:#53627a;font-size:.82rem;font-weight:700}.inbox-sort select{min-height:36px;padding:6px 9px;border:1px solid #cbd4e0;border-radius:9px;background:#fff;color:#26364d;font:inherit}
 @media (max-width: 380px) {
   .colectivos-brand img { height: 34px; }
   .colectivos-header { padding-inline: 12px; }
