@@ -33,6 +33,7 @@ from cotizacion_colectivos.services.individual_quotations import (
     create_individual_quotation,
     resolve_accepted_person,
 )
+from cotizacion_colectivos.services.individual_quotations import _individual_task_observations
 from cotizacion_colectivos.services.person_contract import build_contact_payload
 from cotizacion_colectivos.services.common import sign_record_id
 
@@ -466,6 +467,19 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(result["status"], "not_found")
         self.assertEqual(result["missing_fields"], ())
         self.assertTrue(result["has_complete_data"])
+
+    def test_task_observations_are_humanized_in_spanish(self):
+        text = _individual_task_observations(
+            {"branch_name": "Movilidad colectivo", "collective_context": "Fonconstruimos"},
+            {"first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC", "requester_document": "123456"},
+            {"vehicles": [{"zero_km": "Sí", "brand": "Prueba", "line": "La última 2", "model": "2026", "currently_insured": "No"}]},
+        )
+        self.assertIn("Solicitante:", text)
+        self.assertIn("Vehículo 1:", text)
+        self.assertIn("Cero kilómetros: Sí", text)
+        self.assertIn("Referencia: La última 2", text)
+        self.assertNotIn("requester_id_type", text)
+        self.assertNotIn("zero_km", text)
 
     @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
     def test_mobility_uses_requester_as_primary_and_does_not_let_vehicle_overwrite_it(self, service):

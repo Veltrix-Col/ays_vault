@@ -73,6 +73,7 @@ from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
     contact_missing_fields, get_contacts_publisher,
 )
+from integrations.zoho.exceptions import ZohoError
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
 
@@ -2454,7 +2455,11 @@ def individual_create_person(request, token):
         messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
-    except (ContactPublicationUncertain, ContactPublishingDisabled, ContactPublicationRejected, ValidationError) as exc:
+    except ContactPublicationUncertain:
+        messages.warning(request, "El resultado de la creación no pudo confirmarse. Requiere conciliación.")
+    except ZohoError:
+        messages.warning(request, "Zoho no pudo crear la persona. Revise los datos o intente nuevamente.")
+    except (ContactPublishingDisabled, ContactPublicationRejected, ValidationError) as exc:
         messages.warning(request, str(exc))
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 

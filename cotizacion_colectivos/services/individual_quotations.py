@@ -317,28 +317,42 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
 
 
 def _individual_task_observations(context, fields, groups) -> str:
-    lines = [f"Solicitud de cotización individual - {context.get('branch_name') or 'ramo no informado'}." ]
-    for key, label in (("nombre", "Asegurado"), ("documento", "Documento"), ("declared_company", "Empresa")):
-        value = str(fields.get(key) or context.get(key) or "").strip()
+    branch = str(context.get("branch_name") or "ramo no informado").replace("/ Autos", "")
+    lines = ["Solicitud de cotización individual", f"Ramo: {branch}"]
+    collective = str(fields.get("collective_context") or context.get("collective_context") or "").strip()
+    if collective:
+        lines.append(f"Colectiva: {collective}")
+    first = str(fields.get("first_name") or "").strip()
+    last = str(fields.get("last_name") or "").strip()
+    if first or last:
+        lines.extend(("", "Solicitante:", f"Nombre: {' '.join(filter(None, (first, last)))}"))
+    for key, label in (("requester_id_type", "Tipo de identificación"), ("requester_document", "Documento"),
+                       ("requester_birth_date", "Fecha de nacimiento"), ("requester_email", "Correo"),
+                       ("requester_phone", "Teléfono")):
+        value = str(fields.get(key) or "").strip()
         if value:
             lines.append(f"{label}: {value}")
     labels = {
-        "plate": "Placa", "placa": "Placa", "brand": "Marca", "line": "Referencia",
-        "model": "Modelo", "city": "Ciudad", "name": "Asegurado", "document": "Documento",
-        "insured_name": "Asegurado", "insured_document": "Documento",
+        "zero_km": "Cero kilómetros", "plate": "Placa", "placa": "Placa", "brand": "Marca",
+        "line": "Referencia", "model": "Modelo", "city": "Ciudad", "use": "Uso",
+        "armored": "Blindado", "currently_insured": "Actualmente asegurado", "insured_name": "Asegurado",
+        "insured_id_type": "Tipo de identificación del asegurado", "insured_document": "Documento del asegurado",
+        "insured_is_different": "Asegurado diferente", "displacement": "Cilindraje", "name": "Nombre",
+        "document": "Documento", "gender": "Género", "relationship": "Parentesco o relación",
+        "employment_relationship": "Vínculo con el fondo", "currently_health_insured": "Cobertura de salud vigente",
+        "current_health_insurer": "Aseguradora actual", "current_health_policy_end": "Fin de cobertura actual",
+        "plan_interest": "Plan o interés", "use_requester": "Usa datos del solicitante",
     }
     technical = {"public_id", "token", "otp", "hash", "id", "source_id", "creator_id"}
-    for rows in groups.values() if isinstance(groups, dict) else ():
-        for row in rows if isinstance(rows, list) else ():
+    group_labels = {"vehicles": "Vehículo", "people": "Persona", "insured": "Persona"}
+    for group_key, rows in groups.items() if isinstance(groups, dict) else ():
+        for index, row in enumerate(rows if isinstance(rows, list) else (), 1):
             if not isinstance(row, dict):
                 continue
-            values = " · ".join(
-                f"{labels.get(key, key.replace('_', ' ').capitalize())}: {value}"
-                for key, value in row.items()
-                if key not in technical and str(value or "").strip()
-            )
-            if values:
-                lines.append(values)
+            lines.extend(("", f"{group_labels.get(group_key, 'Elemento')} {index}:"))
+            for key, value in row.items():
+                if key not in technical and str(value or "").strip():
+                    lines.append(f"{labels.get(key, key)}: {value}")
     return "\n".join(lines)[:2000]
 
 
