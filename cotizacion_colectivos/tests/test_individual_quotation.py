@@ -481,6 +481,29 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("requester_id_type", text)
         self.assertNotIn("zero_km", text)
 
+    def test_health_task_observations_map_all_person_fields_to_spanish(self):
+        text = _individual_task_observations(
+            {"branch_name": "Salud colectivo", "collective_context": "Colectiva Demo"},
+            {"first_name": "P", "last_name": "Uno", "requester_id_type": "CC", "requester_document": "11111111111"},
+            {"people": [
+                {"use_requester": "Sí", "first_name": "P Uno", "last_name": "Uno", "id_type": "CC",
+                 "document": "11111111111", "birth_date": "2011-06-08", "email": "uno@example.test",
+                 "phone": "3000000000", "gender": "Masculino", "employment_relationship": "Empleado",
+                 "relationship": "Parcero", "currently_health_insured": "No", "plan_interest": "Básico"},
+                {"use_requester": "No", "first_name": "P Dos", "last_name": "Dos", "id_type": "CC",
+                 "document": "2222222222", "birth_date": "2011-06-08", "email": "dos@example.test",
+                 "phone": "3110000000", "gender": "Masculino", "employment_relationship": "Grupo familiar",
+                 "relationship": "Parcero", "currently_health_insured": "Sí", "current_health_insurer": "Sura",
+                 "current_health_policy_end": "2026-08-31", "plan_interest": "Básico"},
+            ]},
+        )
+        for label in ("Nombres", "Apellidos", "Tipo de identificación", "Fecha de nacimiento", "Correo electrónico", "Teléfono"):
+            self.assertIn(label + ":", text)
+        for technical in ("first_name:", "last_name:", "id_type:", "birth_date:", "email:", "phone:",
+                          "use_requester:", "currently_health_insured:", "employment_relationship:",
+                          "relationship:", "plan_interest:"):
+            self.assertNotIn(technical, text)
+
     @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
     def test_mobility_uses_requester_as_primary_and_does_not_let_vehicle_overwrite_it(self, service):
         schema = get_branch_schema("movilidad")

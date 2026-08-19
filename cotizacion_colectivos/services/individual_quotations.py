@@ -333,6 +333,8 @@ def _individual_task_observations(context, fields, groups) -> str:
         if value:
             lines.append(f"{label}: {value}")
     labels = {
+        "first_name": "Nombres", "last_name": "Apellidos", "id_type": "Tipo de identificación",
+        "birth_date": "Fecha de nacimiento", "email": "Correo electrónico", "phone": "Teléfono",
         "zero_km": "Cero kilómetros", "plate": "Placa", "placa": "Placa", "brand": "Marca",
         "line": "Referencia", "model": "Modelo", "city": "Ciudad", "use": "Uso",
         "armored": "Blindado", "currently_insured": "Actualmente asegurado", "insured_name": "Asegurado",
@@ -351,8 +353,9 @@ def _individual_task_observations(context, fields, groups) -> str:
                 continue
             lines.extend(("", f"{group_labels.get(group_key, 'Elemento')} {index}:"))
             for key, value in row.items():
-                if key not in technical and str(value or "").strip():
-                    lines.append(f"{labels.get(key, key)}: {value}")
+                label = labels.get(key)
+                if key not in technical and label and str(value or "").strip():
+                    lines.append(f"{label}: {value}")
     return "\n".join(lines)[:2000]
 
 
