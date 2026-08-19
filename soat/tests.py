@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from email import policy
+from email.parser import BytesParser
 from io import BytesIO
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -21,6 +23,20 @@ def workbook_bytes(rows, sheet_name="Sheet0"):
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
+
+
+def multipart_files(response):
+    raw = (
+        f"Content-Type: {response['Content-Type']}\r\n"
+        "MIME-Version: 1.0\r\n\r\n"
+    ).encode() + response.content
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    return {
+        part.get_param("name", header="content-disposition"): (
+            part.get_filename(), part.get_content_type(), part.get_payload(decode=True)
+        )
+        for part in message.iter_attachments()
+    }
 
 
 HEADERS = [
@@ -73,17 +89,26 @@ class SoatPublicTests(TestCase):
         self.assertEqual(corrupt.status_code, 422)
         self.assertContains(corrupt, "Excel válido", status_code=422)
 
-    def test_valid_processing_returns_five_sheet_download_without_vault_audit(self):
+    def test_valid_processing_returns_two_workbooks_without_vault_audit(self):
         before = AuditEvent.objects.count()
         response = self.client.post(reverse("soat:upload"), {"source_file": self.upload()})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["X-Content-Type-Options"], "nosniff")
-        self.assertIn("attachment", response["Content-Disposition"])
-        workbook = load_workbook(BytesIO(response.content))
-        self.assertEqual(workbook.sheetnames, [
-            "Formato informe", "Trazabilidad", "SOAT seleccionados",
-            "Movilidad seleccionada", "Fuente Zoho",
+        self.assertTrue(response["Content-Type"].startswith("multipart/form-data;"))
+        files = multipart_files(response)
+        self.assertEqual(set(files), {"report", "support"})
+        report_name, report_type, report_content = files["report"]
+        support_name, support_type, support_content = files["support"]
+        self.assertEqual(report_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertEqual(support_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertRegex(report_name, r"^Informe_SOAT_A&S_(\d{8}_\d{6})\.xlsx$")
+        self.assertRegex(support_name, r"^Soporte_SOAT_A&S_(\d{8}_\d{6})\.xlsx$")
+        self.assertEqual(report_name.split("_")[-2:], support_name.split("_")[-2:])
+        self.assertEqual(load_workbook(BytesIO(report_content)).sheetnames, ["Formato informe"])
+        self.assertEqual(load_workbook(BytesIO(support_content)).sheetnames, [
+            "Trazabilidad", "SOAT seleccionados", "Movilidad seleccionada", "Fuente Zoho",
         ])
+        self.assertNotIn("zip", response["Content-Type"].lower())
         self.assertEqual(AuditEvent.objects.count(), before)
 
     def test_formula_values_are_neutralized(self):
@@ -92,14 +117,14 @@ class SoatPublicTests(TestCase):
             ["ABC123", "Laura", "", "Fonconstruimos", "A&S", "", "", "2030-12-31", "Activo", "Vigente", "", "SOAT-1", "", "", "", "", "SOAT", "", "+CMD()", "", "", "", "", "", "100"],
         ]]
         result = process_soat(self.upload(content=workbook_bytes(rows)))
-        workbook = load_workbook(BytesIO(result.content), data_only=False)
+        workbook = load_workbook(BytesIO(result.support_content), data_only=False)
         values = [cell.value for row in workbook["Fuente Zoho"].iter_rows() for cell in row]
         self.assertIn("'+CMD()", values)
         self.assertFalse(any(getattr(cell, "data_type", "") == "f" for row in workbook["Fuente Zoho"].iter_rows() for cell in row))
 
     def test_concurrent_processing_is_isolated(self):
         def run():
-            return process_soat(self.upload()).content
+            return process_soat(self.upload()).report_content
         with ThreadPoolExecutor(max_workers=2) as pool:
             outputs = list(pool.map(lambda _: run(), range(2)))
         self.assertEqual(len(outputs), 2)

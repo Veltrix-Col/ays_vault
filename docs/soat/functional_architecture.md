@@ -8,7 +8,7 @@
 4. Se normalizan encabezados, fechas, identificadores y placa.
 5. Las filas se separan en `Ramo (Póliza) == SOAT` y no-SOAT (Movilidad).
 6. Cada conjunto se selecciona independientemente por placa.
-7. Se construyen formato y trazabilidad, se validan y se exportan cinco hojas.
+7. Se construyen formato y trazabilidad, se validan y se exportan dos libros con las hojas separadas.
 8. El navegador recibe el XLSX; los temporales se eliminan al terminar.
 
 ## Decisiones funcionales

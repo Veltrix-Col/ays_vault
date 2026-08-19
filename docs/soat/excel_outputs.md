@@ -1,16 +1,22 @@
 # Salidas Excel de SOAT
 
-## Libro generado
+## Libros generados
 
-Nombre: `Informe_SOAT_A&S_<fecha-hora>.xlsx`.
+Los dos archivos comparten el mismo `<fecha-hora>`:
 
-Hojas:
+- `Informe_SOAT_A&S_<fecha-hora>.xlsx`
+- `Soporte_SOAT_A&S_<fecha-hora>.xlsx`
+
+### Informe principal
 
 1. `Formato informe`: resultado consolidado, una fila por placa.
-2. `Trazabilidad`: candidatos, selección y criterio.
-3. `SOAT seleccionados`: filas ganadoras SOAT.
-4. `Movilidad seleccionada`: filas ganadoras Movilidad.
-5. `Fuente Zoho`: fuente procesada normalizada.
+
+### Soporte del procesamiento
+
+1. `Trazabilidad`: candidatos, selección y criterio.
+2. `SOAT seleccionados`: filas ganadoras SOAT.
+3. `Movilidad seleccionada`: filas ganadoras Movilidad.
+4. `Fuente Zoho`: fuente procesada normalizada.
 
 ## Formato
 
@@ -22,4 +28,4 @@ Antes de exportar, textos que empiezan por `=`, `+`, `-` o `@` reciben apóstrof
 
 ## Validaciones
 
-Libro no vacío, cinco hojas esperadas, sin placas duplicadas, universo fuente/final 1:1, selección única por placa e ID/criterios coherentes. El proceso falla antes de descargar si no puede garantizar integridad.
+Ambos libros no están vacíos y contienen exactamente las hojas esperadas, sin placas duplicadas, universo fuente/final 1:1, selección única por placa e ID/criterios coherentes. El proceso falla antes de descargar si no puede garantizar integridad.

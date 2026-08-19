@@ -19,4 +19,4 @@ El proceso es determinista respecto de la fuente y reglas: repita con el archivo
 
 ## Controles de calidad
 
-Una fila por placa, cinco hojas, candidatos trazables, ID CARGA coherente, fórmula neutralizada y ausencia de hipervínculos. A&S debe aprobar los nueve criterios y la clasificación amplia de no-SOAT como Movilidad.
+Una fila por placa, dos libros de salida con hojas separadas, candidatos trazables, ID CARGA coherente, fórmula neutralizada y ausencia de hipervínculos. A&S debe aprobar los nueve criterios y la clasificación amplia de no-SOAT como Movilidad.

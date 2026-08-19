@@ -958,8 +958,13 @@ def exportar(
     soat: pd.DataFrame,
     movilidad: pd.DataFrame,
     trazabilidad: pd.DataFrame,
+    hojas: tuple[str, ...] | None = None,
 ) -> None:
     salida.parent.mkdir(parents=True, exist_ok=True)
+    hojas = hojas or (
+        "Formato informe", "Trazabilidad", "SOAT seleccionados",
+        "Movilidad seleccionada", "Fuente Zoho",
+    )
 
     criterios_por_placa = {
         str(fila["Placa"]): int(fila[COLUMNA_CRITERIO_INTERNO])
@@ -984,31 +989,15 @@ def exportar(
         salida,
         engine="openpyxl",
     ) as writer:
-        formato_exportable.to_excel(
-            writer,
-            sheet_name="Formato informe",
-            index=False,
-        )
-        trazabilidad.to_excel(
-            writer,
-            sheet_name="Trazabilidad",
-            index=False,
-        )
-        soat_exportable.to_excel(
-            writer,
-            sheet_name="SOAT seleccionados",
-            index=False,
-        )
-        movilidad_exportable.to_excel(
-            writer,
-            sheet_name="Movilidad seleccionada",
-            index=False,
-        )
-        fuente_exportable.to_excel(
-            writer,
-            sheet_name="Fuente Zoho",
-            index=False,
-        )
+        exportables = {
+            "Formato informe": formato_exportable,
+            "Trazabilidad": trazabilidad,
+            "SOAT seleccionados": soat_exportable,
+            "Movilidad seleccionada": movilidad_exportable,
+            "Fuente Zoho": fuente_exportable,
+        }
+        for hoja in hojas:
+            exportables[hoja].to_excel(writer, sheet_name=hoja, index=False)
 
     aplicar_formato_excel(
         salida,

@@ -8,7 +8,7 @@
 | ST-04 | Independencia SOAT/Movilidad | Implementado | procesador | llamadas separadas | confirmar otros ramos |
 | ST-05 | Nueve criterios de gestión | Implementado/probado | legacy processor | test de nueve criterios | nombres/prioridades por aprobar |
 | ST-06 | ID CARGA | Implementado/validado | builder/validator | validación interna | QA con casos vacíos |
-| ST-07 | Formato de cinco hojas | Implementado/probado | exportación | test de descarga | QA visual pendiente |
+| ST-07 | Dos libros con hojas separadas | Implementado/probado | exportación | test de descarga | QA visual pendiente |
 | ST-08 | Integridad 1:1 | Implementado | validadores | código de validación | dataset dorado pendiente |
 | ST-09 | Fórmulas/links saneados | Implementado/probado parcialmente | processor | test de fórmula | test explícito de links pendiente |
 | ST-10 | Temporales aislados | Implementado/probado | `TemporaryDirectory` | test concurrente | monitoreo host pendiente |

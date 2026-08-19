@@ -14,7 +14,7 @@ SOAT se despliega con la misma aplicación Django, Dockerfile, Gunicorn y WhiteN
 
 1. `python manage.py check`.
 2. GET `/soat/` devuelve 200.
-3. XLSX sintético compatible produce descarga con cinco hojas.
+3. XLSX sintético compatible produce los dos libros XLSX esperados.
 4. Archivo corrupto/macro/traversal es rechazado.
 5. No quedan archivos fuente/salida en disco temporal.
 

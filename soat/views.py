@@ -1,7 +1,8 @@
 import base64
 import json
 import logging
-from urllib.parse import quote, urlparse
+from uuid import uuid4
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.http import HttpResponse
@@ -13,6 +14,22 @@ from .forms import SoatUploadForm
 from .services import SoatProcessingError, process_soat
 
 logger = logging.getLogger(__name__)
+
+
+def _multipart_xlsx(parts: tuple[tuple[str, str, bytes], ...]) -> tuple[bytes, str]:
+    boundary = f"----ays-soat-{uuid4().hex}"
+    chunks: list[bytes] = []
+    for field, filename, content in parts:
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'.encode(),
+            b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n",
+            b"\r\n",
+            content,
+            b"\r\n",
+        ])
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks), boundary
 
 
 def _safe_zoho_url():
@@ -42,11 +59,11 @@ def upload(request):
                 "processing_error": "No fue posible procesar el archivo. Verifique su estructura e intente nuevamente.",
             }, status=500)
 
-        response = HttpResponse(
-            result.content,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        response["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(result.filename)}"
+        body, boundary = _multipart_xlsx((
+            ("report", result.report_filename, result.report_content),
+            ("support", result.support_filename, result.support_content),
+        ))
+        response = HttpResponse(body, content_type=f"multipart/form-data; boundary={boundary}")
         encoded = base64.urlsafe_b64encode(
             json.dumps(result.summary, ensure_ascii=False, separators=(",", ":")).encode()
         ).decode()

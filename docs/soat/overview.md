@@ -11,7 +11,7 @@ El módulo consolida por placa información de pólizas SOAT y Movilidad, determ
 - Selección independiente SOAT/Movilidad por placa.
 - Nueve criterios de “Gestión SOAT A&S”.
 - Elección de `ID CARGA`, columnas derivadas y trazabilidad.
-- Salida de cinco hojas con formato, filtros y fechas.
+- Salida de dos libros: informe principal y soporte, conservando formato, filtros y fechas.
 - Neutralización de fórmulas y eliminación de hipervínculos.
 - Temporales aislados; resultado devuelto en memoria.
 

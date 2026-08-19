@@ -8,7 +8,7 @@
 
 ## Objetivo, alcance y estado
 
-El módulo SOAT transforma un XLSX con estructura de reporte Zoho en un informe operativo de cinco hojas. El flujo web es público dentro del modo de acceso general configurado, no requiere CardManager/MFA y procesa archivos en un directorio temporal sin persistirlos. No consulta Zoho: el vínculo configurado es únicamente informativo.
+El módulo SOAT transforma un XLSX con estructura de reporte Zoho en un informe operativo compuesto por un libro principal y un libro de soporte. El flujo web es público dentro del modo de acceso general configurado, no requiere CardManager/MFA y procesa archivos en un directorio temporal sin persistirlos. No consulta Zoho: el vínculo configurado es únicamente informativo.
 
 Flujo: cargar `.xlsx` → validar ZIP/estructura/límites → leer hoja compatible → separar SOAT y Movilidad → seleccionar una fila por placa en cada universo → calcular gestión e ID de carga → validar 1:1 → descargar XLSX.
 

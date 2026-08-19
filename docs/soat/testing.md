@@ -5,7 +5,7 @@
 - acceso sin autenticación;
 - nombre de archivo libre con estructura válida;
 - rechazo de estructura ausente y Excel inválido;
-- descarga válida de cinco hojas sin auditoría Vault;
+- descarga multipart válida de los dos libros, con sus hojas separadas, sin auditoría Vault;
 - neutralización de fórmulas;
 - aislamiento de procesos concurrentes;
 - nueve criterios de gestión.

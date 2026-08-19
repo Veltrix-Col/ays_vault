@@ -10,7 +10,7 @@
 
 ## 1. Resumen ejecutivo
 
-SOAT es un pipeline Django síncrono para convertir un reporte XLSX en un informe operativo de cinco hojas. No usa modelos, OAuth ni APIs Zoho; trabaja con el archivo cargado, temporales aislados y salida en memoria. Separa SOAT/Movilidad, elige una fila completa por placa en cada universo, deriva gestión e ID de carga, valida integridad y formatea el libro. La implementación tiene pruebas automáticas, pero reglas, volumen y operación real requieren validación A&S.
+SOAT es un pipeline Django síncrono para convertir un reporte XLSX en un informe operativo de dos libros (principal y soporte). No usa modelos, OAuth ni APIs Zoho; trabaja con el archivo cargado, temporales aislados y salida en memoria. Separa SOAT/Movilidad, elige una fila completa por placa en cada universo, deriva gestión e ID de carga, valida integridad y formatea los libros. La implementación tiene pruebas automáticas, pero reglas, volumen y operación real requieren validación A&S.
 
 ## 2. Objetivo, alcance y estado
 
