@@ -138,12 +138,13 @@ class IndividualQuotationForm(forms.Form):
                 )
                 if use_requester:
                     source_row.update({
-                        "name": " ".join(filter(None, (
-                            cleaned.get("first_name"), cleaned.get("last_name"),
-                        ))) or self.context.get("requester_name", ""),
+                        "first_name": cleaned.get("first_name", ""),
+                        "last_name": cleaned.get("last_name", ""),
                         "id_type": cleaned.get("requester_id_type") or self.context.get("requester_id_type", ""),
                         "document": cleaned.get("requester_document") or self.context.get("requester_document", ""),
                         "birth_date": cleaned.get("requester_birth_date") or self.context.get("requester_birth_date", ""),
+                        "email": cleaned.get("requester_email") or self.context.get("requester_email", ""),
+                        "phone": cleaned.get("requester_phone") or self.context.get("requester_phone", ""),
                     })
                 normalized_row = {}
                 for definition in group.fields:

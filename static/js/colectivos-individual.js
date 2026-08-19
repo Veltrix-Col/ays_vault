@@ -52,6 +52,20 @@
         if (!visible) target.value = "";
       });
     };
+    const copyRequester = () => {
+      const selector = fieldsHost.querySelector('[name="use_requester"]');
+      if (!selector || selector.value !== "Sí" || key !== "people") return;
+      const pairs = {
+        first_name: "first_name", last_name: "last_name", id_type: "requester_id_type",
+        document: "requester_document", birth_date: "requester_birth_date",
+        email: "requester_email", phone: "requester_phone",
+      };
+      Object.entries(pairs).forEach(([target, source]) => {
+        const sourceInput = form.querySelector(`[name="${source}"]`);
+        const targetInput = fieldsHost.querySelector(`[name="${target}"]`);
+        if (sourceInput && targetInput) targetInput.value = sourceInput.value;
+      });
+    };
     definition.fields.forEach(field => {
       const wrapper = document.createElement("div"); wrapper.className = "field";
       const label = document.createElement("label"); label.textContent = `${field.label}${field.required ? " *" : ""}`;
@@ -61,7 +75,8 @@
       input.name = field.key; input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });
-    fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", applyConditions));
+    fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", () => { copyRequester(); applyConditions(); }));
+    copyRequester();
     applyConditions();
     dialog.showModal();
   };

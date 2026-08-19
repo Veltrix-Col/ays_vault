@@ -2431,7 +2431,24 @@ def individual_create_person(request, token):
             confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
         ).create(data)
         metadata = dict(quotation.safe_metadata or {})
-        metadata["person_lookup"] = {"status": "found", "created": True, "detail_token": sign_record_id(result["record_id"], "person")}
+        contact_id = result["record_id"]
+        created_at = timezone.now().isoformat()
+        people = [dict(item) for item in (metadata.get("people_lookup") or ()) if isinstance(item, dict)]
+        selected_document = str(data.get("N_mero_de_ID") or document_hint).strip()
+        for person in people:
+            if str(person.get("document") or "") == selected_document:
+                person.update({
+                    "status": "found", "created": True, "created_at": created_at,
+                    "contact_id": contact_id,
+                    "detail_token": sign_record_id(contact_id, "person"),
+                    "has_complete_data": True, "missing_fields": [],
+                })
+        metadata["people_lookup"] = people
+        metadata["person_lookup"] = next(
+            (item for item in people if str(item.get("document") or "") == selected_document),
+            {"status": "found", "created": True, "contact_id": contact_id,
+             "created_at": created_at, "detail_token": sign_record_id(contact_id, "person")},
+        )
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
         messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
@@ -2641,6 +2658,10 @@ def individual_expedient(request, token):
             person["has_complete_data"] = not person.get("missing_fields")
     if people_lookup:
         person_lookup = people_lookup[0]
+    created_people = tuple(
+        person for person in people_lookup
+        if person.get("created") or (person.get("status") == "found" and person.get("contact_id"))
+    )
     access = quotation.external_access
     try:
         recipient = decrypt(access.encrypted_recipient)
@@ -2689,6 +2710,7 @@ def individual_expedient(request, token):
         "acceptance": acceptance,
         "person_lookup": person_lookup,
         "people_lookup": tuple(people_lookup),
+        "created_people": created_people,
         "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,

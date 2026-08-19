@@ -70,10 +70,13 @@ PERSON_FIELDS = (
 
 HEALTH_PERSON_FIELDS = (
     FieldSchema("use_requester", "Usar datos del solicitante", "choice", required=False, choices=("Sí", "No")),
-    FieldSchema("name", "Nombre"),
+    FieldSchema("first_name", "Nombres"),
+    FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("document", "Identificación", "document"),
     FieldSchema("birth_date", "Fecha de nacimiento", "date"),
+    FieldSchema("email", "Correo electrónico", "email"),
+    FieldSchema("phone", "Teléfono", "tel"),
     FieldSchema("gender", "Género", "choice", required=False, choices=GENDER_CHOICES),
     FieldSchema("employment_relationship", "Vínculo con el fondo", "choice", choices=("Empleado", "Grupo familiar")),
     FieldSchema("relationship", "Parentesco o relación"),

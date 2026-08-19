@@ -201,8 +201,9 @@ class IndividualQuotationTests(TestCase):
     @staticmethod
     def person(suffix="1"):
         return {
-            "name": f"Persona {suffix}", "id_type": "CC",
+            "first_name": "Persona", "last_name": str(suffix), "id_type": "CC",
             "document": f"20000000{suffix}", "birth_date": "1990-01-01",
+            "email": f"persona{suffix}@example.test", "phone": "3000000000",
             "gender": "Femenino", "relationship": "Hijo(a)", "role": "Asegurado",
             "employment_relationship": "Grupo familiar",
             "currently_health_insured": "No",
