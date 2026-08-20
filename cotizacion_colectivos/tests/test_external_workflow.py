@@ -415,6 +415,10 @@ class ExternalWorkflowTests(TestCase):
         self.assertIn("width:min(720px,calc(100vw - 2rem))", css)
         self.assertIn("transform:translate(-50%,-50%) scale(1)", css)
         self.assertNotIn("transform:translateX(100%)", css)
+        self.assertIn(".functional-drawer .external-add-card label:first-child{display:flex", css)
+        self.assertIn("gap:1rem", css)
+        self.assertIn(".functional-drawer .external-add-card{display:grid;min-width:0", css)
+        self.assertIn("padding:1.2rem", css)
         self.assertIn("body main{width:min(100% - 1rem,1480px)}", css)
 
     def test_external_token_is_only_persisted_as_hash_and_is_tamper_evident(self):
