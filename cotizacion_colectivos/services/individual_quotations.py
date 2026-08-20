@@ -339,7 +339,8 @@ def _individual_task_observations(context, fields, groups) -> str:
         "line": "Referencia", "model": "Modelo", "city": "Ciudad", "use": "Uso",
         "armored": "Blindado", "currently_insured": "Actualmente asegurado", "insured_name": "Asegurado",
         "insured_id_type": "Tipo de identificación del asegurado", "insured_document": "Documento del asegurado",
-        "insured_is_different": "Asegurado diferente", "displacement": "Cilindraje", "name": "Nombre",
+        "insured_is_different": "Asegurado diferente", "insured_same_as_requester": "El asegurado es el mismo solicitante",
+        "is_requester": "Esta persona es el solicitante", "displacement": "Cilindraje", "name": "Nombre",
         "document": "Documento", "gender": "Género", "relationship": "Parentesco o relación",
         "employment_relationship": "Vínculo con el fondo", "currently_health_insured": "Cobertura de salud vigente",
         "current_health_insurer": "Aseguradora actual", "current_health_policy_end": "Fin de cobertura actual",
@@ -463,18 +464,25 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
             if not isinstance(row, dict):
                 continue
             insured_document = str(row.get("insured_document") or "").strip()
-            explicit_different = row.get("insured_is_different") in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
+            # El contrato nuevo expresa la relación positivamente. El alias
+            # anterior sólo se interpreta para snapshots históricos.
+            has_new_relation = "insured_same_as_requester" in row
+            same_as_requester = row.get("insured_same_as_requester") in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
+            explicit_different = (
+                (has_new_relation and not same_as_requester)
+                or (not has_new_relation and row.get("insured_is_different") in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"})
+            )
             if not explicit_different or not insured_document or insured_document == requester_document:
                 continue
             add_candidate(insured_document, {
-                "label": str(row.get("insured_name") or "Asegurado del vehículo"),
+                "label": str(row.get("insured_name") or " ".join(filter(None, (row.get("insured_first_name"), row.get("insured_last_name")))) or "Asegurado del vehículo"),
                 "First_Name": row.get("insured_first_name") or row.get("first_name") or "",
                 "Last_Name": row.get("insured_last_name") or row.get("last_name") or "",
                 "Tipo_ID": row.get("insured_id_type") or row.get("id_type") or "",
                 "N_mero_de_ID": insured_document,
                 "Date_of_Birth": row.get("insured_birth_date") or row.get("birth_date") or "",
                 "Email": row.get("insured_email") or row.get("email") or "",
-                "Mobile": row.get("insured_mobile") or row.get("mobile") or row.get("phone") or "",
+                "Mobile": row.get("insured_mobile") or row.get("insured_phone") or row.get("mobile") or row.get("phone") or "",
                 "Phone": row.get("insured_phone") or row.get("phone") or "",
                 "role": "Asegurado del vehículo",
             })
@@ -489,7 +497,7 @@ def resolve_accepted_person(*, quotation: CotizacionIndividual, person_service=N
         for position, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
                 continue
-            use_requester = row.get("use_requester") in {True, 1, "1", "Sí", "Si", "sí", "si"}
+            use_requester = row.get("is_requester", row.get("use_requester")) in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
             if position == 1 and use_requester and requester_document:
                 add_candidate(requester_document, {**requester_data, "role": "Persona 1 · solicitante"})
                 continue

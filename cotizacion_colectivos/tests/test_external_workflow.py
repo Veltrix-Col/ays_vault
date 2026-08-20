@@ -241,6 +241,8 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, 'name="include_rol" value="Asegurado"', html=False)
         self.assertContains(portal, '<select name="include_tipo_id">', html=False)
         self.assertContains(portal, 'name="include_fecha_nacimiento"', html=False)
+        self.assertContains(portal, 'name="include_email"', html=False)
+        self.assertContains(portal, 'name="include_phone"', html=False)
         self.assertContains(portal, 'name="include_fecha_ingreso"', html=False)
         self.assertNotContains(portal, 'name="include_plan"', html=False)
 
@@ -409,6 +411,10 @@ class ExternalWorkflowTests(TestCase):
         self.assertIn("@media(max-width:768px)", css)
         self.assertIn("@media(max-width:480px)", css)
         self.assertIn(".functional-drawer{width:100%}", css)
+        self.assertIn("left:50%", css)
+        self.assertIn("width:min(720px,calc(100vw - 2rem))", css)
+        self.assertIn("transform:translate(-50%,-50%) scale(1)", css)
+        self.assertNotIn("transform:translateX(100%)", css)
         self.assertIn("body main{width:min(100% - 1rem,1480px)}", css)
 
     def test_external_token_is_only_persisted_as_hash_and_is_tamper_evident(self):
@@ -463,9 +469,9 @@ class ExternalWorkflowTests(TestCase):
         self.assertLessEqual(generated.access.expires_at, before + timedelta(hours=48, seconds=2))
         self.assertEqual(resolve_token(generated.token).pk, generated.access.pk)
 
-    def test_otp_expires_exactly_with_access_and_email_uses_local_deadline(self):
+    def test_otp_expires_with_short_ttl_and_link_remains_independent(self):
         generated = self.access()
-        expected_expiry = generated.access.expires_at
+        before = timezone.now()
         with patch(
             "cotizacion_colectivos.services.external.send_notification"
         ) as sender, patch(
@@ -474,9 +480,11 @@ class ExternalWorkflowTests(TestCase):
         ):
             self.assertTrue(issue_otp(generated.access))
         generated.access.refresh_from_db()
-        self.assertEqual(generated.access.otp_expires_at, expected_expiry)
+        self.assertGreaterEqual(generated.access.otp_expires_at, before + timedelta(seconds=599))
+        self.assertLessEqual(generated.access.otp_expires_at, before + timedelta(seconds=601))
+        self.assertGreater(generated.access.expires_at, generated.access.otp_expires_at)
         message = sender.call_args.kwargs
-        self.assertIn("mientras el enlace permanezca vigente", message["text_body"])
+        self.assertIn("solicite un código nuevo", message["text_body"])
         self.assertNotIn("minutos", message["text_body"])
 
     def test_entry_does_not_resend_an_unexpired_otp_after_link_bound_issue(self):

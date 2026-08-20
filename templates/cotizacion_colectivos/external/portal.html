@@ -12,6 +12,7 @@
     <span>{{ item.get_request_type_display }}</span>
   </div>
 </header>
+<section class="external-guide" aria-labelledby="external-guide-title"><h2 id="external-guide-title">Antes de comenzar</h2><ol><li>Revise la información de sus pólizas.</li><li>Registre únicamente los ingresos o retiros que desea solicitar.</li><li>Complete los datos de cada persona y revise los cambios.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol></section>
 <section class="external-card external-card--notice" aria-labelledby="important-notice">
   <h2 id="important-notice">Información importante</h2>
   <p>Este enlace fue generado para revisar la información de las pólizas indicadas. Si no reconoce el enlace o la información no le corresponde, no realice cambios y comuníquese con A&amp;S.</p>
@@ -84,6 +85,8 @@
     <label>Nombres<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombres{% else %}include_nombres{% endif %}" maxlength="120"></label>
     <label>Apellidos<input name="{% if section.policy %}include_{{ section.policy.pk }}_apellidos{% else %}include_apellidos{% endif %}" maxlength="120"></label>
     <label>Fecha de nacimiento<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_nacimiento{% else %}include_fecha_nacimiento{% endif %}"></label>
+    <label>Correo electrónico<input type="email" name="{% if section.policy %}include_{{ section.policy.pk }}_email{% else %}include_email{% endif %}" maxlength="254"></label>
+    <label>Teléfono<input type="tel" name="{% if section.policy %}include_{{ section.policy.pk }}_phone{% else %}include_phone{% endif %}" maxlength="40"></label>
     <label>Fecha solicitada de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}" required></label>
     <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>
     </div>

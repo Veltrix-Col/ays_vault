@@ -12,6 +12,7 @@ from cotizacion_colectivos.services.common import (
     mask_document,
     sign_record_id,
     unsign_record_id,
+    unsign_record_context,
     colectivos_zoho,
 )
 from cotizacion_colectivos.services.entity_detail import EntityDetailService
@@ -93,6 +94,15 @@ class FakeZoho:
 
 
 class SearchServiceTests(SimpleTestCase):
+    @override_settings(COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800)
+    @patch("cotizacion_colectivos.services.common.signing.loads")
+    def test_public_record_context_uses_full_link_ttl(self, loads):
+        loads.return_value = {"id": COMPANY["id"], "type": "company"}
+
+        unsign_record_context("signed-public-context", "company")
+
+        self.assertEqual(loads.call_args.kwargs["max_age"], 172800)
+
     @patch("cotizacion_colectivos.services.common.get_colectivos_zoho")
     def test_service_factory_uses_central_profile_resolver(self, get_colectivos_zoho):
         sentinel = object()

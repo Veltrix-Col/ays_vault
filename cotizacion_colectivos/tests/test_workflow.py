@@ -402,7 +402,12 @@ class RequestWorkflowTests(TestCase):
         opened = self.create_local_request(301)
         opened.status = opened.Status.OPENED
         opened.save(update_fields=("status", "updated_at"))
-        SolicitudColectivo.objects.filter(pk=opened.pk).update(updated_at=now)
+        # Mantener una separación determinista entre las actividades; el
+        # acceso individual se crea durante este test y representa la
+        # actividad más reciente del flujo mixto.
+        SolicitudColectivo.objects.filter(pk=opened.pk).update(
+            updated_at=now - timedelta(minutes=20),
+        )
         answered = self.create_request()
         answered.status = answered.Status.ANSWERED
         answered.save(update_fields=("status", "updated_at"))

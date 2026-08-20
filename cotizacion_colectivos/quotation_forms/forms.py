@@ -40,7 +40,8 @@ class IndividualQuotationForm(forms.Form):
         existing_person = bool(self.context.get("affiliate_key"))
         for definition in schema.fields:
             required = definition.required and not existing_person
-            self.fields[definition.key] = forms.CharField(
+            field_class = forms.BooleanField if definition.kind == "checkbox" else forms.CharField
+            self.fields[definition.key] = field_class(
                 label=definition.label,
                 required=required,
                 max_length=180,
@@ -73,6 +74,8 @@ class IndividualQuotationForm(forms.Form):
 
     @staticmethod
     def _clean_value(definition: FieldSchema, raw, *, required=None):
+        if definition.kind == "checkbox":
+            return raw in {True, 1, "1", "true", "True", "sí", "Sí", "si", "Si"}
         required = definition.required if required is None else required
         value = str(raw or "").strip()
         if required and not value:
@@ -127,6 +130,13 @@ class IndividualQuotationForm(forms.Form):
                 self.add_error("items_payload", f"Agregue entre {group.minimum} y {group.maximum} {group.plural.lower()}.")
                 continue
             normalized_rows = []
+            if group.key == "people" and self.schema.slug == "salud":
+                requester_flags = sum(
+                    row.get("is_requester", row.get("use_requester")) in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
+                    for row in rows if isinstance(row, dict)
+                )
+                if requester_flags > 1:
+                    self.add_error("items_payload", "Salud: el solicitante sólo puede agregarse una vez.")
             for position, row in enumerate(rows, start=1):
                 if not isinstance(row, dict):
                     self.add_error("items_payload", f"{group.singular.title()} {position}: información inválida.")
@@ -134,7 +144,7 @@ class IndividualQuotationForm(forms.Form):
                 source_row = dict(row)
                 use_requester = (
                     group.key == "people" and self.schema.slug == "salud" and position == 1
-                    and row.get("use_requester") in {True, 1, "1", "Sí", "Si", "sí", "si"}
+                    and row.get("is_requester", row.get("use_requester")) in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
                 )
                 if use_requester:
                     source_row.update({
@@ -146,6 +156,21 @@ class IndividualQuotationForm(forms.Form):
                         "email": cleaned.get("requester_email") or self.context.get("requester_email", ""),
                         "phone": cleaned.get("requester_phone") or self.context.get("requester_phone", ""),
                     })
+                    source_row["is_requester"] = True
+                if group.key == "vehicles" and "insured_same_as_requester" in row:
+                    same_as_requester = row.get("insured_same_as_requester") in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
+                    source_row["insured_same_as_requester"] = same_as_requester
+                    if same_as_requester:
+                        source_row.update({
+                            "insured_name": " ".join(filter(None, (cleaned.get("first_name", ""), cleaned.get("last_name", "")))),
+                            "insured_id_type": cleaned.get("requester_id_type", ""),
+                            "insured_document": cleaned.get("requester_document", ""),
+                            "insured_first_name": cleaned.get("first_name", ""),
+                            "insured_last_name": cleaned.get("last_name", ""),
+                            "insured_birth_date": cleaned.get("requester_birth_date", ""),
+                            "insured_email": cleaned.get("requester_email", ""),
+                            "insured_phone": cleaned.get("requester_phone", ""),
+                        })
                 normalized_row = {}
                 for definition in group.fields:
                     try:
@@ -163,6 +188,7 @@ class IndividualQuotationForm(forms.Form):
                             f"{group.singular.title()} {position} — Placa: es obligatoria cuando el vehículo no es 0 km.",
                         )
                 if group.key == "people" and self.schema.slug == "salud":
+                    normalized_row["is_requester"] = bool(use_requester)
                     if normalized_row.get("currently_health_insured") == "Sí":
                         if not normalized_row.get("current_health_insurer"):
                             self.add_error(
@@ -173,6 +199,28 @@ class IndividualQuotationForm(forms.Form):
                         normalized_row["current_health_insurer"] = ""
                         normalized_row["current_health_policy_end"] = ""
                 normalized_rows.append(normalized_row)
+            if group.key == "people" and self.schema.slug == "salud":
+                requester_count = sum(bool(item.get("is_requester")) for item in normalized_rows)
+                if requester_count > 1:
+                    self.add_error("items_payload", "Salud: el solicitante sólo puede agregarse una vez.")
+            if group.key == "vehicles" and self.schema.slug == "movilidad":
+                for position, item in enumerate(normalized_rows, start=1):
+                    if "insured_same_as_requester" not in rows[position - 1]:
+                        continue
+                    if item.get("insured_same_as_requester"):
+                        continue
+                    required_insured = {
+                        "insured_first_name": "Nombres del asegurado",
+                        "insured_last_name": "Apellidos del asegurado",
+                        "insured_id_type": "Tipo de identificación del asegurado",
+                        "insured_document": "Identificación del asegurado",
+                        "insured_birth_date": "Fecha de nacimiento del asegurado",
+                        "insured_email": "Correo del asegurado",
+                        "insured_phone": "Teléfono del asegurado",
+                    }
+                    for key, label in required_insured.items():
+                        if not str(item.get(key) or "").strip():
+                            self.add_error("items_payload", f"Vehículo {position} — {label}: este campo es obligatorio para un asegurado diferente.")
             normalized[group.key] = normalized_rows
         cleaned["normalized_items"] = normalized
         return cleaned

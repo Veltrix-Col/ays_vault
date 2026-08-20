@@ -69,7 +69,7 @@ PERSON_FIELDS = (
 )
 
 HEALTH_PERSON_FIELDS = (
-    FieldSchema("use_requester", "Usar datos del solicitante", "choice", required=False, choices=("Sí", "No")),
+    FieldSchema("is_requester", "Esta persona es el solicitante", "checkbox", required=False),
     FieldSchema("first_name", "Nombres"),
     FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
@@ -101,10 +101,17 @@ VEHICLE_FIELDS = (
     FieldSchema("use", "Uso", required=False),
     FieldSchema("armored", "¿Vehículo blindado?", "choice", required=False, choices=("Sí", "No")),
     FieldSchema("currently_insured", "¿Actualmente asegurado?", "choice", required=False, choices=("Sí", "No")),
-    FieldSchema("insured_name", "Nombre del asegurado"),
+    # insured_name/insured_is_different se conservan para leer snapshots
+    # históricos. Los registros nuevos usan una relación explícita y datos
+    # estructurados cuando el asegurado no es el solicitante.
+    FieldSchema("insured_same_as_requester", "El asegurado del vehículo es el mismo solicitante", "checkbox", required=False),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),
-    FieldSchema("insured_is_different", "Es una persona distinta del solicitante", "choice", required=False, choices=("Sí", "No")),
+    FieldSchema("insured_first_name", "Nombres del asegurado", required=False),
+    FieldSchema("insured_last_name", "Apellidos del asegurado", required=False),
+    FieldSchema("insured_birth_date", "Fecha de nacimiento del asegurado", "date", required=False),
+    FieldSchema("insured_email", "Correo del asegurado", "email", required=False),
+    FieldSchema("insured_phone", "Teléfono del asegurado", "tel", required=False),
 )
 
 

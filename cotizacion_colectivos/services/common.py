@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from django.conf import settings
 from django.core import signing
 from django.core.signing import salted_hmac
 
@@ -88,7 +89,14 @@ def sign_record_id(record_id: object, entity_type: str = "contact", context: dic
 
 def unsign_record_context(token: str, expected_type: str | None = None) -> dict[str, str]:
     try:
-        payload = signing.loads(token, salt=DETAIL_SALT, max_age=900)
+        # Este contexto viaja dentro de enlaces públicos y debe conservar la
+        # misma vigencia del enlace. El acceso, OTP y sesión siguen teniendo
+        # sus TTL independientes; este token no puede acortar el enlace.
+        payload = signing.loads(
+            token,
+            salt=DETAIL_SALT,
+            max_age=getattr(settings, "COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS", 172800),
+        )
     except signing.BadSignature as exc:
         raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.") from exc
     if not isinstance(payload, dict):

@@ -128,7 +128,10 @@ def issue_individual_otp(access: AccesoCotizacionIndividual) -> bool:
         return False
     code = f"{secrets.randbelow(1_000_000):06d}"
     access.otp_hash = make_password(code)
-    access.otp_expires_at = access.expires_at
+    access.otp_expires_at = min(
+        now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_OTP_TTL_SECONDS),
+        access.expires_at,
+    )
     access.otp_attempts = 0
     access.save(update_fields=("otp_hash", "otp_expires_at", "otp_attempts"))
     recipient = decrypt(access.encrypted_recipient)

@@ -15,6 +15,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.template.loader import render_to_string
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -53,6 +54,7 @@ from .quotation_forms.security import (
     unsign_receipt,
 )
 from .services.individual_quotations import affiliate_options, create_individual_quotation
+from .services.common import ColectivosServiceError
 from .services.individual_access import (
     INDIVIDUAL_COOKIE,
     IndividualAccessError,
@@ -116,7 +118,7 @@ def individual_quotation(request, token):
             "masked_recipient": mask_email(decrypt(access.encrypted_recipient)),
             "verify_url": reverse("colectivos_external:individual_verify", args=[token]),
         })
-    except (signing.BadSignature, Http404, KeyError, ValueError):
+    except (ColectivosServiceError, signing.BadSignature, Http404, KeyError, ValueError):
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
 
     initial_items = {
@@ -184,7 +186,10 @@ def individual_verify(request, token):
         try:
             cookie = verify_individual_otp(access, form.cleaned_data["code"])
         except IndividualAccessError:
-            error = "El código no es válido, expiró o superó los intentos permitidos."
+            if access.otp_expires_at and access.otp_expires_at <= timezone.now():
+                error = "El código de verificación venció. Solicite uno nuevo."
+            else:
+                error = "El código no es válido o superó los intentos permitidos."
         else:
             response = redirect("colectivos_external:individual_quotation", token=token)
             response.set_cookie(
@@ -495,6 +500,7 @@ def _posted_rows(request, request_obj):
         "fecha_retiro", "motivo", "observaciones", "ciudad", "direccion",
         "tipo_uso", "anio_construccion", "descripcion", "valor_asegurado",
         "vehiculo", "placa", "marca", "modelo", "estado", "nombres", "apellidos",
+        "email", "phone",
     )
     rows = []
     functional_keys = tuple(

@@ -24,7 +24,7 @@ def build_otp_email(code: str, *, expires_at) -> OTPEmail:
         "Código de verificación\n\n"
         "Se solicitó acceso a un formulario seguro de A&S Seguros.\n\n"
         f"Tu código es: {code}\n\n"
-        f"Este código será válido hasta el {expiry_label}, mientras el enlace permanezca vigente.\n"
+        f"Este código será válido hasta el {expiry_label}. Si vence, solicite un código nuevo mientras el enlace siga vigente.\n"
         "No compartas este código con otras personas.\n\n"
         "Si no solicitaste este acceso, puedes ignorar este mensaje.\n\n"
         "A&S Seguros"
@@ -41,7 +41,7 @@ def build_otp_email(code: str, *, expires_at) -> OTPEmail:
           <p style="margin:0 0 22px;font-size:16px;line-height:1.55;color:#43536a;">Se solicitó acceso a un formulario seguro de A&amp;S Seguros.</p>
           <p style="margin:0 0 8px;font-size:14px;color:#607086;">Tu código es:</p>
           <div style="margin:0 0 24px;padding:18px;text-align:center;background:#eef6fb;border:1px solid #b9d8ea;border-radius:10px;color:#0b5f8a;font-size:34px;line-height:1;letter-spacing:8px;font-weight:700;">{safe_code}</div>
-          <p style="margin:0 0 10px;font-size:15px;line-height:1.55;color:#43536a;">Este código será válido hasta el <strong>{escape(expiry_label)}</strong>, mientras el enlace permanezca vigente.</p>
+          <p style="margin:0 0 10px;font-size:15px;line-height:1.55;color:#43536a;">Este código será válido hasta el <strong>{escape(expiry_label)}</strong>. Si vence, solicite un código nuevo mientras el enlace siga vigente.</p>
           <p style="margin:0 0 18px;font-size:15px;line-height:1.55;color:#43536a;">No compartas este código con otras personas.</p>
           <p style="margin:0;font-size:13px;line-height:1.55;color:#738095;">Si no solicitaste este acceso, puedes ignorar este mensaje.</p>
         </td></tr>

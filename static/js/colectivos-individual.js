@@ -52,18 +52,40 @@
         if (!visible) target.value = "";
       });
     };
+    const isChecked = name => {
+      const input = fieldsHost.querySelector(`[name="${name}"]`);
+      return Boolean(input && input.checked);
+    };
     const copyRequester = () => {
-      const selector = fieldsHost.querySelector('[name="use_requester"]');
-      if (!selector || selector.value !== "Sí" || key !== "people") return;
+      const sameVehicle = key === "vehicles" && isChecked("insured_same_as_requester");
+      const samePerson = key === "people" && (isChecked("is_requester") || fieldsHost.querySelector('[name="use_requester"]')?.value === "Sí");
+      if (!sameVehicle && !samePerson) {
+        fieldsHost.querySelectorAll("[data-requester-copy]").forEach(input => { input.readOnly = false; input.disabled = false; });
+        return;
+      }
       const pairs = {
         first_name: "first_name", last_name: "last_name", id_type: "requester_id_type",
         document: "requester_document", birth_date: "requester_birth_date",
         email: "requester_email", phone: "requester_phone",
+        insured_first_name: "first_name", insured_last_name: "last_name",
+        insured_id_type: "requester_id_type", insured_document: "requester_document",
+        insured_birth_date: "requester_birth_date", insured_email: "requester_email",
+        insured_phone: "requester_phone", insured_name: "__full_name__",
       };
       Object.entries(pairs).forEach(([target, source]) => {
-        const sourceInput = form.querySelector(`[name="${source}"]`);
         const targetInput = fieldsHost.querySelector(`[name="${target}"]`);
-        if (sourceInput && targetInput) targetInput.value = sourceInput.value;
+        if (!targetInput) return;
+        if (source === "__full_name__") {
+          targetInput.value = [form.querySelector('[name="first_name"]')?.value, form.querySelector('[name="last_name"]')?.value].filter(Boolean).join(" ");
+        } else {
+          const sourceInput = form.querySelector(`[name="${source}"]`);
+          if (sourceInput) targetInput.value = sourceInput.value;
+        }
+        targetInput.dataset.requesterCopy = "true";
+        targetInput.readOnly = true;
+        // Disabled controls remain part of the JSON row built below; this
+        // prevents re-entry while keeping the copied value persisted.
+        targetInput.disabled = true;
       });
     };
     definition.fields.forEach(field => {
@@ -71,8 +93,18 @@
       const label = document.createElement("label"); label.textContent = `${field.label}${field.required ? " *" : ""}`;
       let input;
       if (field.kind === "choice") { input = document.createElement("select"); input.append(new Option("Seleccione", "")); field.choices.forEach(choice => input.append(new Option(choice, choice))); }
-      else { input = document.createElement("input"); input.type = {email:"email",date:"date",tel:"tel"}[field.kind] || "text"; }
-      input.name = field.key; input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
+      else { input = document.createElement("input"); input.type = field.kind === "checkbox" ? "checkbox" : ({email:"email",date:"date",tel:"tel"}[field.kind] || "text"); }
+      input.name = field.key; input.id = `dialog-${key}-${index === null ? "new" : index}-${field.key}`; label.htmlFor = input.id;
+      input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
+      if (field.kind === "checkbox") input.checked = Boolean(row[field.key]);
+      if (key === "people" && field.key === "is_requester") {
+        const alreadyAdded = (groups.people || []).some((item, itemIndex) => itemIndex !== index && Boolean(item.is_requester || item.use_requester));
+        if (alreadyAdded) {
+          input.disabled = true;
+          label.textContent += " (El solicitante ya fue agregado)";
+        }
+      }
+      if (["first_name","last_name","id_type","document","birth_date","email","phone","insured_name","insured_id_type","insured_document","insured_first_name","insured_last_name","insured_birth_date","insured_email","insured_phone"].includes(field.key)) input.dataset.requesterCopy = "true";
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });
     fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", () => { copyRequester(); applyConditions(); }));
@@ -85,7 +117,7 @@
   dialog.querySelector("[data-dialog-form]").addEventListener("submit", event => {
     event.preventDefault();
     if (!event.currentTarget.reportValidity()) return;
-    const row = Object.fromEntries([...fieldsHost.querySelectorAll("input,select")].map(input => [input.name, input.value.trim()]));
+    const row = Object.fromEntries([...fieldsHost.querySelectorAll("input,select")].map(input => [input.name, input.type === "checkbox" ? input.checked : input.value.trim()]));
     if (activeIndex === null) groups[activeGroup].push(row); else groups[activeGroup][activeIndex] = row;
     render(activeGroup); dialog.close();
   });

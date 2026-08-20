@@ -175,7 +175,7 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("[CÓDIGO OMITIDO]", text_body + html_body)
         self.assertIn("Código de verificación", subject + html_body)
         generated.access.refresh_from_db()
-        self.assertEqual(generated.access.otp_expires_at, generated.access.expires_at)
+        self.assertLess(generated.access.otp_expires_at, generated.access.expires_at)
         self.assertNotEqual(generated.access.otp_hash, "654321")
         self.assertNotIn("654321", repr(generated.access.__dict__))
         self.assertNotIn("654321", repr(notification_logger.mock_calls))
@@ -248,6 +248,15 @@ class IndividualQuotationTests(TestCase):
             404,
         )
 
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_external_guide_is_client_facing_and_branch_specific(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        token = self.access_token(schema_slug="movilidad")
+        response = self.client.get(reverse("colectivos_external:individual_quotation", args=[token]))
+        self.assertContains(response, "Antes de comenzar")
+        self.assertContains(response, "Indique si el asegurado de cada vehículo es el mismo solicitante")
+        self.assertNotContains(response, "Outbox")
+
     def test_policy_context_derives_branch_and_uses_hmac_affiliate(self):
         schema, token, context = build_policy_context(
             policy_token=POLICY_TOKEN,
@@ -315,6 +324,43 @@ class IndividualQuotationTests(TestCase):
         self.assertIn("last_name", form.fields)
         self.assertNotIn("requester_name", form.fields)
 
+    def test_mobility_same_requester_checkbox_copies_structured_identity_to_vehicle(self):
+        schema = get_branch_schema("movilidad")
+        vehicle_keys = {field.key for field in schema.repeatables[0].fields}
+        self.assertNotIn("insured_name", vehicle_keys)
+        self.assertIn("insured_first_name", vehicle_keys)
+        self.assertIn("insured_last_name", vehicle_keys)
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "items_payload": json.dumps({"vehicles": [{**self.vehicle("1"), "insured_same_as_requester": True}]}),
+            }, schema=schema, context={},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        vehicle = form.cleaned_data["normalized_items"]["vehicles"][0]
+        self.assertTrue(vehicle["insured_same_as_requester"])
+        self.assertEqual(vehicle["insured_first_name"], "Camilo 2")
+        self.assertEqual(vehicle["insured_last_name"], "Vargas 2")
+        self.assertEqual(vehicle["insured_document"], "444444444")
+
+    def test_health_requester_checkbox_cannot_be_selected_twice(self):
+        schema = get_branch_schema("salud")
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "items_payload": json.dumps({"people": [
+                    {"is_requester": True, "employment_relationship": "Empleado", "relationship": "Titular", "currently_health_insured": "No"},
+                    {"is_requester": True, "employment_relationship": "Grupo familiar", "relationship": "Cónyuge", "currently_health_insured": "No"},
+                ]}),
+            }, schema=schema, context={},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertTrue(any("sólo puede agregarse una vez" in str(error) for error in form.errors["items_payload"]))
+
     def test_new_person_requires_all_canonical_requester_fields(self):
         schema = get_branch_schema("movilidad")
         form = IndividualQuotationForm(
@@ -361,6 +407,31 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(contact["Date_of_Birth"], "2009-02-10")
         self.assertEqual(contact["Email"], "c.vargas0419@example.com")
         self.assertEqual(contact["Phone"], "3186235929")
+
+    @patch("cotizacion_colectivos.services.individual_quotations.PersonSearchService")
+    def test_mobility_new_relation_adds_only_explicit_different_insured(self, service):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "first_name": "Camilo 2", "last_name": "Vargas 2", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "normalized_items": {"vehicles": [
+                    {"insured_same_as_requester": True, "insured_document": "444444444"},
+                    {"insured_same_as_requester": True, "insured_document": "444444444"},
+                    {"insured_same_as_requester": False, "insured_first_name": "Ana", "insured_last_name": "Diferente",
+                     "insured_id_type": "CC", "insured_document": "1019059650", "insured_birth_date": "1991-01-01",
+                     "insured_email": "ana@example.test", "insured_phone": "3110000000", "insured_name": "Ana Diferente"},
+                ]}, "attachments": [],
+            }, actor=self.actor, context=context,
+        )
+        service.return_value.search.return_value = ()
+        resolve_accepted_person(quotation=quotation)
+        quotation.refresh_from_db()
+        self.assertEqual([item["document"] for item in quotation.safe_metadata["people_lookup"]], ["444444444", "1019059650"])
+        self.assertEqual(quotation.safe_metadata["people_lookup"][1]["missing_fields"], [])
 
     def test_health_first_person_can_use_requester_without_repeating_identity_fields(self):
         schema = get_branch_schema("salud")

@@ -161,6 +161,11 @@ class PreviewDeadlineTests(TestCase):
         mocked_send.return_value = SimpleNamespace(result="SENT")
         self.request.deadline = timezone.localdate() - timedelta(days=1)
         self.request.save(update_fields=("deadline",))
+        # Una solicitud con enlace externo todavía vigente conserva el acceso
+        # hasta su TTL; para probar la transición por deadline aislamos ese
+        # caso dejando el acceso ya vencido.
+        self.access.expires_at = timezone.now() - timedelta(seconds=1)
+        self.access.save(update_fields=("expires_at",))
         process_deadlines()
         self.request.refresh_from_db()
         self.assertEqual(self.request.status, self.request.Status.EXPIRED)
