@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Intranet SSO Provider
  * Description: Emite aserciones de identidad firmadas (JWT RS256) para que el banco de
- *              herramientas (bh.seguros.com) confíe en la sesión ya iniciada en esta intranet.
+ *              herramientas (bapps.dp.segurosays.com) confíe en la sesión ya iniciada en esta intranet.
  *              No comparte cookies ni sesiones de WordPress con el otro contenedor; solo
  *              emite un token corto y firmado que el otro lado verifica de forma independiente.
  *
@@ -12,11 +12,11 @@
  * Variables de entorno requeridas en el contenedor de WordPress (Dokploy -> Environment):
  *   INTRANET_SSO_PRIVATE_KEY   Clave privada RSA en PEM (PKCS8), nunca debe salir de este contenedor.
  *   INTRANET_SSO_ALLOWED_REDIRECT_ORIGINS   Lista separada por comas de orígenes permitidos,
- *                                            ej: https://bh.seguros.com
+ *                                            ej: https://bapps.dp.segurosays.com
  *   INTRANET_SSO_AUDIENCE      Debe coincidir con INTRANET_SSO_AUDIENCE del banco de herramientas.
- *                               Por defecto: bh.seguros.com
+ *                               Por defecto: bapps.dp.segurosays.com
  *   INTRANET_SSO_ISSUER        Debe coincidir con INTRANET_SSO_ISSUER del banco de herramientas.
- *                               Por defecto: seguros.com
+ *                               Por defecto: segurosays.com
  *   INTRANET_SSO_TOKEN_TTL     Segundos de vida del token (por defecto 60). Debe ser <=
  *                               INTRANET_SSO_ASSERTION_MAX_AGE configurado en Django.
  *
@@ -114,8 +114,8 @@ function intranet_sso_issue_token(WP_User $user)
     $now = time();
     $claims = [
         'sub' => $user->user_email,
-        'aud' => getenv('INTRANET_SSO_AUDIENCE') ?: 'bh.seguros.com',
-        'iss' => getenv('INTRANET_SSO_ISSUER') ?: 'seguros.com',
+        'aud' => getenv('INTRANET_SSO_AUDIENCE') ?: 'bapps.dp.segurosays.com',
+        'iss' => getenv('INTRANET_SSO_ISSUER') ?: 'segurosays.com',
         'iat' => $now,
         'exp' => $now + max(1, $ttl),
         'jti' => wp_generate_password(32, false, false),

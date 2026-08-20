@@ -1,15 +1,15 @@
 # SSO intranet → banco de herramientas
 
 Este directorio no se despliega junto con el banco de herramientas: es el
-entregable para el contenedor de WordPress (`seguros.com`). Documenta cómo
+entregable para el contenedor de WordPress (`segurosays.com/intranet`). Documenta cómo
 conectar ambos lados.
 
 ## Cómo funciona
 
-1. Un empleado visita una herramienta del banco (`bh.seguros.com/soat/`, por
-   ejemplo) sin sesión delegada todavía.
+1. Un empleado visita una herramienta del banco (`bapps.dp.segurosays.com/soat/`,
+   por ejemplo) sin sesión delegada todavía.
 2. El middleware del banco de herramientas lo redirige a
-   `https://seguros.com/wp-json/intranet-sso/v1/authorize?redirect_uri=...`.
+   `https://segurosays.com/intranet/wp-json/intranet-sso/v1/authorize?redirect_uri=...`.
 3. Ese endpoint (este plugin) revisa si hay sesión de WordPress activa:
    - Si la hay, firma un JWT RS256 de vida muy corta (60s por defecto) con el
      email del usuario y redirige de vuelta con `?sso_token=...`.
@@ -45,9 +45,9 @@ openssl rsa -in intranet-sso-private.pem -pubout -out intranet-sso-public.pem
 | Variable | Valor de ejemplo |
 | --- | --- |
 | `INTRANET_SSO_PRIVATE_KEY` | contenido de `intranet-sso-private.pem` |
-| `INTRANET_SSO_ALLOWED_REDIRECT_ORIGINS` | `https://bh.seguros.com` |
-| `INTRANET_SSO_AUDIENCE` | `bh.seguros.com` |
-| `INTRANET_SSO_ISSUER` | `seguros.com` |
+| `INTRANET_SSO_ALLOWED_REDIRECT_ORIGINS` | `https://bapps.dp.segurosays.com` |
+| `INTRANET_SSO_AUDIENCE` | `bapps.dp.segurosays.com` |
+| `INTRANET_SSO_ISSUER` | `segurosays.com` |
 | `INTRANET_SSO_TOKEN_TTL` | `60` |
 
 Si Dokploy no admite saltos de línea reales en el valor, pega la clave con
@@ -79,9 +79,9 @@ desactivarlos por error.
 | `TOOLS_ACCESS_MODE` | `trusted_intranet` |
 | `TOOLS_DELEGATED_ACCESS_VALIDATOR` | `intranet_sso.delegated_access.validate_intranet_session` |
 | `INTRANET_SSO_PUBLIC_KEY` | contenido de `intranet-sso-public.pem` |
-| `INTRANET_SSO_AUTHORIZE_URL` | `https://seguros.com/wp-json/intranet-sso/v1/authorize` |
-| `INTRANET_SSO_AUDIENCE` | `bh.seguros.com` |
-| `INTRANET_SSO_ISSUER` | `seguros.com` |
+| `INTRANET_SSO_AUTHORIZE_URL` | `https://segurosays.com/intranet/wp-json/intranet-sso/v1/authorize` |
+| `INTRANET_SSO_AUDIENCE` | `bapps.dp.segurosays.com` |
+| `INTRANET_SSO_ISSUER` | `segurosays.com` |
 
 `TOOLS_ACCESS_MODE=local_public` sigue disponible para desarrollo/pruebas
 (solo permitido con `DEBUG=true`); en producción el proyecto ya rechaza el
@@ -91,12 +91,12 @@ arranque si faltan `INTRANET_SSO_PUBLIC_KEY` o `INTRANET_SSO_AUTHORIZE_URL`.
 ## 5. Verificación
 
 1. Con el navegador sin sesión en ninguno de los dos sitios, visita
-   `https://bh.seguros.com/soat/`: debe redirigir al login de WordPress.
+   `https://bapps.dp.segurosays.com/soat/`: debe redirigir al login de WordPress.
 2. Inicia sesión en WordPress: debe volver automáticamente a
-   `https://bh.seguros.com/soat/` ya autenticado.
-3. Visita `https://bh.seguros.com/` (portal) y otras herramientas: no debe
+   `https://bapps.dp.segurosays.com/soat/` ya autenticado.
+3. Visita `https://bapps.dp.segurosays.com/` (portal) y otras herramientas: no debe
    pedir login de nuevo mientras la cookie del banco siga vigente.
-4. `https://bh.seguros.com/vault/`: debe seguir pidiendo su propio login +
+4. `https://bapps.dp.segurosays.com/vault/`: debe seguir pidiendo su propio login +
    verificación en dos pasos, sin importar la sesión de la intranet.
 
 ## Notas de seguridad
