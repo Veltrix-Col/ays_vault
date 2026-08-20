@@ -147,45 +147,35 @@ def _aplicar_umbral_valor_exacto(ramo_codigo: str) -> None:
             regla.umbral_pesos = umbral
 
 
-def procesar_conciliacion(
-    *, ramo: str, poliza: str, archivos: dict, fuente: str = "excel", perfil_zoho: str = "sandbox",
-) -> ConciliacionOutput:
-    """`archivos` es {slot: UploadedFile|None} con las claves relacion, personas,
-    novedades, cobro, recibo (novedades/recibo pueden faltar). En modo
-    `fuente="api"`, relacion/personas se ignoran aunque vengan pobladas: se
-    consultan directo a Zoho, filtradas por `poliza`."""
+def procesar_conciliacion(*, ramo: str, poliza: str, archivos: dict) -> ConciliacionOutput:
+    """`archivos` es {slot: UploadedFile|None} con las claves cobro, recibo,
+    novedades (recibo/novedades pueden faltar). Relación de asegurados y
+    Personas siempre se consultan directo a Zoho (Full API), filtradas por
+    `poliza`. El perfil (sandbox o producción) lo decide `settings.ZOHO_ACTIVE_PROFILE`
+    de forma global para toda la aplicación: esta función no lo recibe como
+    parámetro ni lo deja elegir por request."""
     started = monotonic()
     _aplicar_umbral_valor_exacto(ramo)
 
     with TemporaryDirectory(prefix="ays-conciliacion-") as directorio:
         raiz = Path(directorio)
         rutas: dict[str, Path] = {}
-        respaldos = {
-            "relacion": "relacion.xlsx", "personas": "personas.xlsx",
-            "novedades": "novedades.xlsx", "cobro": "cobro", "recibo": "recibo.pdf",
-        }
+        respaldos = {"novedades": "novedades.xlsx", "cobro": "cobro", "recibo": "recibo.pdf"}
         for slot, archivo in archivos.items():
-            if fuente == "api" and slot in ("relacion", "personas"):
-                continue
             if archivo in (None, False):
                 continue
             nombre = _nombre_seguro(getattr(archivo, "name", ""), respaldos.get(slot, slot))
             rutas[slot] = _volcar(archivo, raiz / nombre)
 
-        zoho = None
-        if fuente == "api":
-            try:
-                zoho = get_zoho(profile=perfil_zoho)
-            except ZohoError as exc:
-                raise ConciliacionProcessingError(
-                    f"No fue posible conectar con Zoho (perfil {perfil_zoho}, {exc.category}). "
-                    "Puede reintentar en modo Excel mientras se resuelve."
-                ) from exc
+        try:
+            zoho = get_zoho()
+        except ZohoError as exc:
+            raise ConciliacionProcessingError(
+                f"No fue posible conectar con Zoho ({exc.category}). Intente nuevamente más tarde."
+            ) from exc
 
         entrada = ConciliacionArchivos(
             cobro=rutas["cobro"],
-            relacion=rutas.get("relacion"),
-            personas=rutas.get("personas"),
             novedades=rutas.get("novedades"),
             recibo=rutas.get("recibo"),
             zoho=zoho,
@@ -197,22 +187,22 @@ def procesar_conciliacion(
             raise ConciliacionProcessingError(str(exc)) from exc
         except ZohoError as exc:
             raise ConciliacionProcessingError(
-                f"Falló la consulta a Zoho (perfil {perfil_zoho}, {exc.category}). "
-                "Puede reintentar en modo Excel mientras se resuelve."
+                f"Falló la consulta a Zoho ({exc.category}). Intente nuevamente más tarde."
             ) from exc
 
         contenido = _endurecer_xlsx(resultado.contenido_excel)
         reporte = resultado.reporte
         # Solo tiene sentido resolver los cobros cuando la conciliación queda sin
-        # incidentes: es el único caso en que el frontend muestra la sección.
+        # incidentes bloqueantes: es el único caso en que el frontend muestra la
+        # sección. Las advertencias (p. ej. recibo/PDF sin validar) no bloquean.
         poliza_url = _resolver_poliza_url(poliza) if reporte.esta_vacio else None
         cobros = _resolver_cobros(poliza) if reporte.esta_vacio else None
         summary = {
             "ramo": reporte.ramo,
             "periodo": reporte.periodo,
             "poliza": poliza,
-            "fuente": fuente,
             "total_incidentes": int(reporte.total_incidentes),
+            "total_advertencias": int(reporte.total_advertencias),
             "sin_incidentes": bool(reporte.esta_vacio),
             "por_tipo": {str(k): int(v) for k, v in resultado.resumen.items()},
             "filename": resultado.nombre_archivo,

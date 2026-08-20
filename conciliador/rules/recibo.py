@@ -17,6 +17,11 @@ La regla no habla con Azure: opera sobre el DTO plano, asi que se prueba con un
 p. ej. porque el ramo no tiene PDF o falta la credencial), emite un unico
 incidente 'N/D' -- consistente con la filosofia de `buscar_novedad`, que
 distingue "no verificado" de "verificado y sin diferencia".
+
+Por ahora esta validacion es solo advertencia: todos los Incidente que genera
+llevan `bloqueante=False`, asi que nunca cuentan para `ReporteConciliacion.
+esta_vacio` ni bloquean el acceso a los cobros/enlace de facturacion en Zoho.
+Las filas siguen apareciendo siempre en el Excel para trazabilidad.
 """
 
 from __future__ import annotations
@@ -85,10 +90,13 @@ class ReciboConciliacionRule:
             tipo_incidente=_TIPO_ND,
             observacion=("No se pudo validar el recibo (PDF): archivo no disponible o "
                          "servicio de extracción sin configurar para este ramo."),
+            bloqueante=False,
         )
 
     def _incidente(self, ctx, tipo: str, recibo: ReciboExtraido, *,
                    suma_comparada: float, diferencia: float, observacion: str) -> Incidente:
+        # La validación de recibo (PDF) con IA es, por ahora, solo advertencia:
+        # nunca debe bloquear "sin incidentes" ni el acceso a conciliar en Zoho.
         return Incidente(
             fecha_reporte=ctx.hoy, ramo=ctx.ramo, periodo=ctx.periodo,
             tipo_incidente=tipo,
@@ -96,4 +104,5 @@ class ReciboConciliacionRule:
             valor_total_cobro=recibo.valor_total,
             diferencia_valor=diferencia,
             observacion=observacion,
+            bloqueante=False,
         )

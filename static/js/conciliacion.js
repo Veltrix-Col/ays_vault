@@ -6,15 +6,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let catalog = {};
   try { catalog = JSON.parse(catalogEl?.textContent || "{}"); } catch (_) { catalog = {}; }
 
-  const fuentesCatalogEl = document.getElementById("conc-fuentes-catalog");
-  let fuentesCatalog = {};
-  try { fuentesCatalog = JSON.parse(fuentesCatalogEl?.textContent || "{}"); } catch (_) { fuentesCatalog = {}; }
+  const novedadesCatalogEl = document.getElementById("conc-novedades-catalog");
+  let novedadesCatalog = {};
+  try { novedadesCatalog = JSON.parse(novedadesCatalogEl?.textContent || "{}"); } catch (_) { novedadesCatalog = {}; }
 
   const ramoSelect = form.querySelector('select[name="ramo"]');
-  const fuenteRadios = form.querySelectorAll('input[name="fuente"]');
-  const fuenteApiNota = form.querySelector("[data-fuente-api-nota]");
-  const excelSlots = form.querySelector("[data-fuente-excel-slots]");
-  const perfilZohoField = form.querySelector("[data-perfil-zoho-field]");
   const submit = form.querySelector("[data-conc-submit]");
   const progress = form.querySelector("[data-conc-progress]");
 
@@ -28,7 +24,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const cobrosSection = document.querySelector("[data-cobros-section]");
   const cobrosEmpty = document.querySelector("[data-cobros-empty]");
-  const cobrosList = document.querySelector("[data-cobros-list]");
+  const cobrosField = document.querySelector("[data-cobros-field]");
+  const cobrosSelect = document.querySelector("[data-cobros-select]");
+  const btnFacturar = document.querySelector("[data-action-facturar]");
   const polizaLink = document.querySelector("[data-poliza-link]");
 
   let objectUrl = null;
@@ -59,45 +57,16 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  ramoSelect?.addEventListener("change", () => { updateSlots(ramoSelect.value); updateFuente(); });
+  ramoSelect?.addEventListener("change", () => { updateSlots(ramoSelect.value); updateNovedades(); });
   if (ramoSelect) updateSlots(ramoSelect.value);
 
-  // --- Fuente de asegurados/personas: Excel (legado) vs Zoho API -----------
-  function fuenteSeleccionada() {
-    return [...fuenteRadios].find((r) => r.checked)?.value || "excel";
-  }
-
-  function updateFuente() {
+  // --- Novedades: se oculta el upload solo si el ramo la resuelve por Zoho
+  // API (vg_deudores no: su novedad viene del banco, sigue pidiendo el archivo).
+  function updateNovedades() {
     const ramo = ramoSelect?.value;
-    const soporte = fuentesCatalog[ramo] || {};
-    const soportaApi = !!soporte.asegurados;
-    fuenteRadios.forEach((radio) => {
-      if (radio.value === "api") {
-        radio.disabled = !soportaApi;
-        if (!soportaApi && radio.checked) {
-          radio.checked = false;
-          const excelRadio = [...fuenteRadios].find((r) => r.value === "excel");
-          if (excelRadio) excelRadio.checked = true;
-        }
-      }
-    });
-    if (fuenteApiNota) fuenteApiNota.hidden = soportaApi;
-
-    const fuente = fuenteSeleccionada();
-    const esApi = fuente === "api";
-    if (excelSlots) {
-      excelSlots.hidden = esApi;
-      excelSlots.querySelectorAll("input[type=\"file\"]").forEach((input) => {
-        if (esApi) input.value = "";
-      });
-    }
-    if (perfilZohoField) perfilZohoField.hidden = !esApi;
-
-    // Novedades: se oculta solo si el ramo tambien resuelve novedades por API
-    // (vg_deudores no: su novedad viene del banco, sigue pidiendo el archivo).
+    const ocultarNovedades = !!novedadesCatalog[ramo];
     const novedadesZone = form.querySelector('.tool-slot[data-slot="novedades"]');
     if (novedadesZone) {
-      const ocultarNovedades = esApi && !!soporte.novedades;
       novedadesZone.hidden = ocultarNovedades;
       if (ocultarNovedades) {
         const input = novedadesZone.querySelector('input[type="file"]');
@@ -106,8 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  fuenteRadios.forEach((radio) => radio.addEventListener("change", updateFuente));
-  updateFuente();
+  updateNovedades();
 
   // --- Nombre de archivo seleccionado -------------------------------------
   form.querySelectorAll('input[type="file"]').forEach((input) => {
@@ -155,22 +123,30 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   function renderResult(summary) {
+    const advertencias = summary.total_advertencias ?? 0;
     meta.replaceChildren(
       metaItem("Ramo", summary.ramo),
       metaItem("Periodo", summary.periodo),
       metaItem("Póliza", summary.poliza),
-      metaItem("Fuente", summary.fuente === "api" ? "Zoho API" : "Excel"),
       metaItem("Incidentes", String(summary.total_incidentes ?? 0)),
+      metaItem("Advertencias", String(advertencias)),
     );
 
+    // sin_incidentes solo considera incidentes bloqueantes: las advertencias
+    // (p. ej. recibo/PDF sin validar, que por ahora es solo informativo) nunca
+    // impiden continuar ni acceder a los cobros/enlace de facturación en Zoho.
     const sinIncidentes = summary.sin_incidentes === true || (summary.total_incidentes ?? 0) === 0;
     banner.className = `tool-banner ${sinIncidentes ? "is-ok" : "is-warn"}`;
-    banner.textContent = sinIncidentes
-      ? "Conciliación sin incidentes. Todo cuadra: puede continuar con la facturación."
-      : `Se encontraron ${summary.total_incidentes} incidente(s). Revise y descargue el detalle antes de facturar.`;
+    if (sinIncidentes) {
+      banner.textContent = advertencias > 0
+        ? `Conciliación sin incidentes bloqueantes. Hay ${advertencias} advertencia(s) informativa(s) (ver detalle); puede continuar con la facturación.`
+        : "Conciliación sin incidentes. Todo cuadra: puede continuar con la facturación.";
+    } else {
+      banner.textContent = `Se encontraron ${summary.total_incidentes} incidente(s). Revise y descargue el detalle antes de facturar.`;
+    }
 
     const porTipo = summary.por_tipo || {};
-    if (!sinIncidentes && Object.keys(porTipo).length) {
+    if (Object.keys(porTipo).length) {
       incidentsList.replaceChildren(...Object.entries(porTipo).map(([tipo, n]) => {
         const li = document.createElement("li");
         const label = document.createElement("span"); label.textContent = tipo;
@@ -183,7 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     renderCobros(summary);
-    btnDownload.hidden = sinIncidentes;
+    btnDownload.hidden = sinIncidentes && advertencias === 0;
     result.hidden = false;
     result.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -195,10 +171,10 @@ document.addEventListener("DOMContentLoaded", () => {
     item.append(strong, span); return item;
   }
 
-  // --- Cobros: lista de Operaciones de la poliza en Zoho (Produccion) ------
-  // Puede haber varias vigentes a la vez (por ramo, por cuota): se muestran
-  // todas con su vigencia para que quien concilia elija a cual ir, en vez de
-  // asumir una sola.
+  // --- Cobros: Operaciones de la poliza en Zoho ----------------------------
+  // Puede haber varias vigentes a la vez (por ramo, por cuota): vienen del
+  // backend ordenadas por vigencia mas reciente primero, asi que ese es el
+  // seleccionado por defecto; quien concilia puede elegir otra en el dropdown.
   function renderCobros(summary) {
     if (!cobrosSection) return;
     const cobros = Array.isArray(summary.cobros) ? summary.cobros : null;
@@ -207,31 +183,34 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     cobrosSection.hidden = false;
-    cobrosList.replaceChildren(...cobros.map(cobroItem));
-    if (cobrosEmpty) cobrosEmpty.hidden = cobros.length > 0;
+    const hayCobros = cobros.length > 0;
+    if (cobrosEmpty) cobrosEmpty.hidden = hayCobros;
+    if (cobrosField) cobrosField.hidden = !hayCobros;
+    if (cobrosSelect) cobrosSelect.replaceChildren(...cobros.map(cobroOption));
+    if (btnFacturar) {
+      btnFacturar.hidden = !hayCobros;
+      btnFacturar.href = hayCobros ? cobros[0].url : "#";
+    }
     if (polizaLink) {
       polizaLink.hidden = !summary.poliza_url;
       polizaLink.href = summary.poliza_url || "#";
     }
   }
 
-  function cobroItem(cobro) {
-    const li = document.createElement("li"); li.className = "conc-cobro-item";
-    const link = document.createElement("a");
-    link.href = cobro.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-    const nombre = document.createElement("strong");
-    nombre.textContent = cobro.nombre || "Operación sin nombre";
-    const detalle = document.createElement("span");
-    detalle.textContent = [cobro.ramo, cobro.numero_cuota ? `Cuota ${cobro.numero_cuota}` : ""]
-      .filter(Boolean).join(" · ") || "Sin ramo/cuota registrados";
-    const vigencia = document.createElement("span");
-    vigencia.textContent = (cobro.vigencia_inicio || cobro.vigencia_fin)
-      ? `Vigencia: ${cobro.vigencia_inicio || "s/f"} – ${cobro.vigencia_fin || "s/f"}`
-      : "Vigencia no disponible";
-    link.append(nombre, detalle, vigencia);
-    li.append(link);
-    return li;
+  function cobroOption(cobro) {
+    const option = document.createElement("option");
+    option.value = cobro.url;
+    const cuota = cobro.numero_cuota ? `Cuota ${cobro.numero_cuota}` : "";
+    const vigencia = (cobro.vigencia_inicio || cobro.vigencia_fin)
+      ? `${cobro.vigencia_inicio || "s/f"} – ${cobro.vigencia_fin || "s/f"}`
+      : "vigencia no disponible";
+    option.textContent = [cobro.nombre || "Operación sin nombre", cuota, vigencia].filter(Boolean).join(" - ");
+    return option;
   }
+
+  cobrosSelect?.addEventListener("change", () => {
+    if (btnFacturar && cobrosSelect.value) btnFacturar.href = cobrosSelect.value;
+  });
 
   btnDownload?.addEventListener("click", () => {
     if (!objectUrl) return;
@@ -245,7 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
     result.hidden = true;
     form.querySelectorAll("[data-file-name]").forEach((el) => { el.textContent = "Ningún archivo seleccionado"; });
     if (ramoSelect) updateSlots(ramoSelect.value);
-    updateFuente();
+    updateNovedades();
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 

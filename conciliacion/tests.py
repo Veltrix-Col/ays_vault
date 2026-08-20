@@ -2,6 +2,7 @@ import glob
 import io
 import os
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -48,16 +49,21 @@ class FormularioTests(TestCase):
         return {
             "ramo": "salud",
             "poliza": "12345",
-            "fuente": "excel",
         }, {
             "cobro": _archivo("Porchat.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             "recibo": _archivo("Recibo.pdf", b"%PDF-1.7\n%%EOF", "application/pdf"),
-            "relacion": _archivo("Zoho_Salud.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            "personas": _archivo("Personas_Zoho.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         }
 
     def test_formulario_valido_sin_novedades(self):
         data, files = self._datos_validos_salud()
+        form = ConciliacionUploadForm(data=data, files=files)
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_formulario_valido_sin_recibo(self):
+        # El recibo (PDF validado con IA) es opcional: solo genera una
+        # advertencia informativa, nunca bloquea el envío del formulario.
+        data, files = self._datos_validos_salud()
+        del files["recibo"]
         form = ConciliacionUploadForm(data=data, files=files)
         self.assertTrue(form.is_valid(), form.errors)
 
@@ -98,20 +104,22 @@ class VistaTests(TestCase):
         rutas = {}
         for slot, patron in patrones.items():
             hits = glob.glob(os.path.join(base, patron))
-            if hits and slot in ("relacion", "cobro", "personas"):
+            if hits:
                 rutas[slot] = hits[0]
-            elif hits:
-                rutas[slot] = hits[0]
-        for obligatorio in ("relacion", "cobro", "personas"):
-            if obligatorio not in rutas:
-                self.skipTest(f"Falta muestra '{obligatorio}' en {base}")
+        if "cobro" not in rutas:
+            self.skipTest(f"Falta muestra 'cobro' en {base}")
         return rutas
 
     def test_post_end_to_end_salud(self):
+        # Relación de asegurados y Personas ya no se suben: se consultan
+        # directo en Zoho (Full API), por eso este test requiere conectividad
+        # real a Zoho ademas de las muestras locales. Se restringe a
+        # ZOHO_ACTIVE_PROFILE=sandbox para nunca disparar una consulta real
+        # contra Producción solo por correr la suite de tests localmente.
+        if getattr(settings, "ZOHO_ACTIVE_PROFILE", "") != "sandbox":
+            self.skipTest("Requiere ZOHO_ACTIVE_PROFILE=sandbox: consulta Zoho por API real.")
         rutas = self._muestras("Salud", {
-            "relacion": "Relación_Asegurados_Zoho_Salud*.xlsx",
             "cobro": "*Porchat*.xlsx",
-            "personas": "Personas_Zoho*.xlsx",
             "novedades": "*Novedades*.xlsx",
             "recibo": "*Recibo*Salud*.pdf",
         })
@@ -125,7 +133,7 @@ class VistaTests(TestCase):
                 ext = os.path.splitext(ruta)[1].lower()
                 files[slot] = _archivo(os.path.basename(ruta), fh.read(), tipos.get(ext, "application/octet-stream"))
         response = self.client.post(reverse("conciliacion:index"),
-                                    {"ramo": "salud", "poliza": "12345", "fuente": "excel", **files})
+                                    {"ramo": "salud", "poliza": "12345", **files})
         self.assertEqual(response.status_code, 200, getattr(response, "content", b"")[:300])
         self.assertIn("X-Conciliacion-Summary", response)
         self.assertEqual(

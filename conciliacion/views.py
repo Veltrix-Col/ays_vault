@@ -9,7 +9,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .forms import ConciliacionUploadForm
-from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CHOICES, catalogo_fuentes, catalogo_slots, slots_de_ramo
+from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CHOICES, catalogo_novedades_api, catalogo_slots, slots_de_ramo
 from .services import ConciliacionProcessingError, procesar_conciliacion
 
 logger = logging.getLogger("conciliacion")
@@ -24,7 +24,7 @@ def _contexto_base():
         "slots_iniciales": slots_iniciales,
         "slots_iniciales_map": {slot["campo"]: slot for slot in slots_iniciales},
         "slots_catalog_json": json.dumps(catalogo_slots(), ensure_ascii=False),
-        "fuentes_catalog_json": json.dumps(catalogo_fuentes(), ensure_ascii=False),
+        "novedades_api_catalog_json": json.dumps(catalogo_novedades_api(), ensure_ascii=False),
     }
 
 
@@ -41,8 +41,6 @@ def upload(request):
                 ramo=form.cleaned_data["ramo"],
                 poliza=form.cleaned_data["poliza"],
                 archivos=archivos,
-                fuente=form.cleaned_data["fuente"],
-                perfil_zoho=form.cleaned_data.get("perfil_zoho") or "sandbox",
             )
         except ConciliacionProcessingError as exc:
             return render(request, "conciliacion/upload.html",

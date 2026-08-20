@@ -1,10 +1,12 @@
 """Formulario de carga del Conciliador de Facturación.
 
 Un único formulario con el selector de ramo, el número de póliza (metadata) y los
-slots de archivo. La validación es defensiva pero liviana: tamaño, extensión
-coherente con el ramo y una inspección anti–zip-bomb para los .xlsx (mismo
-criterio que la app `soat`). El PDF se valida por firma. La lógica de negocio
-(estructura interna de cada archivo) la valida el motor `conciliador`.
+slots de archivo. Relación de asegurados y Personas ya no se suben: se
+consultan siempre directo a Zoho (Full API) filtradas por la póliza. La
+validación es defensiva pero liviana: tamaño, extensión coherente con el ramo
+y una inspección anti–zip-bomb para los .xlsx (mismo criterio que la app
+`soat`). El PDF se valida por firma. La lógica de negocio (estructura interna
+de cada archivo) la valida el motor `conciliador`.
 """
 
 from __future__ import annotations
@@ -16,15 +18,6 @@ from django import forms
 from django.conf import settings
 
 from .ramos_ui import RAMO_CHOICES, ramo_soporta_api, slots_de_ramo
-
-FUENTE_CHOICES = [
-    ("excel", "Excel (legado)"),
-    ("api", "Zoho API"),
-]
-PERFIL_ZOHO_CHOICES = [
-    ("sandbox", "Sandbox"),
-    ("production", "Producción"),
-]
 
 _EXT_POR_ACCEPT = {
     ".xlsx": {".xlsx"},
@@ -87,19 +80,10 @@ class ConciliacionUploadForm(forms.Form):
         strip=True,
         widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}),
     )
-    fuente = forms.ChoiceField(
-        choices=FUENTE_CHOICES, label="Fuente de asegurados/personas",
-        initial="excel", widget=forms.RadioSelect,
-    )
-    perfil_zoho = forms.ChoiceField(
-        choices=PERFIL_ZOHO_CHOICES, label="Perfil Zoho", initial="sandbox", required=False,
-    )
     cobro = forms.FileField(label="Archivo de cobro", required=True)
-    recibo = forms.FileField(label="PDF de cobro", required=True)
-    # relacion/personas son obligatorios solo en modo Excel; se valida en clean()
-    # porque la obligatoriedad depende de `fuente`, no es fija por campo.
-    relacion = forms.FileField(label="Relación de asegurados (Zoho)", required=False)
-    personas = forms.FileField(label="Personas (Zoho)", required=False)
+    # Opcional: validación adicional con IA (Content Understanding). Si falta o
+    # no cuadra, solo se reporta como advertencia; nunca bloquea la conciliación.
+    recibo = forms.FileField(label="PDF de cobro", required=False)
     novedades = forms.FileField(label="Novedades", required=False)
 
     def clean_poliza(self):
@@ -114,14 +98,8 @@ class ConciliacionUploadForm(forms.Form):
         if ramo not in dict(RAMO_CHOICES):
             return cleaned
 
-        fuente = cleaned.get("fuente") or "excel"
-        if fuente == "api":
-            if not ramo_soporta_api(ramo):
-                self.add_error("fuente", "Este ramo todavía no soporta consulta directa a Zoho.")
-        else:
-            for campo, etiqueta in (("relacion", "Relación de asegurados"), ("personas", "Personas")):
-                if not cleaned.get(campo):
-                    self.add_error(campo, f"{etiqueta} es obligatorio en modo Excel.")
+        if not ramo_soporta_api(ramo):
+            self.add_error("ramo", "Este ramo todavía no soporta la conexión directa a Zoho.")
 
         accept_por_campo = {slot["campo"]: slot["accept"] for slot in slots_de_ramo(ramo)}
         for campo, accept in accept_por_campo.items():

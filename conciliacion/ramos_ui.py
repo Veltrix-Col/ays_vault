@@ -21,23 +21,10 @@ NOTA_TEMPORAL_ZOHO = (
 
 # Slots comunes a todos los ramos. El slot de cobro se define por ramo porque su
 # formato cambia (CSV de Sharefile, Excel de Porchat, Excel de AVA…).
+# Relación de asegurados y Personas ya no son slots de archivo: se consultan
+# siempre directo a Zoho (Full API) filtradas por la póliza indicada en el
+# formulario, ver `conciliacion.services.processor`.
 _SLOTS_COMUNES: dict[str, dict] = {
-    "relacion": {
-        "campo": "relacion",
-        "label": "Relación de asegurados (Zoho)",
-        "help": "Exportación desde Zoho de la relación de asegurados del ramo.",
-        "accept": ".xlsx",
-        "required": True,
-        "temporal": True,
-    },
-    "personas": {
-        "campo": "personas",
-        "label": "Personas (Zoho)",
-        "help": "Archivo Personas_Zoho con los documentos válidos del sistema.",
-        "accept": ".xlsx",
-        "required": True,
-        "temporal": True,
-    },
     "novedades": {
         "campo": "novedades",
         "label": "Novedades (Zoho)",
@@ -58,18 +45,19 @@ _SLOTS_COMUNES: dict[str, dict] = {
         "campo": "recibo",
         "label": "PDF de cobro (recibo de la aseguradora)",
         "help": (
-            "Recibo/factura en PDF de la aseguradora. La validación automática "
-            "del recibo requiere Content Understanding configurado; sin él, esa "
-            "verificación se marca como “N/D” sin afectar la conciliación."
+            "Recibo/factura en PDF de la aseguradora. Opcional: es una validación "
+            "adicional hecha con IA (Content Understanding) que solo genera una "
+            "advertencia informativa si no cuadra o no se sube; nunca impide "
+            "continuar ni conciliar en Zoho."
         ),
         "accept": ".pdf",
-        "required": True,
+        "required": False,
         "temporal": False,
     },
 }
 
 # Orden de presentación de los slots en el formulario.
-_ORDEN_SLOTS = ["cobro", "recibo", "relacion", "personas", "novedades"]
+_ORDEN_SLOTS = ["cobro", "recibo", "novedades"]
 
 # Sobrescrituras específicas por ramo (por ahora solo el slot de cobro y algún
 # ajuste puntual de novedades).
@@ -110,11 +98,12 @@ _OVERRIDES: dict[str, dict[str, dict]] = {
 }
 
 # Ramos habilitados y su nombre visible (el orden define el del selector).
+# Sufijo "Colectivos" para distinguirlos de los mismos ramos en otros negocios.
 RAMOS_HABILITADOS: list[tuple[str, str]] = [
-    ("movilidad", "Movilidad"),
-    ("salud", "Salud"),
-    ("vg_voluntario", "VG Voluntario"),
-    ("vg_deudores", "VG Deudores"),
+    ("movilidad", "Movilidad Colectivos"),
+    ("salud", "Salud Colectivos"),
+    ("vg_voluntario", "VG Voluntario Colectivos"),
+    ("vg_deudores", "VG Deudores Colectivos"),
 ]
 
 RAMO_CHOICES = list(RAMOS_HABILITADOS)
@@ -152,20 +141,15 @@ def ramo_soporta_api(codigo: str) -> bool:
 
 
 def ramo_soporta_novedades_api(codigo: str) -> bool:
-    """True si, ademas de asegurados/personas, el ramo tambien resuelve
+    """True si, ademas de relacion/personas, el ramo tambien resuelve
     novedades por API (no todos: vg_deudores la recibe del banco, no de
     Zoho, y sigue exigiendo el archivo aunque el resto venga de la API)."""
     ramo = RAMOS.get(codigo)
     return bool(ramo and ramo.cargar_novedades_api)
 
 
-def catalogo_fuentes() -> dict[str, dict[str, bool]]:
-    """Mapa {codigo_ramo: {"asegurados": bool, "novedades": bool}} — se
-    serializa a JSON para el frontend."""
-    return {
-        codigo: {
-            "asegurados": ramo_soporta_api(codigo),
-            "novedades": ramo_soporta_novedades_api(codigo),
-        }
-        for codigo in RAMO_CODIGOS
-    }
+def catalogo_novedades_api() -> dict[str, bool]:
+    """Mapa {codigo_ramo: bool} — True si el slot de novedades se resuelve
+    solo por Zoho API (se oculta el upload); se serializa a JSON para el
+    frontend."""
+    return {codigo: ramo_soporta_novedades_api(codigo) for codigo in RAMO_CODIGOS}

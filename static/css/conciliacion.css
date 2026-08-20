@@ -20,12 +20,6 @@
 
 .conc-cobros { margin-top: 18px; }
 .conc-cobros h3 { margin: 0 0 10px; color: #172137; font-size: 1rem; }
-.conc-cobros-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.conc-cobro-item a {
-  display: flex; flex-direction: column; gap: 3px; padding: 12px 14px;
-  border: 1px solid #dfe4ed; border-radius: 11px; background: #f8fbfd;
-  text-decoration: none; color: inherit; transition: .15s ease;
-}
-.conc-cobro-item a:hover, .conc-cobro-item a:focus-visible { border-color: #0875b8; background: #f1f7fc; }
-.conc-cobro-item strong { color: #172137; font-size: .95rem; }
-.conc-cobro-item span { color: #68748a; font-size: .82rem; }
+.conc-cobros-field { margin-bottom: 14px; max-width: 480px; }
+.conc-cobro-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.conc-cobro-actions .tool-button { flex: 0 0 auto; }

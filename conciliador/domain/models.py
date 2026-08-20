@@ -70,6 +70,12 @@ class Incidente:
     reportado_en_novedades: str = ""
     detalle_novedad: str = ""
     observacion: str = ""
+    # True (default) => cuenta como incidente real: bloquea "sin incidentes" y,
+    # por lo tanto, el acceso a los cobros/enlace de facturación en Zoho.
+    # False => fila informativa/advertencia (p. ej. ReciboConciliacionRule,
+    # que por ahora es solo advertencia y nunca debe impedir conciliar en
+    # Zoho): siempre se incluye en el Excel, pero no cuenta para el bloqueo.
+    bloqueante: bool = True
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -94,14 +100,32 @@ class ReporteConciliacion:
     incidentes: list[Incidente]
 
     @property
+    def incidentes_bloqueantes(self) -> list[Incidente]:
+        return [i for i in self.incidentes if i.bloqueante]
+
+    @property
+    def incidentes_informativos(self) -> list[Incidente]:
+        return [i for i in self.incidentes if not i.bloqueante]
+
+    @property
     def total_incidentes(self) -> int:
-        return len(self.incidentes)
+        """Solo incidentes bloqueantes; las advertencias (p. ej. recibo/PDF)
+        no cuentan aquí, aunque siguen apareciendo en el Excel."""
+        return len(self.incidentes_bloqueantes)
+
+    @property
+    def total_advertencias(self) -> int:
+        return len(self.incidentes_informativos)
 
     @property
     def esta_vacio(self) -> bool:
-        return not self.incidentes
+        """Sin incidentes bloqueantes: habilita el acceso a los cobros/enlace
+        de facturación en Zoho, aunque haya advertencias informativas."""
+        return not self.incidentes_bloqueantes
 
     def to_dataframe(self) -> pd.DataFrame:
+        # Se conservan TODAS las filas (bloqueantes e informativas) en el
+        # Excel: es el registro de auditoría completo.
         filas = [i.to_dict() for i in self.incidentes]
         return pd.DataFrame(filas, columns=REPORTE_COLUMNAS)
 
