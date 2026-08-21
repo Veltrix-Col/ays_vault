@@ -88,6 +88,12 @@ desactivarlos por error.
 arranque si se deja en `local_public`, y con `trusted_intranet` rechaza el
 arranque si faltan `INTRANET_SSO_PUBLIC_KEY` o `INTRANET_SSO_AUTHORIZE_URL`.
 
+Estas variables ya están declaradas en `docker-compose.yml` (bloque
+`environment` del servicio `web`); solo falta pegar los valores reales en el
+panel de variables de entorno de Dokploy. `INTRANET_SSO_PUBLIC_KEY` acepta
+saltos de línea reales o escapados como `\n`, igual que `INTRANET_SSO_PRIVATE_KEY`
+del lado de WordPress.
+
 ## 5. Verificación
 
 1. Con el navegador sin sesión en ninguno de los dos sitios, visita

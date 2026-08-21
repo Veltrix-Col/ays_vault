@@ -62,7 +62,8 @@ if TOOLS_ACCESS_MODE == 'local_public' and not DEBUG and not RUNNING_TESTS:
     raise ImproperlyConfigured('TOOLS_ACCESS_MODE=local_public solo se permite con DEBUG=true')
 TOOLS_DELEGATED_ACCESS_VALIDATOR=os.getenv('TOOLS_DELEGATED_ACCESS_VALIDATOR','').strip()
 INTRANET_SSO_VALIDATOR_PATH='intranet_sso.delegated_access.validate_intranet_session'
-INTRANET_SSO_PUBLIC_KEY=os.getenv('INTRANET_SSO_PUBLIC_KEY','').strip()
+_intranet_sso_public_key_raw=os.getenv('INTRANET_SSO_PUBLIC_KEY','').strip()
+INTRANET_SSO_PUBLIC_KEY=_intranet_sso_public_key_raw.replace('\\n','\n') if '\\n' in _intranet_sso_public_key_raw else _intranet_sso_public_key_raw
 INTRANET_SSO_AUTHORIZE_URL=os.getenv('INTRANET_SSO_AUTHORIZE_URL','').strip()
 INTRANET_SSO_AUDIENCE=os.getenv('INTRANET_SSO_AUDIENCE','bapps.dp.segurosays.com').strip()
 INTRANET_SSO_ISSUER=os.getenv('INTRANET_SSO_ISSUER','segurosays.com').strip()

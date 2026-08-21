@@ -41,5 +41,10 @@ EXPOSE 8000
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+# Corre como usuario sin privilegios: limita el radio de acción si algún día
+# se explota una vulnerabilidad de RCE en la app o en una dependencia.
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]

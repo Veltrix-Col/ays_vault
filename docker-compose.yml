@@ -53,6 +53,12 @@ services:
       REAUTH_TTL_SECONDS: ${REAUTH_TTL_SECONDS:-300}
       MFA_FAILURE_LIMIT: ${MFA_FAILURE_LIMIT:-5}
       MFA_ISSUER: ${MFA_ISSUER:-A&S Vault}
+      TOOLS_ACCESS_MODE: ${TOOLS_ACCESS_MODE:-trusted_intranet}
+      TOOLS_DELEGATED_ACCESS_VALIDATOR: ${TOOLS_DELEGATED_ACCESS_VALIDATOR:-intranet_sso.delegated_access.validate_intranet_session}
+      INTRANET_SSO_PUBLIC_KEY: ${INTRANET_SSO_PUBLIC_KEY}
+      INTRANET_SSO_AUTHORIZE_URL: ${INTRANET_SSO_AUTHORIZE_URL}
+      INTRANET_SSO_AUDIENCE: ${INTRANET_SSO_AUDIENCE:-bapps.dp.segurosays.com}
+      INTRANET_SSO_ISSUER: ${INTRANET_SSO_ISSUER:-segurosays.com}
     volumes:
       - vault_media:/app/media
     networks:
@@ -69,7 +75,7 @@ services:
       start_period: 30s
 
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
