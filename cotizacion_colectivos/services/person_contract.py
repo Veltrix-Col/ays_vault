@@ -92,19 +92,21 @@ def _fold(value: object) -> str:
     return "".join(char for char in text if not unicodedata.combining(char)).strip().casefold()
 
 
-def build_contact_payload(data: Mapping[str, object]) -> dict[str, object]:
+def build_contact_payload(data: Mapping[str, object], *, status: str = "Prospecto") -> dict[str, object]:
     """Build only the confirmed Contacts allowlist; never infer consent."""
     last_name = str(data.get("Last_Name") or "").strip()
     id_type = str(data.get("Tipo_ID") or "").strip()
     document = str(data.get("N_mero_de_ID") or "").strip()
     if not last_name or not id_type or not document:
         raise ValidationError("Faltan datos para crear persona.")
+    if status not in {"Prospecto", "Cliente"}:
+        raise ValidationError("Estado de Contacts no está confirmado.")
     payload: dict[str, object] = {
         "Last_Name": last_name,
         "Tipo_de_persona": "Persona natural",
         "Tipo_ID": id_type,
         "N_mero_de_ID": document,
-        "Estado": "Prospecto",
+        "Estado": status,
     }
     for field in ("First_Name", "Email", "Mobile", "Phone", "Date_of_Birth"):
         value = data.get(field)
@@ -143,6 +145,7 @@ def resolve_contact_by_document(*, document: str, document_type: str, zoho=None)
     item = typed[0]
     return {
         "status": "FOUND",
+        "record_id": str(item.get("id") or "").strip(),
         "display_name": str(item.get("Full_Name") or item.get("Last_Name") or "Persona"),
         "state": str(item.get("Estado") or ""),
         "detail_token": sign_record_id(item.get("id"), "person") if item.get("id") else "",
@@ -190,21 +193,25 @@ _CONTACT_WRITE_LOCK = threading.Lock()
 class GuardedSandboxContactPublisher:
     """Single guarded Contacts.CREATE entry point; never retries uncertain writes."""
 
-    def __init__(self, *, confirmation: str):
+    def __init__(self, *, confirmation: str,
+                 feature_flag: str = "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
+                 confirmation_setting: str = "COLECTIVOS_CONTACT_WRITE_CONFIRMATION",
+                 expected_confirmation: str = "SANDBOX_CONTACT_WRITE"):
         if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != "sandbox":
             raise ContactPublishingDisabled("Contacts sólo admite Sandbox en esta fase.")
-        if not getattr(settings, "COLECTIVOS_CONTACT_PUBLISH_ENABLED", False):
+        if not getattr(settings, feature_flag, False):
             raise ContactPublishingDisabled("Contacts CREATE está deshabilitado.")
-        if str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")).strip() != "SANDBOX_CONTACT_WRITE":
+        self.expected_confirmation = expected_confirmation
+        if str(getattr(settings, confirmation_setting, "")).strip() != expected_confirmation:
             raise ContactPublishingDisabled("Falta la confirmación configurada de Contacts Sandbox.")
-        if str(confirmation or "").strip() != "SANDBOX_CONTACT_WRITE":
+        if str(confirmation or "").strip() != expected_confirmation:
             raise ContactPublishingDisabled("Falta la confirmación explícita de Contacts Sandbox.")
         config = ZohoSettings.from_django("sandbox")
         if not config.write_enabled:
             raise ContactPublishingDisabled("La escritura Sandbox está deshabilitada.")
 
-    def create(self, data: Mapping[str, object], *, zoho=None) -> dict[str, object]:
-        payload = build_contact_payload(data)
+    def create(self, data: Mapping[str, object], *, zoho=None, status: str = "Prospecto") -> dict[str, object]:
+        payload = build_contact_payload(data, status=status)
         with _CONTACT_WRITE_LOCK:
             existing = resolve_contact_by_document(
                 document=str(payload["N_mero_de_ID"]),

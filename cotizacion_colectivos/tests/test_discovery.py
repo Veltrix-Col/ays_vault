@@ -116,6 +116,8 @@ class PackageBoundaryTests(SimpleTestCase):
         allowed_publishers = {
             (root / "services" / "task_publisher.py").resolve(),
             (root / "services" / "person_contract.py").resolve(),
+            (root / "services" / "subrisk_sandbox.py").resolve(),
+            (root / "services" / "risk_sandbox.py").resolve(),
         }
         write_calls = []
         direct_http_write = []
@@ -144,7 +146,9 @@ class PackageBoundaryTests(SimpleTestCase):
 
         task_source = (root / "services" / "task_publisher.py").read_text("utf-8")
         contact_source = (root / "services" / "person_contract.py").read_text("utf-8")
-        for source in (task_source, contact_source):
+        subrisk_source = (root / "services" / "subrisk_sandbox.py").read_text("utf-8")
+        risk_source = (root / "services" / "risk_sandbox.py").read_text("utf-8")
+        for source in (task_source, contact_source, subrisk_source, risk_source):
             self.assertIn("sandbox", source)
             self.assertIn("write_enabled", source)
             self.assertIn("confirmation", source)

@@ -73,6 +73,9 @@ from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
     contact_missing_fields, get_contacts_publisher,
 )
+from .services.individual_entities import effective_candidate, promote_created_people, resolve_mobility_entities, synchronize_risk_insured
+from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
+from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
 from integrations.zoho.exceptions import ZohoError
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
@@ -1708,7 +1711,7 @@ def request_list(request):
             access.inbox_branch_name = branch_name
             access.inbox_client_label = context.get("collective_context") or "Cliente sin etiqueta"
             access.inbox_type_label = "Cotización Individual"
-            access.inbox_person_label = context.get("affiliate_label") or "Persona nueva"
+            access.inbox_person_label = context.get("affiliate_label") or "Nuevo afiliado"
             access.inbox_public_id = str(quotation.public_id) if quotation else ""
             access.inbox_last_activity = max(activity_candidates)
             access.inbox_deadline = access.expires_at
@@ -2405,7 +2408,11 @@ def individual_accept(request, token):
     quotation = accept_individual_quotation(quotation=quotation, actor=actor)
     try:
         resolve_accepted_person(quotation=quotation)
-        messages.success(request, "Cotización aceptada; se verificó la persona en Zoho.")
+        entity_result = resolve_mobility_entities(quotation=quotation) if quotation.branch_slug == "movilidad" else None
+        if entity_result and entity_result.get("status") == "error":
+            messages.warning(request, "Cotización aceptada; no fue posible resolver las entidades de Movilidad.")
+        else:
+            messages.success(request, "Cotización aceptada; se verificaron las entidades en Zoho.")
     except Exception:
         messages.warning(request, "Cotización aceptada; no fue posible completar la consulta de persona.")
     return redirect("cotizacion_colectivos:individual_expedient", token=sign_receipt(quotation.public_id))
@@ -2420,17 +2427,24 @@ def individual_create_person(request, token):
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
         resolve_accepted_person(quotation=quotation)
+        if quotation.branch_slug == "movilidad":
+            resolve_mobility_entities(quotation=quotation)
         quotation.refresh_from_db(fields=("safe_metadata",))
         people = quotation.safe_metadata.get("people_lookup") or ()
+        entities = quotation.safe_metadata.get("zoho_entities") or {}
+        if entities.get("people"):
+            people = entities.get("people")
         document_hint = str(request.POST.get("document") or (people[0].get("document") if people else "")).strip()
         selected = next((item for item in people if str(item.get("document") or "") == document_hint), None)
+        if selected and (selected.get("created") or selected.get("contact_id") or selected.get("remote_id")):
+            raise ValidationError("El afiliado/asegurado ya está resuelto en Zoho; no se permite crear otro Contact.")
         data = dict(selected.get("candidate") or {}) if isinstance(selected, dict) else {}
         if not data:
             raise ValidationError("No se encontró un candidato Persona válido para crear.")
         result = get_contacts_publisher(
             profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
             confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
-        ).create(data)
+        ).create(data, status="Cliente")
         metadata = dict(quotation.safe_metadata or {})
         contact_id = result["record_id"]
         created_at = timezone.now().isoformat()
@@ -2440,7 +2454,7 @@ def individual_create_person(request, token):
             if str(person.get("document") or "") == selected_document:
                 person.update({
                     "status": "found", "created": True, "created_at": created_at,
-                    "contact_id": contact_id,
+                    "contact_id": contact_id, "remote_id": contact_id,
                     "detail_token": sign_record_id(contact_id, "person"),
                     "has_complete_data": True, "missing_fields": [],
                 })
@@ -2450,6 +2464,21 @@ def individual_create_person(request, token):
             {"status": "found", "created": True, "contact_id": contact_id,
              "created_at": created_at, "detail_token": sign_record_id(contact_id, "person")},
         )
+        # Keep the same operational result in the entity snapshot consumed by
+        # the Mobility workspace.  The client response remains encrypted and
+        # untouched; subsequent GETs can render the confirmed CREATE without
+        # depending on an immediate READ reconciliation.
+        entity_people = [dict(item) for item in (entities.get("people") or ()) if isinstance(item, dict)]
+        for person in entity_people:
+            if str(person.get("document") or person.get("candidate", {}).get("N_mero_de_ID") or "") == selected_document:
+                person.update({
+                    "status": "found", "created": True, "created_at": created_at,
+                    "contact_id": contact_id, "remote_id": contact_id,
+                    "has_complete_data": True, "missing_fields": [],
+                })
+        if entity_people:
+            entities["people"] = entity_people
+            metadata["zoho_entities"] = entities
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
         messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
@@ -2505,7 +2534,146 @@ def individual_complete_person(request, token):
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
         resolve_accepted_person(quotation=quotation)
+        if quotation.branch_slug == "movilidad":
+            resolve_mobility_entities(quotation=quotation)
         messages.success(request, "Datos de la persona guardados; se volvió a validar en Zoho.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
+        raise Http404("Respuesta no encontrada")
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+def _individual_entity_quotation(token):
+    return CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_update_entity(request, token, entity, vehicle_index):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    if entity not in {"risk", "subrisk"}:
+        raise Http404("Entidad no encontrada")
+    try:
+        quotation = _individual_entity_quotation(token)
+        metadata = dict(quotation.safe_metadata or {})
+        entities = metadata.get("zoho_entities") if isinstance(metadata.get("zoho_entities"), dict) else {}
+        bucket = list(entities.get("risks" if entity == "risk" else "subrisks") or [])
+        if vehicle_index < 0 or vehicle_index >= len(bucket):
+            raise ValidationError("Vehículo no encontrado.")
+        allowed = {"Name", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas", "Modelo", "Clase", "Ciudad", "Tipo_de_uso"} if entity == "risk" else {"Name", "Ramo", "Parentesco", "Fecha_ingreso_riesgo", "Estado", "Plan"}
+        corrections = dict(metadata.get("zoho_entity_corrections") or {})
+        corrections[f"{entity}:{vehicle_index}"] = {
+            key: str(request.POST.get(key) or "").strip() for key in allowed if key in request.POST
+        }
+        corrections[f"{entity}:{vehicle_index}"]["updated_at"] = timezone.now().isoformat()
+        metadata["zoho_entity_corrections"] = corrections
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
+        resolve_mobility_entities(quotation=quotation)
+        messages.success(request, "Datos propuestos guardados y nuevamente validados.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_create_risk(request, token, vehicle_index):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = _individual_entity_quotation(token)
+        entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
+        risks = list(entities.get("risks") or [])
+        if vehicle_index < 0 or vehicle_index >= len(risks):
+            raise ValidationError("Vehículo no encontrado.")
+        item = risks[vehicle_index]
+        if item.get("status") != "not_found":
+            raise ValidationError("El Riesgo requiere resolución antes de crear.")
+        result = create_sandbox_risk(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION", "")))
+        created_at = timezone.now().isoformat()
+        item.update({"status": "created", "created": True, "remote_id": result["record_id"], "risk_id": result["record_id"], "created_at": created_at})
+        for key in ("error", "error_code"):
+            item.pop(key, None)
+        metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["risks"] = risks
+        quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
+        messages.success(request, "Riesgo creado en Zoho Sandbox.")
+    except (RiskPublishingDisabled, RiskPublicationRejected, ValidationError) as exc:
+        code = "BLOCKED" if isinstance(exc, RiskPublishingDisabled) else "REJECTED" if isinstance(exc, RiskPublicationRejected) else "VALIDATION"
+        if 'item' in locals():
+            item.update({"error_code": code, "error": str(exc)})
+            metadata = dict(quotation.safe_metadata or {})
+            entities = dict(metadata.get("zoho_entities") or {})
+            current_risks = list(entities.get("risks") or [])
+            if 0 <= vehicle_index < len(current_risks):
+                current_risks[vehicle_index] = item
+                entities["risks"] = current_risks
+                metadata["zoho_entities"] = entities
+                quotation.safe_metadata = metadata
+                quotation.save(update_fields=("safe_metadata",))
+            logger.warning("individual_create_risk result=%s module=Riesgos vehicle_index=%s", code, vehicle_index)
+        messages.warning(request, str(exc))
+    except RiskPublicationUncertain:
+        if 'item' in locals():
+            item.update({"error_code": "RECONCILE_REQUIRED", "error": "Resultado incierto; requiere conciliación manual."})
+            metadata = dict(quotation.safe_metadata or {})
+            entities = dict(metadata.get("zoho_entities") or {})
+            current_risks = list(entities.get("risks") or [])
+            if 0 <= vehicle_index < len(current_risks):
+                current_risks[vehicle_index] = item
+                entities["risks"] = current_risks
+                metadata["zoho_entities"] = entities
+                quotation.safe_metadata = metadata
+                quotation.save(update_fields=("safe_metadata",))
+            logger.warning("individual_create_risk result=RECONCILE_REQUIRED module=Riesgos vehicle_index=%s", vehicle_index)
+        messages.warning(request, "El resultado del Riesgo requiere conciliación en Zoho.")
+    except ZohoError:
+        if 'item' in locals():
+            item.update({"error_code": "ZOHO_ERROR", "error": "Zoho no pudo crear el Riesgo."})
+            metadata = dict(quotation.safe_metadata or {})
+            entities = dict(metadata.get("zoho_entities") or {})
+            current_risks = list(entities.get("risks") or [])
+            if 0 <= vehicle_index < len(current_risks):
+                current_risks[vehicle_index] = item
+                entities["risks"] = current_risks
+                metadata["zoho_entities"] = entities
+                quotation.safe_metadata = metadata
+                quotation.save(update_fields=("safe_metadata",))
+            logger.warning("individual_create_risk result=ERROR module=Riesgos vehicle_index=%s", vehicle_index)
+        messages.warning(request, "Zoho no pudo crear el Riesgo. Revise los datos y el estado operativo.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
+        raise Http404("Respuesta no encontrada")
+    return redirect(f"{reverse('cotizacion_colectivos:individual_expedient', kwargs={'token': token})}#risk-{vehicle_index}")
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_create_subrisk(request, token, vehicle_index):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = _individual_entity_quotation(token)
+        entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
+        subrisks = list(entities.get("subrisks") or [])
+        if vehicle_index < 0 or vehicle_index >= len(subrisks):
+            raise ValidationError("Vehículo no encontrado.")
+        item = subrisks[vehicle_index]
+        if item.get("status") != "not_found" or item.get("created") or item.get("remote_id") or item.get("riesgos1_id"):
+            raise ValidationError("La asociación requiere resolución antes de crear.")
+        result = create_mobility_subrisk_sandbox(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION", "")))
+        confirmed_id = str(result["record_id"])
+        item.update({"status": "created", "created": True, "remote_id": confirmed_id, "riesgos1_id": confirmed_id, "created_at": timezone.now().isoformat()})
+        metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["subrisks"] = subrisks
+        quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
+        messages.success(request, "Riesgo asociado a la póliza en Zoho Sandbox.")
+    except (SubriskPublishingDisabled, SubriskPublicationRejected, ValidationError) as exc:
+        messages.warning(request, str(exc))
+    except SubriskPublicationUncertain:
+        messages.warning(request, "La asociación requiere conciliación en Zoho.")
+    except ZohoError:
+        messages.warning(request, "Zoho no pudo asociar el Riesgo. Revise los datos y el estado operativo.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
@@ -2655,12 +2823,46 @@ def individual_expedient(request, token):
             person.setdefault("missing_fields", tuple())
             candidate = dict(person.get("candidate") or {})
             if isinstance(correction, dict):
-                candidate.update(correction)
+                candidate = effective_candidate(candidate, correction)
             if candidate:
                 candidate.setdefault("N_mero_de_ID", person.get("document") or "")
                 person["candidate"] = candidate
                 person["missing_fields"] = contact_missing_fields(candidate)
             person["has_complete_data"] = not person.get("missing_fields")
+    zoho_entities = safe_metadata.get("zoho_entities") if isinstance(safe_metadata.get("zoho_entities"), dict) else {}
+    # Recalcular siempre las entidades de Movilidad al abrir un expediente
+    # aceptado. Esto vuelve a evaluar subriesgos después de que un Contact o
+    # Riesgo haya sido creado, sin ejecutar ningún WRITE desde GET.
+    vehicle_rows = payload.get("groups", {}).get("vehicles", ()) if isinstance(payload.get("groups"), dict) else ()
+    expected_vehicle_count = len(vehicle_rows) if isinstance(vehicle_rows, list) else 0
+    entities_incomplete = (
+        not zoho_entities.get("people")
+        or not zoho_entities.get("risks")
+        or (expected_vehicle_count and len(zoho_entities.get("risks") or ()) < expected_vehicle_count)
+        or (expected_vehicle_count and len(zoho_entities.get("subrisks") or ()) < expected_vehicle_count)
+    )
+    if acceptance.get("status") == "accepted" and quotation.branch_slug == "movilidad":
+        try:
+            zoho_entities = resolve_mobility_entities(quotation=quotation)
+        except Exception:
+            logger.warning("individual_entities_resolution_failed quotation_id=%s", quotation.public_id)
+    if zoho_entities.get("people"):
+        promoted_people, promoted = promote_created_people(
+            zoho_entities.get("people"),
+            safe_metadata.get("people_lookup") or (),
+        )
+        if promoted:
+            zoho_entities["people"] = promoted_people
+            safe_metadata["zoho_entities"] = zoho_entities
+            quotation.safe_metadata = safe_metadata
+            quotation.save(update_fields=("safe_metadata",))
+    zoho_entities, insured_synced = synchronize_risk_insured(zoho_entities)
+    if insured_synced:
+        safe_metadata["zoho_entities"] = zoho_entities
+        quotation.safe_metadata = safe_metadata
+        quotation.save(update_fields=("safe_metadata",))
+    if zoho_entities.get("people"):
+        people_lookup = [dict(item) for item in zoho_entities.get("people", ()) if isinstance(item, dict)]
     if people_lookup:
         person_lookup = people_lookup[0]
     created_people = tuple(
@@ -2716,6 +2918,7 @@ def individual_expedient(request, token):
         "person_lookup": person_lookup,
         "people_lookup": tuple(people_lookup),
         "created_people": created_people,
+        "zoho_entities": zoho_entities,
         "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,

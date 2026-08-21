@@ -126,7 +126,7 @@ def build_policy_context(*, policy_token, detail, members, affiliate_key, creato
         "policy_token": str(policy_token),
         "source_kind": str(detail.source_kind or "company"),
         "affiliate_key": selected.key if selected else "",
-        "affiliate_role": selected.role if selected else "Persona nueva",
+        "affiliate_role": selected.role if selected else "Nuevo afiliado",
         "branch_slug": schema.slug,
         "schema_version": schema.version,
         "creator_id": int(creator_id),
@@ -134,7 +134,7 @@ def build_policy_context(*, policy_token, detail, members, affiliate_key, creato
             detail.full_reference or detail.masked_reference or "Póliza colectiva"
         ),
         "branch_name": str(detail.branch_name),
-        "affiliate_label": selected.label if selected else "Persona nueva",
+        "affiliate_label": selected.label if selected else "Nuevo afiliado",
         **values,
     }
     fund_evidence = " ".join((

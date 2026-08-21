@@ -254,7 +254,7 @@ class IndividualQuotationTests(TestCase):
         token = self.access_token(schema_slug="movilidad")
         response = self.client.get(reverse("colectivos_external:individual_quotation", args=[token]))
         self.assertContains(response, "Antes de comenzar")
-        self.assertContains(response, "Indique si el asegurado de cada vehículo es el mismo solicitante")
+        self.assertContains(response, "Indique los datos del asegurado de cada vehículo cuando sea diferente al afiliado.")
         self.assertNotContains(response, "Outbox")
 
     def test_policy_context_derives_branch_and_uses_hmac_affiliate(self):
@@ -280,7 +280,7 @@ class IndividualQuotationTests(TestCase):
         )
         self.assertEqual(schema.slug, "salud")
         self.assertEqual(context["affiliate_key"], "")
-        self.assertEqual(context["affiliate_label"], "Persona nueva")
+        self.assertEqual(context["affiliate_label"], "Nuevo afiliado")
         self.assertEqual(context["collective_context"], "Colectiva Demo")
         self.assertNotIn("4234567890123456789", token)
 
@@ -867,7 +867,7 @@ class IndividualQuotationTests(TestCase):
             args=[self.access_token(schema_slug="movilidad")],
         )
         response = self.client.get(url)
-        self.assertContains(response, "Contexto: Afiliada Demo")
+        self.assertContains(response, "Afiliado: Afiliada Demo")
         self.assertContains(response, "data-add-item")
         self.assertNotContains(response, "Seleccionar ramo")
         csrf_client = Client(enforce_csrf_checks=True)
