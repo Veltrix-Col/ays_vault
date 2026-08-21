@@ -36,6 +36,9 @@ class RuleContext:
     periodo: str
     hoy: date
     datos_extra: dict[str, object] = field(default_factory=dict)
+    # Numero de poliza tal como lo escribio el usuario en el formulario (o
+    # --poliza en el CLI). "" cuando no aplica (p. ej. modo legado sin API).
+    poliza: str = ""
 
     @property
     def claves_cobro(self) -> set[str]:

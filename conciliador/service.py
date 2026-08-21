@@ -21,7 +21,7 @@ from conciliador.domain.models import ReporteConciliacion
 from conciliador.engine import ReconciliationEngine
 from conciliador.ramos import obtener_ramo
 from conciliador.reporting.excel_writer import reporte_a_bytes
-from conciliador.sources.content_understanding import analizar_recibo
+from conciliador.sources.foundry_recibo import extraer_recibo
 
 if TYPE_CHECKING:
     from ays_zoho_sdk import ZohoFacade
@@ -103,14 +103,14 @@ class ConciliacionService:
                 relacion = ramo.cargar_relacion(archivos.relacion)
                 novedades = ramo.cargar_novedades(archivos.novedades)
             datos_extra = ramo.construir_datos_extra(archivos.cobro) if ramo.construir_datos_extra else {}
-            if ramo.servicio_cu:
-                datos_extra = {**datos_extra, "recibo_cu": analizar_recibo(archivos.recibo, ramo.servicio_cu)}
+            if ramo.valida_recibo_pdf:
+                datos_extra = {**datos_extra, "recibo_cu": extraer_recibo(archivos.recibo)}
 
             motor = ReconciliationEngine(ramo.reglas)
             reporte = motor.ejecutar(
                 relacion=relacion, cobro=cobro, novedades=novedades, personas=personas,
                 mes=mes_final, anio=anio_final, ramo=ramo.nombre, clave_col=ramo.clave_col,
-                datos_extra=datos_extra,
+                datos_extra=datos_extra, poliza=archivos.poliza,
             )
         except ConciliadorError as exc:
             raise ConciliacionServiceError(str(exc)) from exc

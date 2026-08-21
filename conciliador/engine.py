@@ -65,6 +65,7 @@ class ReconciliationEngine:
         ramo: str,
         clave_col: str,
         datos_extra: dict[str, object] | None = None,
+        poliza: str | None = None,
     ) -> ReporteConciliacion:
         relacion = con_columna_esperado(relacion, mes, anio)
 
@@ -72,6 +73,7 @@ class ReconciliationEngine:
             relacion=relacion, cobro=cobro, novedades=novedades, personas=personas,
             mes=mes, anio=anio, ramo=ramo, clave_col=clave_col,
             periodo=etiqueta_periodo(mes, anio), hoy=self.reloj(), datos_extra=datos_extra or {},
+            poliza=poliza or "",
         )
 
         incidentes: list[Incidente] = []
