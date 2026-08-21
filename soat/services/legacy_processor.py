@@ -55,7 +55,7 @@ Políticas de Gestión SOAT A&S
 La precedencia efectiva es:
 
 1. Vendedor contiene ``Fonconstruimos`` y estado asegurado Movilidad es
-   ``Excluido``: ``No gestión``. Corresponde al criterio 8; es la única
+   ``Excluido``: se deja en blanco. Corresponde al criterio 8; es la única
    excepción al criterio 1.
 2. Estado de la póliza Movilidad es ``Vigente`` y estado asegurado
    Movilidad es ``Excluido``: ``No gestión``. Corresponde al criterio 9.
@@ -76,7 +76,7 @@ La precedencia efectiva es:
 9. Si no aplica ningún criterio:
    se deja en blanco. Corresponde al criterio 7.
 
-Los criterios 6 y 7 conservan el fondo durazno del archivo de referencia.
+Los criterios 6, 7 y 8 conservan el fondo durazno del archivo de referencia.
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ COLUMNAS_SALIDA = [
 ]
 
 COLUMNA_CRITERIO_INTERNO = "_criterio_gestion"
-COLOR_CRITERIOS_6_7 = "FBE2D5"
+COLOR_CRITERIOS_6_7_8 = "FBE2D5"
 
 
 @dataclass(frozen=True)
@@ -553,8 +553,9 @@ def determinar_gestion(
     estado_poliza_key = clave_texto(estado_poliza_movilidad)
 
     # Criterio 8: única excepción al criterio 1 (que es inamovible en todo lo demás).
+    # Se deja en blanco (solo color, sin texto), igual que el criterio 7.
     if "FONCONSTRUIMOS" in vendedor_key and estado_key == "EXCLUIDO":
-        return "No gestión", 8
+        return None, 8
 
     # Criterio 9: la póliza de Movilidad vigente no gestiona asegurados excluidos.
     if estado_poliza_key == "VIGENTE" and estado_key == "EXCLUIDO":
@@ -902,10 +903,10 @@ def aplicar_formato_excel(
                 col_gestion,
             )
 
-            if criterio in {6, 7}:
+            if criterio in {6, 7, 8}:
                 celda_gestion.fill = PatternFill(
                     "solid",
-                    fgColor=COLOR_CRITERIOS_6_7,
+                    fgColor=COLOR_CRITERIOS_6_7_8,
                 )
             else:
                 celda_gestion.fill = PatternFill(
