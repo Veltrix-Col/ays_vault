@@ -9,7 +9,8 @@ Snapshot, caché, seguridad ni componentes.
 ```text
 Banco de Herramientas
 ├── Área Cartera
-│   ├── CardManager
+│   └── CardManager
+├── Área Operaciones
 │   └── SOAT
 └── Área Colectivos
     ├── Novedades

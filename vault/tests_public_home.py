@@ -59,7 +59,7 @@ class PublicHomeTests(TestCase):
 
     def test_catalog_renders_authorized_applications_without_system_information(self):
         response = self.client.get("/")
-        self.assertContains(response, 'class="application-card area-package"', count=2)
+        self.assertContains(response, 'class="application-card area-package"', count=3)
         self.assertContains(response, 'data-tool-card', count=6)
         self.assertContains(response, "CardManager")
         self.assertContains(response, ">SOAT<")
@@ -70,7 +70,7 @@ class PublicHomeTests(TestCase):
         self.assertNotContains(response, "Solicitudes y Renovaciones")
         self.assertNotContains(response, "Cotización – Colectivos")
         self.assertNotContains(response, 'class="application-logo application-logo--cardmanager"')
-        self.assertContains(response, 'class="application-icon"', count=2)
+        self.assertContains(response, 'class="application-icon"', count=3)
         self.assertNotContains(response, "Centro de Control")
         self.assertNotContains(response, "Correo y destinatarios")
         self.assertNotContains(response, "Cerrar sesión")
@@ -89,8 +89,8 @@ class PublicHomeTests(TestCase):
             {
                 "Cartera": (
                     "CardManager",
-                    "SOAT",
                 ),
+                "Operaciones": ("SOAT",),
                 "Colectivos": (
                     "Novedades",
                     "Cotización Individual",
@@ -101,20 +101,22 @@ class PublicHomeTests(TestCase):
         )
         self.assertNotIn("Colectivos", {app["name"] for app in application_catalog()})
 
-    def test_root_first_level_contains_only_the_two_area_packages(self):
+    def test_root_first_level_contains_all_area_packages(self):
         response = self.client.get("/")
         self.assertEqual(
             tuple(area["name"] for area in response.context["area_packages"]),
-            ("Cartera", "Colectivos"),
+            ("Cartera", "Operaciones", "Colectivos"),
         )
         self.assertContains(response, f'href="{reverse("area_home", args=["cartera"])}"')
+        self.assertContains(response, f'href="{reverse("area_home", args=["operaciones"])}"')
         self.assertContains(response, f'href="{reverse("area_home", args=["colectivos"])}"')
-        self.assertContains(response, "2 herramientas")
+        self.assertContains(response, "1 herramientas")
         self.assertContains(response, "4 herramientas")
 
     def test_area_subhomes_have_the_exact_taxonomy(self):
         expected = {
-            "cartera": ("CardManager", "SOAT"),
+            "cartera": ("CardManager",),
+            "operaciones": ("SOAT",),
             "colectivos": (
                 "Novedades",
                 "Cotización Individual",
@@ -142,8 +144,12 @@ class PublicHomeTests(TestCase):
         self.assertContains(colectivos, 'class="application-card"', count=4)
         cartera = self.client.get(reverse("area_home", args=["cartera"]))
         self.assertNotContains(cartera, "Centro operativo")
+        self.assertNotContains(cartera, "SOAT")
         for forbidden in ("Novedades", "Cotización Individual", "Invitaciones", "Conciliador"):
             self.assertNotContains(cartera, forbidden)
+        operaciones = self.client.get(reverse("area_home", args=["operaciones"]))
+        self.assertContains(operaciones, "SOAT")
+        self.assertContains(operaciones, "Área Operaciones")
 
     def test_unknown_area_is_not_inferred(self):
         self.assertEqual(self.client.get("/areas/desconocida/").status_code, 404)

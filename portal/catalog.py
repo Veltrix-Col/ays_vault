@@ -8,9 +8,16 @@ AREA_DEFINITIONS = (
     {
         "slug": "cartera",
         "name": "Cartera",
-        "description": "Herramientas para la gestión de cartera, tarjetas y procesos SOAT.",
+        "description": "Herramientas para la gestión de cartera y tarjetas.",
         "icon_path": "M4 7h16v12H4V7Zm3-3h10v3H7V4Zm1 8h8M8 15h5",
-        "search_terms": "cardmanager tarjetas soat vehículos cartera",
+        "search_terms": "cardmanager tarjetas vehículos cartera",
+    },
+    {
+        "slug": "operaciones",
+        "name": "Operaciones",
+        "description": "Herramientas para la operación y procesamiento de información de negocio.",
+        "icon_path": "M12 3 4 7v5c0 4.5 3.1 7.7 8 9 4.9-1.3 8-4.5 8-9V7l-8-4Zm0 5v5m-3-2h6",
+        "search_terms": "operaciones soat procesamiento vehículos",
     },
     {
         "slug": "colectivos",
@@ -49,7 +56,7 @@ def application_catalog():
         },
         {
             "name": "SOAT",
-            "area": "Cartera",
+            "area": "Operaciones",
             "description": "Validación, procesamiento y gestión de información asociada al proceso SOAT.",
             "logo": "",
             "logo_class": "",
