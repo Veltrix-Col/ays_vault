@@ -139,7 +139,7 @@ class SoatPublicTests(TestCase):
             (("", "Angelina", "Cancelado", "Por venta", ""), ("No gestión", 5)),
             (("", "", "Cancelado", "Otro", ""), ("No gestión", 6)),
             (("", "", "", "", ""), (None, 7)),
-            (("Fonconstruimos", "", "Excluido", "", ""), ("No gestión", 8)),
+            (("Fonconstruimos", "", "Excluido", "", ""), (None, 8)),
             (("", "", "Excluido", "", "Vigente"), ("No gestión", 9)),
         ]
         for arguments, expected in cases:

@@ -81,7 +81,7 @@ class ConciliacionUploadForm(forms.Form):
         widget=forms.TextInput(attrs={"autocomplete": "off", "inputmode": "numeric"}),
     )
     cobro = forms.FileField(label="Archivo de cobro", required=True)
-    # Opcional: validación adicional con IA (Content Understanding). Si falta o
+    # Opcional: validación adicional con IA (Azure AI Foundry). Si falta o
     # no cuadra, solo se reporta como advertencia; nunca bloquea la conciliación.
     recibo = forms.FileField(label="PDF de cobro", required=False)
     novedades = forms.FileField(label="Novedades", required=False)

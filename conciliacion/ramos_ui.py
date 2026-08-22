@@ -46,7 +46,7 @@ _SLOTS_COMUNES: dict[str, dict] = {
         "label": "PDF de cobro (recibo de la aseguradora)",
         "help": (
             "Recibo/factura en PDF de la aseguradora. Opcional: es una validación "
-            "adicional hecha con IA (Content Understanding) que solo genera una "
+            "adicional hecha con IA (Azure AI Foundry) que solo genera una "
             "advertencia informativa si no cuadra o no se sube; nunca impide "
             "continuar ni conciliar en Zoho."
         ),

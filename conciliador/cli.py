@@ -28,7 +28,7 @@ from conciliador.parsing.periodo import etiqueta_periodo, nombre_mes
 from conciliador.ramos import RAMOS, obtener_ramo
 from conciliador.reporting.excel_writer import escribir_reporte_excel
 from conciliador.rules.valor import ComparacionEstadisticaRule
-from conciliador.sources.content_understanding import analizar_recibo
+from conciliador.sources.foundry_recibo import extraer_recibo
 
 # Carpeta por defecto donde cada ramo suele dejar sus archivos (ver README de cada carpeta).
 _CARPETAS_POR_DEFECTO = {
@@ -116,13 +116,14 @@ def _ejecutar(codigo_ramo: str, args: argparse.Namespace) -> None:
         relacion = ramo.cargar_relacion(archivos["relacion"])
         novedades = ramo.cargar_novedades(archivos["novedades"])
     datos_extra = ramo.construir_datos_extra(archivos["cobro"]) if ramo.construir_datos_extra else {}
-    if ramo.servicio_cu:
-        datos_extra = {**datos_extra, "recibo_cu": analizar_recibo(archivos.get("recibo"), ramo.servicio_cu)}
+    if ramo.valida_recibo_pdf:
+        datos_extra = {**datos_extra, "recibo_cu": extraer_recibo(archivos.get("recibo"))}
 
     motor = ReconciliationEngine(ramo.reglas)
     reporte = motor.ejecutar(
         relacion=relacion, cobro=cobro, novedades=novedades, personas=personas,
         mes=mes, anio=anio, ramo=ramo.nombre, clave_col=ramo.clave_col, datos_extra=datos_extra,
+        poliza=args.poliza,
     )
 
     etiqueta_archivo = f"{nombre_mes(mes)}_{anio}"

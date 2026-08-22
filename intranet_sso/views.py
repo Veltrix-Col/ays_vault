@@ -25,15 +25,22 @@ def callback(request):
 
     if not token:
         logger.warning("intranet_sso result=rejected category=missing_token correlation=%s", correlation)
-        return HttpResponseBadRequest("Falta el token de la intranet.")
+        response = HttpResponseBadRequest("Falta el token de la intranet.")
+        response["Referrer-Policy"] = "no-referrer"
+        return response
 
     try:
         identity = verify_intranet_assertion(token)
     except IntranetAssertionError as exc:
         logger.warning("intranet_sso result=rejected category=%s correlation=%s", exc.category, correlation)
-        return HttpResponseBadRequest("No fue posible validar la sesión de la intranet.")
+        response = HttpResponseBadRequest("No fue posible validar la sesión de la intranet.")
+        response["Referrer-Policy"] = "no-referrer"
+        return response
 
     logger.info("intranet_sso result=accepted correlation=%s", correlation)
     response = redirect(next_path)
+    # El sso_token viajó en esta URL: evita que sobreviva como Referer si el
+    # navegador arrastra el referrer de este salto hacia next_path.
+    response["Referrer-Policy"] = "no-referrer"
     issue_local_session(response, subject=identity.subject)
     return response

@@ -153,9 +153,10 @@ class RamoConfig:
     inferir_periodo: Callable[["PathLike | str", "int | None", "int | None"], tuple[int, int]]
     patrones_archivo: dict[str, str] = field(default_factory=dict)
     construir_datos_extra: Callable[["PathLike | str"], dict[str, object]] | None = None
-    # Servicio de Content Understanding a usar para validar el recibo (PDF):
-    # "salud", "vida" o "movilidad". None => el ramo no valida recibo.
-    servicio_cu: str | None = None
+    # True => el ramo acepta el slot opcional de recibo (PDF) y lo valida con
+    # el modelo de Foundry (un unico modelo compartido, ver
+    # conciliador.sources.foundry_recibo). False => el ramo no tiene ese slot.
+    valida_recibo_pdf: bool = False
     # Equivalentes por API de cargar_relacion/cargar_personas (consulta directa a
     # Zoho en vez de leer el Excel exportado). None => el ramo aun no la soporta
     # y ConciliacionService debe exigir los archivos legado para el.
