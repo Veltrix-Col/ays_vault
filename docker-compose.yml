@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets:
+        - gh_token
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-production}
@@ -102,3 +104,11 @@ networks:
   dokploy-network:
     external: true
   vault-internal:
+
+secrets:
+  # Token de lectura para clonar el repo privado ays-zoho-sdk durante el
+  # build (ver Dockerfile). Se toma de la variable de entorno GH_TOKEN, la
+  # misma que ya se configura en Dokploy para el resto de secretos: no crea
+  # un mecanismo nuevo, solo la conecta como build secret en vez de runtime.
+  gh_token:
+    environment: GH_TOKEN
