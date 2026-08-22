@@ -14,16 +14,28 @@
 
   const groupSchema = key => schema.repeatables.find(group => group.key === key);
   const escapeLabel = value => String(value || "").trim() || "Sin completar";
+  const newEntityKey = (group, index) => {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return `${group}-${window.crypto.randomUUID()}`;
+    return `${group}-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+  };
   const sync = () => {
     payload.value = JSON.stringify(groups);
     const count = Object.values(groups).reduce((total, rows) => total + rows.length, 0);
     form.querySelector("[data-review-summary]").textContent = `${count} elemento${count === 1 ? "" : "s"} listo${count === 1 ? "" : "s"} para enviar.`;
   };
+  const affiliateInput = form.querySelector('input[name="affiliate_document"]');
+  if (affiliateInput) {
+    const clear = document.createElement("button");
+    clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
+    clear.addEventListener("click", () => { affiliateInput.value = ""; });
+    affiliateInput.parentElement.appendChild(clear);
+  }
   const render = key => {
     const definition = groupSchema(key);
     const host = form.querySelector(`[data-item-list="${key}"]`);
     host.replaceChildren();
     (groups[key] || []).forEach((row, index) => {
+      row.entity_key ||= newEntityKey(key, index);
       const card = document.createElement("article"); card.className = "repeatable-card";
       const title = document.createElement("div");
       const first = definition.fields.find(field => row[field.key]);
@@ -32,7 +44,58 @@
       const actions = document.createElement("div"); actions.className = "repeatable-actions";
       const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Editar"; edit.addEventListener("click", () => openDialog(key, index));
       const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Eliminar"; remove.disabled = groups[key].length <= definition.minimum; remove.addEventListener("click", () => { groups[key].splice(index, 1); render(key); sync(); });
-      actions.append(edit, remove); card.append(title, actions); host.append(card);
+      if (key === "vehicles" || key === "people") {
+        const sameRequester = (key === "vehicles" && Boolean(row.insured_same_as_requester)) || (key === "people" && Boolean(row.is_requester));
+        const documentLabel = key === "vehicles" ? "Adjuntar matrícula o tarjeta de propiedad" : "Adjuntar cédula";
+        if (key === "vehicles" || !sameRequester) {
+          const documentField = document.createElement("div");
+          documentField.className = "entity-document-field field";
+          const label = document.createElement("label");
+          label.textContent = documentLabel;
+          const input = document.createElement("input");
+          input.type = "file";
+          input.name = `entity_attachment_${row.entity_key}`;
+          input.accept = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+          input.setAttribute("data-entity-file", row.entity_key);
+          label.appendChild(input);
+          documentField.appendChild(label);
+          const fileName = document.createElement("small");
+          fileName.className = "entity-document-name";
+          const refreshFileName = () => {
+            fileName.textContent = input.files && input.files[0] ? `📎 ${input.files[0].name}` : "";
+          };
+          input.addEventListener("change", refreshFileName);
+          documentField.appendChild(fileName);
+          const clear = document.createElement("button");
+          clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
+          clear.addEventListener("click", () => { input.value = ""; refreshFileName(); });
+          documentField.appendChild(clear);
+          card.appendChild(documentField);
+          if (key === "vehicles" && !sameRequester) {
+            const insuredField = document.createElement("div");
+            insuredField.className = "entity-document-field field";
+            const insuredLabel = document.createElement("label");
+            insuredLabel.textContent = "Adjuntar cédula del asegurado";
+            const insuredInput = document.createElement("input");
+            insuredInput.type = "file";
+            insuredInput.name = `entity_attachment_${row.entity_key}-insured`;
+            insuredInput.accept = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+            insuredInput.setAttribute("data-entity-file", `${row.entity_key}-insured`);
+            insuredLabel.appendChild(insuredInput);
+            insuredField.appendChild(insuredLabel);
+            const insuredName = document.createElement("small");
+            insuredName.className = "entity-document-name";
+            insuredInput.addEventListener("change", () => { insuredName.textContent = insuredInput.files && insuredInput.files[0] ? `📎 ${insuredInput.files[0].name}` : ""; });
+            insuredField.appendChild(insuredName);
+            const clearInsured = document.createElement("button");
+            clearInsured.type = "button"; clearInsured.className = "button-link button-link--secondary"; clearInsured.textContent = "Quitar";
+            clearInsured.addEventListener("click", () => { insuredInput.value = ""; insuredName.textContent = ""; });
+            insuredField.appendChild(clearInsured);
+            card.appendChild(insuredField);
+          }
+        }
+      }
+      actions.append(edit, remove); card.append(actions); host.append(card);
     });
     sync();
   };

@@ -998,3 +998,38 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(csrf_client.post(url, {"items_payload": "{}"}).status_code, 403)
         css = Path("static/css/colectivos.css").read_text(encoding="utf-8")
         self.assertIn("@media (max-width:620px)", css)
+
+    def test_entity_document_is_encrypted_and_scoped_to_vehicle(self):
+        schema = get_branch_schema("movilidad")
+        vehicle = self.vehicle()
+        vehicle["entity_key"] = "vehicles-stable-1"
+        uploaded = SimpleUploadedFile(
+            "tarjeta.pdf", b"%PDF-1.4 synthetic", content_type="application/pdf"
+        )
+        quotation = create_individual_quotation(
+            schema=schema,
+            cleaned_data={
+                "items_payload": json.dumps({"vehicles": [vehicle]}),
+                "attachments": [],
+                "entity_attachments": {"vehicles-stable-1": uploaded},
+                "normalized_items": {"vehicles": [vehicle]},
+                **{field.key: "" for field in schema.fields},
+            },
+            actor=self.actor,
+            context={"affiliate_key": "", "branch_name": schema.name},
+        )
+        attachment = quotation.attachments.get()
+        self.assertEqual(attachment.safe_metadata["owner_role"], "risk")
+        self.assertEqual(attachment.safe_metadata["owner_key"], "vehicles-stable-1")
+        self.assertEqual(attachment.safe_metadata["document_type"], "risk_document")
+        stored = (Path(self.private.name) / "individual_quotations" / attachment.stored_path).read_bytes()
+        self.assertNotIn(b"%PDF-1.4 synthetic", stored)
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        response = self.client.get(
+            reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")])
+        )
+        self.assertNotContains(response, 'name="attachments"')
+        self.assertNotContains(response, 'name="affiliate_document"')

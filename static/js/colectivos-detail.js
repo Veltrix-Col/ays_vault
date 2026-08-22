@@ -121,4 +121,44 @@
     association.querySelectorAll("[data-dialog-open^='subrisk-edit-']").forEach((trigger) => trigger.remove());
   });
   document.querySelectorAll("dialog[id^='subrisk-edit-']").forEach((dialog) => dialog.remove());
+
+  // Attachments are rendered by the server with the same compact document
+  // component, then placed inside their functional owner card.  The browser
+  // never supplies a Zoho id; publication is a POST to the scoped endpoint.
+  const documentSection = document.querySelector('[aria-label="Documentos recibidos"]');
+  if (documentSection) {
+    const affiliateCards = Array.from(document.querySelectorAll('.zoho-semantic-workspace > .entity-card'));
+    const riskCards = Array.from(document.querySelectorAll('.vehicle-entity-card'));
+    const insuredCards = Array.from(document.querySelectorAll('.entity-card--nested'));
+    let riskIndex = 0;
+    let insuredIndex = 0;
+    const csrf = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value || "";
+    documentSection.querySelectorAll(':scope > div').forEach((entry) => {
+      const role = (entry.querySelector('strong')?.textContent || '').trim().toLowerCase();
+      const target = role === 'affiliate' ? affiliateCards[0]
+        : role === 'risk' ? riskCards[riskIndex++]
+        : role === 'insured' ? insuredCards[insuredIndex++] : null;
+      if (!target) return;
+      const actions = target.querySelector('.entity-actions');
+      target.insertBefore(entry, actions || target.lastElementChild);
+      entry.classList.add('entity-document-list__item');
+      const link = entry.querySelector('a[href*="/adjuntos/"]');
+      const status = entry.textContent || '';
+      if (link && !status.includes('Publicado en Zoho')) {
+        const match = link.getAttribute('href').match(/\/adjuntos\/(\d+)\//);
+        if (match) {
+          const form = document.createElement('form');
+          form.method = 'post';
+          form.action = `${window.location.pathname.replace(/\/$/, '')}/adjuntos/${match[1]}/publicar/`;
+          const token = document.createElement('input');
+          token.type = 'hidden'; token.name = 'csrfmiddlewaretoken'; token.value = csrf;
+          const button = document.createElement('button');
+          button.type = 'submit'; button.className = 'button-link button-link--primary';
+          button.textContent = 'Adjuntar documento en Zoho';
+          form.append(token, button); entry.appendChild(form);
+        }
+      }
+    });
+    documentSection.remove();
+  }
 })();

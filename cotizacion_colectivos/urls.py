@@ -77,5 +77,8 @@ urlpatterns = [
     path("notificaciones/<int:notification_id>/leer/", views.notification_read, name="notification_read"),
     path("notificaciones/cotizacion-individual/<int:notification_id>/leer/", views.individual_notification_read, name="individual_notification_read"),
     path("cotizacion-individual/respuestas/<str:token>/", views.individual_quotation_detail, name="individual_quotation_detail"),
+    path("solicitudes/cotizacion-individual/<str:token>/adjuntos/<int:attachment_id>/", views.individual_attachment_download, name="individual_attachment_download"),
+    path("solicitudes/cotizacion-individual/<str:token>/adjuntos/<int:attachment_id>/quitar/", views.individual_attachment_remove, name="individual_attachment_remove"),
+    path("solicitudes/cotizacion-individual/<str:token>/adjuntos/<int:attachment_id>/publicar/", views.individual_attachment_publish, name="individual_attachment_publish"),
     path("notificaciones/leer-todas/", views.notifications_read_all, name="notifications_read_all"),
 ]

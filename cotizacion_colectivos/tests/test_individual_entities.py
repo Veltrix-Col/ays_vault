@@ -9,7 +9,7 @@ from django.template import engines
 from django.test import SimpleTestCase
 from django.urls import resolve
 
-from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_mobility_entities, synchronize_risk_insured
+from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from cotizacion_colectivos.services.person_contract import build_contact_payload
 
 
@@ -35,6 +35,62 @@ class _Facade:
 
 
 class IndividualEntityResolutionTests(SimpleTestCase):
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document")
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_health_resolves_affiliate_and_multiple_insured_people_without_duplication(self, decrypt, resolve):
+        resolve.side_effect = lambda **kwargs: (
+            {"status": "FOUND", "record_id": f"CONTACT-{kwargs['document']}"}
+            if kwargs["document"] in {"111", "222", "333"}
+            else {"status": "NOT_FOUND"}
+        )
+        quotation = self.person_quotation("salud", [
+            {"entity_key": "people-a", "is_requester": True, "document": "111", "first_name": "Afiliado"},
+            {"entity_key": "people-b", "is_requester": False, "document": "222", "first_name": "María"},
+            {"entity_key": "people-c", "is_requester": False, "document": "333", "first_name": "José"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual([item["owner_key"] for item in result["people"]], ["affiliate", "people-b", "people-c"])
+        self.assertEqual([item["status"] for item in result["people"]], ["found", "found", "found"])
+        self.assertEqual(len({item["document"] for item in result["people"]}), 3)
+
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_people_owner_keys_resolve_independently(self, decrypt, resolve):
+        quotation = self.person_quotation("vida", [
+            {"entity_key": "people-juan", "document": "444", "first_name": "Juan"},
+            {"entity_key": "people-maria", "document": "555", "first_name": "María"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual([item["owner_key"] for item in result["people"]], ["affiliate", "people-juan", "people-maria"])
+        self.assertEqual([item["status"] for item in result["people"]], ["not_found"] * 3)
+        self.assertEqual(result["people"][2]["candidate"]["N_mero_de_ID"], "555")
+
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "CONTACT-1"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_exequial_family_documents_keep_distinct_owners(self, decrypt, resolve):
+        quotation = self.person_quotation("exequial", [
+            {"entity_key": "people-a", "document": "777", "first_name": "Ana"},
+            {"entity_key": "people-b", "document": "888", "first_name": "Luis"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual({item["owner_key"] for item in result["people"]}, {"affiliate", "people-a", "people-b"})
+        self.assertEqual({item["document"] for item in result["people"]}, {"111111", "777", "888"})
+
+    def person_quotation(self, branch, rows):
+        payload = {
+            "schema": branch,
+            "fields": {
+                "first_name": "Afiliado", "last_name": "Principal", "requester_id_type": "CC",
+                "requester_document": "111111", "requester_birth_date": "1990-01-01",
+                "requester_email": "affiliate@example.com", "requester_phone": "3000000000",
+            },
+            "groups": {"people": rows}, "context": {},
+        }
+        return SimpleNamespace(
+            encrypted_payload=json.dumps(payload), branch_slug=branch, safe_metadata={},
+            save=lambda **kwargs: None,
+        )
+
     def test_created_people_lookup_promotes_stale_entity_without_touching_other_role(self):
         entity_people = [
             {"document": "888 989 898", "candidate": {"Tipo_ID": "CC"}, "role": "Persona principal", "status": "not_found"},

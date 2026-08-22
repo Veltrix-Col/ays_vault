@@ -56,6 +56,14 @@ def expected_confirmation(
         getattr(settings, confirmation_setting_name(entity, profile), "")
         or ""
     ).strip()
+    # The legacy Sandbox setting remains a supported explicit override.  This
+    # matters when both names exist in settings (for example, an environment
+    # still exporting the old variable): an incorrect legacy confirmation must
+    # fail closed rather than silently inheriting a valid canonical default.
+    if profile == "sandbox" and legacy_setting:
+        legacy = str(getattr(settings, legacy_setting, "") or "").strip()
+        if legacy:
+            configured = legacy
     if configured:
         return required if configured == required else ""
     # Backward compatibility is intentionally read-only and only applies to
@@ -86,6 +94,13 @@ def require_write_guard(
         raise disabled_error("El perfil Zoho no está habilitado para esta escritura.")
     if active_profile() != profile:
         raise disabled_error("El perfil Zoho activo no coincide con la escritura solicitada.")
+    # Validate an explicitly supplied legacy Sandbox confirmation before any
+    # profile facade/configuration work.  A stale or incorrect legacy value
+    # must never be masked by a canonical environment default.
+    if profile == "sandbox" and legacy_setting:
+        legacy = str(getattr(settings, legacy_setting, "") or "").strip()
+        if legacy and legacy != PROFILE_CONFIRMATIONS[profile][entity]:
+            raise disabled_error("La confirmación de escritura no coincide con el perfil activo.")
     config = ZohoSettings.from_django(profile)
     if not config.write_enabled:
         raise disabled_error(f"La escritura del perfil {profile} está deshabilitada.")
