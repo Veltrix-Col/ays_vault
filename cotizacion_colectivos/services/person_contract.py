@@ -190,25 +190,39 @@ class ContactPublishingDisabled(RuntimeError):
 _CONTACT_WRITE_LOCK = threading.Lock()
 
 
-class GuardedSandboxContactPublisher:
-    """Single guarded Contacts.CREATE entry point; never retries uncertain writes."""
+_WRITABLE_PROFILES = ("sandbox", "production")
 
-    def __init__(self, *, confirmation: str,
+
+def _expected_contact_confirmation(profile: str) -> str:
+    return f"{profile.upper()}_CONTACT_WRITE"
+
+
+class GuardedContactPublisher:
+    """Single guarded Contacts.CREATE entry point; never retries uncertain writes.
+
+    Admite sandbox y production. Cada perfil exige coincidencia exacta con
+    ZOHO_ACTIVE_PROFILE, su propio write_enabled y su propia confirmacion
+    explicita -- ninguna de las barreras se comparte entre perfiles.
+    """
+
+    def __init__(self, *, profile: str, confirmation: str,
                  feature_flag: str = "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
-                 confirmation_setting: str = "COLECTIVOS_CONTACT_WRITE_CONFIRMATION",
-                 expected_confirmation: str = "SANDBOX_CONTACT_WRITE"):
-        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != "sandbox":
-            raise ContactPublishingDisabled("Contacts sólo admite Sandbox en esta fase.")
+                 confirmation_setting: str = "COLECTIVOS_CONTACT_WRITE_CONFIRMATION"):
+        if profile not in _WRITABLE_PROFILES:
+            raise ContactPublishingDisabled("Contacts sólo admite los perfiles habilitados (sandbox, production).")
+        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != profile:
+            raise ContactPublishingDisabled("El perfil Zoho activo no coincide con el solicitado.")
         if not getattr(settings, feature_flag, False):
             raise ContactPublishingDisabled("Contacts CREATE está deshabilitado.")
-        self.expected_confirmation = expected_confirmation
-        if str(getattr(settings, confirmation_setting, "")).strip() != expected_confirmation:
-            raise ContactPublishingDisabled("Falta la confirmación configurada de Contacts Sandbox.")
-        if str(confirmation or "").strip() != expected_confirmation:
-            raise ContactPublishingDisabled("Falta la confirmación explícita de Contacts Sandbox.")
-        config = ZohoSettings.from_django("sandbox")
+        self.expected_confirmation = _expected_contact_confirmation(profile)
+        if str(getattr(settings, confirmation_setting, "")).strip() != self.expected_confirmation:
+            raise ContactPublishingDisabled(f"Falta la confirmación configurada de Contacts para {profile}.")
+        if str(confirmation or "").strip() != self.expected_confirmation:
+            raise ContactPublishingDisabled(f"Falta la confirmación explícita de Contacts para {profile}.")
+        config = ZohoSettings.from_django(profile)
         if not config.write_enabled:
-            raise ContactPublishingDisabled("La escritura Sandbox está deshabilitada.")
+            raise ContactPublishingDisabled(f"La escritura del perfil {profile} está deshabilitada.")
+        self.profile = profile
 
     def create(self, data: Mapping[str, object], *, zoho=None, status: str = "Prospecto") -> dict[str, object]:
         payload = build_contact_payload(data, status=status)
@@ -223,7 +237,7 @@ class GuardedSandboxContactPublisher:
             if existing["status"] != "NOT_FOUND":
                 raise ContactPublicationRejected("La persona requiere validación antes de crearla.")
             try:
-                result = (zoho or get_zoho(profile="sandbox")).records.create(
+                result = (zoho or get_zoho(profile=self.profile)).records.create(
                     module="Contacts", records=(payload,),
                 )
             except ZohoTimeoutError as exc:
@@ -243,7 +257,7 @@ class GuardedSandboxContactPublisher:
 
 
 def get_contacts_publisher(*, profile: str = "sandbox", confirmation: str = ""):
-    """Factory for the guarded publisher; production is rejected before facade access."""
-    if profile != "sandbox" or str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != "sandbox":
-        raise ValidationError("Contacts WRITE está bloqueado fuera de Sandbox.")
-    return GuardedSandboxContactPublisher(confirmation=confirmation)
+    """Factory for the guarded publisher; unknown/mismatched profiles are rejected before facade access."""
+    if profile not in _WRITABLE_PROFILES or str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != profile:
+        raise ValidationError("Contacts WRITE está bloqueado para este perfil.")
+    return GuardedContactPublisher(profile=profile, confirmation=confirmation)

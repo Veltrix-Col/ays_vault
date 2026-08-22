@@ -1,4 +1,4 @@
-"""Outbox local y publicación manual, estrictamente protegida, de Tasks Sandbox."""
+"""Outbox local y publicación manual, estrictamente protegida, de Tasks (sandbox o production)."""
 
 from __future__ import annotations
 
@@ -32,6 +32,14 @@ CONFIRMED_TASK_FIELDS = frozenset({
 ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
 TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
+PRODUCTION_WRITE_CONFIRMATION = "PRODUCTION_TASK_WRITE"
+# Tasks admite sandbox y production; cada perfil exige su propia confirmacion
+# explicita (ver _expected_confirmation) para que habilitar uno no habilite el otro.
+_WRITABLE_PROFILES = ("sandbox", "production")
+
+
+def _expected_confirmation(profile: str) -> str:
+    return f"{profile.upper()}_TASK_WRITE"
 SYNTHETIC_TEST_TASK = {
     "Subject": "PRUEBA VELTRIX-CV-003 - COTIZACION - NO GESTIONAR",
     "tipo_de_solicitud": "Cotización",
@@ -174,25 +182,32 @@ class DisabledColectivosTaskPublisher:
         raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
 
 
-class GuardedSandboxTaskPublisher:
-    """Único punto de escritura Tasks, cerrado por barreras independientes."""
+class GuardedTaskPublisher:
+    """Único punto de escritura Tasks, cerrado por barreras independientes.
+
+    Admite sandbox y production. Cada perfil exige coincidencia exacta con
+    ZOHO_ACTIVE_PROFILE, su propio write_enabled (ZOHO_{PERFIL}_WRITE_ENABLED)
+    y su propia confirmacion explicita (ver _expected_confirmation) -- ninguna
+    de las barreras se comparte entre perfiles.
+    """
 
     enabled = True
 
     def __init__(self, *, profile: str, confirmation: str):
-        if profile != "sandbox":
-            raise TaskPublishingDisabled("Tasks sólo admite Sandbox en esta fase.")
-        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != "sandbox":
-            raise TaskPublishingDisabled("El perfil Zoho activo no es Sandbox.")
+        if profile not in _WRITABLE_PROFILES:
+            raise TaskPublishingDisabled("Tasks sólo admite los perfiles habilitados (sandbox, production).")
+        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != profile:
+            raise TaskPublishingDisabled("El perfil Zoho activo no coincide con el solicitado.")
         zoho_config = ZohoSettings.from_django(profile)
         if not zoho_config.write_enabled:
-            raise TaskPublishingDisabled("La escritura del perfil Sandbox está deshabilitada.")
+            raise TaskPublishingDisabled(f"La escritura del perfil {profile} está deshabilitada.")
         if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
             raise TaskPublishingDisabled("La publicación Tasks no está habilitada.")
-        if getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "") != SANDBOX_WRITE_CONFIRMATION:
-            raise TaskPublishingDisabled("La configuración no confirma la escritura Sandbox.")
-        if str(confirmation or "").strip() != SANDBOX_WRITE_CONFIRMATION:
-            raise TaskPublishingDisabled("Falta la confirmación explícita de escritura Sandbox.")
+        expected = _expected_confirmation(profile)
+        if getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "") != expected:
+            raise TaskPublishingDisabled(f"La configuración no confirma la escritura de {profile}.")
+        if str(confirmation or "").strip() != expected:
+            raise TaskPublishingDisabled(f"Falta la confirmación explícita de escritura de {profile}.")
         self.profile = profile
 
     def publish(self, payload: ColectivosTaskPayload) -> Mapping[str, object]:
@@ -215,14 +230,14 @@ class GuardedSandboxTaskPublisher:
             )
         except ZohoTimeoutError as exc:
             raise TaskPublicationUncertain(
-                "Resultado incierto: no reintente; requiere conciliación manual en Zoho Sandbox."
+                f"Resultado incierto: no reintente; requiere conciliación manual en Zoho ({self.profile})."
             ) from exc
         except ZohoAPIError as exc:
             if getattr(exc, "request_sent", None) is True and (
                 getattr(exc, "status_code", None) or 0
             ) >= 500:
                 raise TaskPublicationUncertain(
-                    "Resultado incierto: no reintente; requiere conciliación manual en Zoho Sandbox."
+                    f"Resultado incierto: no reintente; requiere conciliación manual en Zoho ({self.profile})."
                 ) from exc
             raise
 
@@ -247,10 +262,10 @@ class GuardedSandboxTaskPublisher:
 def get_task_publisher(
     *, profile: str = "sandbox", confirmation: str = "",
 ) -> ColectivosTaskPublisher:
-    if profile != "sandbox":
-        raise TaskPublishingDisabled("Tasks sólo admite Sandbox en esta fase.")
+    if profile not in _WRITABLE_PROFILES:
+        raise TaskPublishingDisabled("Tasks sólo admite los perfiles habilitados (sandbox, production).")
     if getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
-        return GuardedSandboxTaskPublisher(profile=profile, confirmation=confirmation)
+        return GuardedTaskPublisher(profile=profile, confirmation=confirmation)
     return DisabledColectivosTaskPublisher()
 
 

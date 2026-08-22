@@ -17,6 +17,7 @@ from vault.crypto import encrypt
 from cotizacion_colectivos.models import ColectivosTaskOutbox, SolicitudColectivo
 from cotizacion_colectivos.services.task_publisher import (
     ColectivosTaskPayload,
+    PRODUCTION_WRITE_CONFIRMATION,
     SANDBOX_WRITE_CONFIRMATION,
     SYNTHETIC_TEST_TASK,
     TaskPublicationUncertain,
@@ -226,7 +227,43 @@ class TaskPublisherTests(TestCase):
 
     @override_settings(**ENABLED_WRITE, ZOHO_PRODUCTION_WRITE_ENABLED=True)
     @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
-    def test_production_is_always_rejected_before_sdk(self, get_zoho):
+    def test_production_is_rejected_when_active_profile_does_not_match(self, get_zoho):
+        # ENABLED_WRITE fija ZOHO_ACTIVE_PROFILE=sandbox; pedir profile="production"
+        # debe rechazarse aunque la escritura de production esté habilitada,
+        # porque el perfil activo no coincide con el solicitado.
+        with self.assertRaises(TaskPublishingDisabled):
+            get_task_publisher(
+                profile="production", confirmation=PRODUCTION_WRITE_CONFIRMATION,
+            )
+        get_zoho.assert_not_called()
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="production",
+        ZOHO_PRODUCTION_WRITE_ENABLED=True,
+        COLECTIVOS_TASK_PUBLISH_ENABLED=True,
+        COLECTIVOS_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
+    )
+    @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
+    def test_production_write_succeeds_when_fully_configured(self, get_zoho):
+        create = Mock(return_value=successful_write())
+        get_zoho.return_value = SimpleNamespace(records=SimpleNamespace(create=create))
+
+        result = get_task_publisher(
+            profile="production", confirmation=PRODUCTION_WRITE_CONFIRMATION,
+        ).publish_test_task()
+
+        get_zoho.assert_called_once_with(profile="production")
+        self.assertEqual(result["record_id"], "700000000000000001")
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="production",
+        ZOHO_PRODUCTION_WRITE_ENABLED=True,
+        COLECTIVOS_TASK_PUBLISH_ENABLED=True,
+        COLECTIVOS_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
+    )
+    @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
+    def test_production_write_rejects_sandbox_confirmation(self, get_zoho):
+        # La confirmacion de sandbox no debe habilitar production ni viceversa.
         with self.assertRaises(TaskPublishingDisabled):
             get_task_publisher(
                 profile="production", confirmation=SANDBOX_WRITE_CONFIRMATION,
