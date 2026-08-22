@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
+from .write_guards import require_write_guard
 
 
 SUBRISK_MODULE = "Riesgos1"
@@ -252,16 +253,12 @@ def sanitized_subrisk_dry_run(payload: Mapping[str, object], *, profile: str) ->
 def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
                            confirmation: str, zoho=None) -> dict[str, object]:
     """Perform at most one guarded Sandbox CREATE; never retries or falls back."""
-    if profile != "sandbox" or str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != "sandbox":
-        raise SubriskPublishingDisabled("Riesgos1 sólo admite Sandbox.")
-    if not getattr(settings, "COLECTIVOS_SUBRISK_PUBLISH_ENABLED", False):
-        raise SubriskPublishingDisabled("El ensayo Riesgos1 está deshabilitado.")
-    if str(getattr(settings, "COLECTIVOS_SUBRISK_WRITE_CONFIRMATION", "")) != SUBRISK_CONFIRMATION:
-        raise SubriskPublishingDisabled("Falta la confirmación configurada del ensayo.")
-    if str(confirmation or "").strip() != SUBRISK_CONFIRMATION:
-        raise SubriskPublishingDisabled("Falta la confirmación explícita del ensayo.")
-    if not ZohoSettings.from_django("sandbox").write_enabled:
-        raise SubriskPublishingDisabled("La escritura Sandbox está deshabilitada.")
+    require_write_guard(
+        entity="subrisk", profile=profile, confirmation=confirmation,
+        feature_flag="COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
+        legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION",
+        disabled_error=SubriskPublishingDisabled,
+    )
     if set(payload) - SUBRISK_FIELDS or not SUBRISK_REQUIRED_FIELDS.issubset(payload):
         raise ValidationError("El payload del ensayo no coincide con la allowlist.")
     for field in ("P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado"):
@@ -277,7 +274,7 @@ def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
     )
     with _WRITE_LOCK:
         try:
-            result = (zoho or get_zoho(profile="sandbox")).records.create(
+                result = (zoho or get_zoho(profile=profile)).records.create(
                 module=SUBRISK_MODULE, records=(normalized,)
             )
         except ZohoTimeoutError as exc:
@@ -297,23 +294,19 @@ def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
 
 
 def create_mobility_subrisk_sandbox(payload: Mapping[str, object], *,
-                                    confirmation: str, zoho=None) -> dict[str, object]:
+                                    confirmation: str, zoho=None,
+                                    profile: str | None = None) -> dict[str, object]:
     """Guarded CREATE for the explicit Movilidad ensayo only."""
-    if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != "sandbox":
-        raise SubriskPublishingDisabled("Riesgos1 sólo admite Sandbox.")
+    profile = str(profile or getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
+    require_write_guard(
+        entity="subrisk", profile=profile, confirmation=confirmation,
+        feature_flag="COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
+        legacy_setting="COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION",
+        expected_override=MOBILITY_SUBRISK_CONFIRMATION,
+        disabled_error=SubriskPublishingDisabled,
+    )
     if not getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_ENABLED", False):
         raise SubriskPublishingDisabled("El seed Movilidad está deshabilitado.")
-    if str(getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION", "")) != MOBILITY_SUBRISK_CONFIRMATION:
-        raise SubriskPublishingDisabled("Falta la confirmación configurada de Movilidad.")
-    if str(confirmation or "").strip() != MOBILITY_SUBRISK_CONFIRMATION:
-        raise SubriskPublishingDisabled("Falta la confirmación explícita de Movilidad.")
-    # Preserve the existing generic Subrisk guard as an independent barrier.
-    if not getattr(settings, "COLECTIVOS_SUBRISK_PUBLISH_ENABLED", False):
-        raise SubriskPublishingDisabled("El publisher de Riesgos1 está deshabilitado.")
-    if str(getattr(settings, "COLECTIVOS_SUBRISK_WRITE_CONFIRMATION", "")) != SUBRISK_CONFIRMATION:
-        raise SubriskPublishingDisabled("Falta la confirmación general de Riesgos1.")
-    if not ZohoSettings.from_django("sandbox").write_enabled:
-        raise SubriskPublishingDisabled("La escritura Sandbox está deshabilitada.")
     if set(payload) - SUBRISK_FIELDS or not MOBILITY_REQUIRED_FIELDS.issubset(payload):
         raise ValidationError("El payload Movilidad no coincide con la allowlist.")
     for field in ("P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado", "Riesgo"):
@@ -330,12 +323,12 @@ def create_mobility_subrisk_sandbox(payload: Mapping[str, object], *,
         duplicate = resolve_mobility_subrisk_relation(
             policy_id=normalized["P_liza"]["id"], risk_id=normalized["Riesgo"]["id"],
             affiliate_contact_id=normalized["Contacto_facturaci_n_dividida_colectivas"]["id"],
-            insured_contact_id=normalized["Asegurado"]["id"], zoho=zoho or get_zoho(profile="sandbox"),
+            insured_contact_id=normalized["Asegurado"]["id"], zoho=zoho or get_zoho(profile=profile),
         )
         if duplicate["status"] != "NOT_FOUND":
             raise SubriskPublicationRejected("La relación Movilidad ya existe o es ambigua.")
         try:
-            result = (zoho or get_zoho(profile="sandbox")).records.create(
+            result = (zoho or get_zoho(profile=profile)).records.create(
                 module=SUBRISK_MODULE, records=(normalized,)
             )
         except ZohoTimeoutError as exc:

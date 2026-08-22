@@ -76,6 +76,7 @@ from .services.person_contract import (
 from .services.individual_entities import effective_candidate, promote_created_people, resolve_mobility_entities, synchronize_risk_insured
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
 from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
+from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
 from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
@@ -2598,7 +2599,10 @@ def individual_create_person(request, token):
             raise ValidationError("No se encontró un candidato Persona válido para crear.")
         result = get_contacts_publisher(
             profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
-            confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
+            confirmation=configured_confirmation(
+                "contact", str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+                legacy_setting="COLECTIVOS_CONTACT_WRITE_CONFIRMATION",
+            ),
         ).create(data, status="Cliente")
         metadata = dict(quotation.safe_metadata or {})
         contact_id = result["record_id"]
@@ -2752,7 +2756,14 @@ def individual_create_risk(request, token, vehicle_index):
         item = risks[vehicle_index]
         if item.get("status") != "not_found":
             raise ValidationError("El Riesgo requiere resolución antes de crear.")
-        result = create_sandbox_risk(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION", "")))
+        active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        result = create_sandbox_risk(
+            item.get("candidate") or {}, profile=active_profile,
+            confirmation=configured_confirmation(
+                "risk", active_profile,
+                legacy_setting="COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION",
+            ),
+        )
         created_at = timezone.now().isoformat()
         item.update({"status": "created", "created": True, "remote_id": result["record_id"], "risk_id": result["record_id"], "created_at": created_at})
         for key in ("error", "error_code"):
@@ -2823,7 +2834,14 @@ def individual_create_subrisk(request, token, vehicle_index):
         item = subrisks[vehicle_index]
         if item.get("status") != "not_found" or item.get("created") or item.get("remote_id") or item.get("riesgos1_id"):
             raise ValidationError("La asociación requiere resolución antes de crear.")
-        result = create_mobility_subrisk_sandbox(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION", "")))
+        active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        result = create_mobility_subrisk_sandbox(
+            item.get("candidate") or {}, profile=active_profile,
+            confirmation=configured_confirmation(
+                "subrisk", active_profile,
+                legacy_setting="COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION",
+            ),
+        )
         confirmed_id = str(result["record_id"])
         item.update({"status": "created", "created": True, "remote_id": confirmed_id, "riesgos1_id": confirmed_id, "created_at": timezone.now().isoformat()})
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["subrisks"] = subrisks
