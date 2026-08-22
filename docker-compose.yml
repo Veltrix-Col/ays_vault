@@ -3,12 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets:
+        - gh_token
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-production}
       DEBUG: "False"
       SECRET_KEY: ${SECRET_KEY}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
       DB_ENGINE: postgres
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
@@ -53,6 +56,67 @@ services:
       REAUTH_TTL_SECONDS: ${REAUTH_TTL_SECONDS:-300}
       MFA_FAILURE_LIMIT: ${MFA_FAILURE_LIMIT:-5}
       MFA_ISSUER: ${MFA_ISSUER:-A&S Vault}
+      TOOLS_ACCESS_MODE: ${TOOLS_ACCESS_MODE:-trusted_intranet}
+      TOOLS_DELEGATED_ACCESS_VALIDATOR: ${TOOLS_DELEGATED_ACCESS_VALIDATOR:-intranet_sso.delegated_access.validate_intranet_session}
+      INTRANET_SSO_PUBLIC_KEY: ${INTRANET_SSO_PUBLIC_KEY}
+      INTRANET_SSO_AUTHORIZE_URL: ${INTRANET_SSO_AUTHORIZE_URL}
+      INTRANET_SSO_AUDIENCE: ${INTRANET_SSO_AUDIENCE:-bapps.dp.segurosays.com}
+      INTRANET_SSO_ISSUER: ${INTRANET_SSO_ISSUER:-segurosays.com}
+      AZURE_FOUNDRY_RECIBO_KEY: ${AZURE_FOUNDRY_RECIBO_KEY}
+      AZURE_FOUNDRY_RECIBO_ENDPOINT: ${AZURE_FOUNDRY_RECIBO_ENDPOINT:-https://ays-cu-renovaciones-dev.services.ai.azure.com/openai/v1}
+      AZURE_FOUNDRY_RECIBO_MODEL: ${AZURE_FOUNDRY_RECIBO_MODEL:-gpt-5.6-luna}
+      # "Acceso publico interno" de Colectivos (bypass temporal de QA sobre el
+      # gate de intranet SSO -- ver config/middleware.py). Sin este passthrough
+      # el default de settings.py (True) queda fijo y el modulo interno de
+      # Colectivos no exige login. Se sobreescribe el default aqui a "false"
+      # porque este compose es el de produccion; para reabrirlo puntualmente
+      # hay que setearlo explicito en Dokploy, nunca deberia quedar en true
+      # por omision en produccion.
+      COLECTIVOS_INTERNAL_PUBLIC_ACCESS: ${COLECTIVOS_INTERNAL_PUBLIC_ACCESS:-false}
+      COLECTIVOS_TASK_PUBLISH_ENABLED: ${COLECTIVOS_TASK_PUBLISH_ENABLED:-false}
+      COLECTIVOS_TASK_WRITE_CONFIRMATION: ${COLECTIVOS_TASK_WRITE_CONFIRMATION}
+      COLECTIVOS_CONTACT_PUBLISH_ENABLED: ${COLECTIVOS_CONTACT_PUBLISH_ENABLED:-false}
+      COLECTIVOS_CONTACT_WRITE_CONFIRMATION: ${COLECTIVOS_CONTACT_WRITE_CONFIRMATION}
+      COLECTIVOS_SUBRISK_PUBLISH_ENABLED: ${COLECTIVOS_SUBRISK_PUBLISH_ENABLED:-false}
+      COLECTIVOS_SUBRISK_WRITE_CONFIRMATION: ${COLECTIVOS_SUBRISK_WRITE_CONFIRMATION}
+      # Zoho CRM V8. Sin este bloque ZOHO_ENABLED queda fijo en False (default
+      # de settings.py) sin importar lo que se configure en Dokploy: Conciliacion
+      # y Colectivos, que consultan Zoho directo, quedarian no funcionales.
+      ZOHO_ENABLED: ${ZOHO_ENABLED:-false}
+      ZOHO_PUBLIC_SETUP_ENABLED: ${ZOHO_PUBLIC_SETUP_ENABLED:-false}
+      ZOHO_ACTIVE_PROFILE: ${ZOHO_ACTIVE_PROFILE:-sandbox}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET}
+      ZOHO_REDIRECT_URI: ${ZOHO_REDIRECT_URI:-http://localhost:8000/integrations/zoho/callback/}
+      ZOHO_ACCOUNTS_BASE_URL: ${ZOHO_ACCOUNTS_BASE_URL:-https://accounts.zoho.com}
+      ZOHO_API_BASE_URL: ${ZOHO_API_BASE_URL:-https://www.zohoapis.com}
+      ZOHO_OAUTH_SCOPES: ${ZOHO_OAUTH_SCOPES:-ZohoCRM.org.READ,ZohoCRM.settings.modules.READ,ZohoCRM.settings.fields.READ,ZohoCRM.modules.READ,ZohoCRM.coql.READ}
+      ZOHO_REFRESH_TOKEN: ${ZOHO_REFRESH_TOKEN}
+      ZOHO_REQUEST_TIMEOUT_SECONDS: ${ZOHO_REQUEST_TIMEOUT_SECONDS:-15}
+      ZOHO_MAX_RETRIES: ${ZOHO_MAX_RETRIES:-2}
+      ZOHO_BACKEND: ${ZOHO_BACKEND:-sdk}
+      ZOHO_SDK_RESOURCE_PATH: ${ZOHO_SDK_RESOURCE_PATH:-runtime/zoho_sdk}
+      ZOHO_SDK_LOG_LEVEL: ${ZOHO_SDK_LOG_LEVEL:-INFO}
+      ZOHO_PRODUCTION_ENABLED: ${ZOHO_PRODUCTION_ENABLED:-false}
+      ZOHO_PRODUCTION_CLIENT_ID: ${ZOHO_PRODUCTION_CLIENT_ID}
+      ZOHO_PRODUCTION_CLIENT_SECRET: ${ZOHO_PRODUCTION_CLIENT_SECRET}
+      ZOHO_PRODUCTION_REFRESH_TOKEN: ${ZOHO_PRODUCTION_REFRESH_TOKEN}
+      ZOHO_PRODUCTION_EXPECTED_ORG_ID: ${ZOHO_PRODUCTION_EXPECTED_ORG_ID}
+      ZOHO_PRODUCTION_ENVIRONMENT: ${ZOHO_PRODUCTION_ENVIRONMENT:-production}
+      ZOHO_PRODUCTION_ACCOUNTS_BASE_URL: ${ZOHO_PRODUCTION_ACCOUNTS_BASE_URL:-https://accounts.zoho.com}
+      ZOHO_PRODUCTION_API_BASE_URL: ${ZOHO_PRODUCTION_API_BASE_URL:-https://www.zohoapis.com}
+      ZOHO_PRODUCTION_SDK_RESOURCE_PATH: ${ZOHO_PRODUCTION_SDK_RESOURCE_PATH:-runtime/zoho_sdk/production}
+      ZOHO_PRODUCTION_WRITE_ENABLED: ${ZOHO_PRODUCTION_WRITE_ENABLED:-false}
+      ZOHO_SANDBOX_ENABLED: ${ZOHO_SANDBOX_ENABLED:-false}
+      ZOHO_SANDBOX_CLIENT_ID: ${ZOHO_SANDBOX_CLIENT_ID}
+      ZOHO_SANDBOX_CLIENT_SECRET: ${ZOHO_SANDBOX_CLIENT_SECRET}
+      ZOHO_SANDBOX_REFRESH_TOKEN: ${ZOHO_SANDBOX_REFRESH_TOKEN}
+      ZOHO_SANDBOX_EXPECTED_ORG_ID: ${ZOHO_SANDBOX_EXPECTED_ORG_ID}
+      ZOHO_SANDBOX_ENVIRONMENT: ${ZOHO_SANDBOX_ENVIRONMENT:-sandbox}
+      ZOHO_SANDBOX_ACCOUNTS_BASE_URL: ${ZOHO_SANDBOX_ACCOUNTS_BASE_URL:-https://accounts.zoho.com}
+      ZOHO_SANDBOX_API_BASE_URL: ${ZOHO_SANDBOX_API_BASE_URL:-https://sandbox.zohoapis.com}
+      ZOHO_SANDBOX_SDK_RESOURCE_PATH: ${ZOHO_SANDBOX_SDK_RESOURCE_PATH:-runtime/zoho_sdk/sandbox}
+      ZOHO_SANDBOX_WRITE_ENABLED: ${ZOHO_SANDBOX_WRITE_ENABLED:-false}
     volumes:
       - vault_media:/app/media
     networks:
@@ -69,7 +133,7 @@ services:
       start_period: 30s
 
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -93,3 +157,11 @@ networks:
   dokploy-network:
     external: true
   vault-internal:
+
+secrets:
+  # Token de lectura para clonar el repo privado ays-zoho-sdk durante el
+  # build (ver Dockerfile). Se toma de la variable de entorno GH_TOKEN, la
+  # misma que ya se configura en Dokploy para el resto de secretos: no crea
+  # un mecanismo nuevo, solo la conecta como build secret en vez de runtime.
+  gh_token:
+    environment: GH_TOKEN

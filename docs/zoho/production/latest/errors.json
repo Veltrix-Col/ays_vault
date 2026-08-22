@@ -1,0 +1,1343 @@
+{
+  "errors": [
+    {
+      "category": "capability_unavailable",
+      "endpoint_type": "layouts",
+      "module": "*",
+      "safe_message": "La fachada instalada no expone metadata de layouts.",
+      "status_code": null
+    },
+    {
+      "category": "capability_unavailable",
+      "endpoint_type": "related_lists",
+      "module": "*",
+      "safe_message": "La fachada instalada no expone related lists.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Accounts",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Actions_Performed",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api",
+      "endpoint_type": "fields",
+      "module": "Activities",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 500
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Analytics",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Attachments",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Attachments",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Attachments",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Attachments",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "C_digos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "C_digos_Ramos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "C_digos_Ramos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "C_digos_Ramos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "CalendarBookings__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "CalendarBookings__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "CalendarBookings__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Calls",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Campaigns",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Cartera",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Cases",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Coberturas_Asegurado",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Cobros",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Contacts",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Contacts",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Contacts",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "DealHistory",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Deals",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Desk",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Directorio_Aseguradoras",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Directorio_Aseguradoras",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Directorio_Aseguradoras",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Directorio_Aseguradoras",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Documents",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Email_Analytics",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Email_Sentiment",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Email_Sentiment",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Email_Template_Analytics",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Email_Template_Analytics",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Emails",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Emails",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Emails",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Empleados",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Empleados",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Empleados",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Empleados",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Empleados",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Entity_Scores__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Events",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Facebook",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Facturaci_n_parcial",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Feeds",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_1__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_1__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_1__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_1__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_2__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_2__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_2__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "File_Upload_2__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Groups",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Items",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Forecast_Quotas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Forecasts",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Functions__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Functions__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Google_AdWords",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Informaci_n_de_contacto",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Informaci_n_familiar_y_co",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Informaci_n_familiar_y_co",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Invoices",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Leads",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Leads",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Leads",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Leads",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Locking_Information__s",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Mascota",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Modal_3",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Notes",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Notes",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Notes",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Opeeraciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Opeeraciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Opeeraciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Opeeraciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Opeeraciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Ordenes_de_servicio",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Persona_juridica",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Polizas",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Polizas",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Polizas",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Price_Books",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Products",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Projects",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Purchase_Orders",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Quotes",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Ramo_12",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Relacionados",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Relacionados_Hijoss",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Relaciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Relaciones",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Reports",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Riesgos1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Riesgos1",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "subforms",
+      "module": "Riesgos1",
+      "safe_message": "El destino del subform no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Rolesclientes",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Sales_Orders",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "SalesInbox",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Siniestros",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "api_not_supported",
+      "endpoint_type": "fields",
+      "module": "Social",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Solicitudes",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Solutions",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Subformulario_1",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tareas_Equipo",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tasks",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tasks",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tasks",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tasks",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tasks",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Tipo_d_Contacto",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "Twitter",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Vendedores",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Vendors",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "authorization",
+      "endpoint_type": "fields",
+      "module": "Visits",
+      "safe_message": "Metadata no disponible para esta operación.",
+      "status_code": 400
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "woztellplatformintegration__Woztell_logs",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "woztellplatformintegration__Woztell_logs",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "woztellplatformintegration__Woztell_logs",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "woztellplatformintegration__Woztell_logs",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    },
+    {
+      "category": "metadata_target_missing",
+      "endpoint_type": "lookup",
+      "module": "woztellplatformintegration__Woztell_logs",
+      "safe_message": "El destino del lookup no pudo resolverse con metadata.",
+      "status_code": null
+    }
+  ],
+  "profile": "production",
+  "schema_version": 2
+}

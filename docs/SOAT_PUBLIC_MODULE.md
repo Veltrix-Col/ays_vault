@@ -1,5 +1,7 @@
 # Gestión SOAT pública
 
+> Documento histórico consolidado. La referencia vigente está en [`soat/README.md`](soat/README.md) y [`soat/technical_handover.md`](soat/technical_handover.md). El código actual aplica **nueve** criterios de gestión, no siete.
+
 ## Alcance
 
 Gestión SOAT está disponible en `/soat/` desde el Portal de Aplicaciones. Es pública e independiente de A&S Vault: no autentica usuarios, no crea sesiones, no consulta roles, no usa modelos y no escribe eventos en la cadena de auditoría de Vault.

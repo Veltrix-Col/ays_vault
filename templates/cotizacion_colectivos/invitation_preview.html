@@ -1,0 +1,27 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% load static %}
+{% block title %}Invitaciones a aseguradoras{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'cotizacion_colectivos:invitations_index' %}">Invitaciones a Aseguradoras</a><span>/</span>{% if consolidated %}<span>Todo el ramo</span>{% else %}<a href="{% url 'cotizacion_colectivos:invitations_policy_detail' policy_token %}">Póliza</a>{% endif %}<span>/</span><span>Preparación</span></nav>
+<header class="policy-workspace-hero"><div><span class="eyebrow">{% if consolidated %}Invitación consolidada del ramo{% else %}Invitación desde póliza{% endif %}</span><h1>{{ detail.branch_name }}</h1><p>{{ detail.holder }} · {{ detail.full_reference|default:detail.masked_reference }}</p></div><div class="workspace-status"><span class="read-only-chip">Workspace local · Sin consultas remotas</span></div></header>
+
+{% if missing_workspaces %}<section class="workspace-card invitation-warning" role="alert"><h2>Faltan datos locales de algunas pólizas</h2><p>Las acciones usarán únicamente las pólizas con workspace disponible; las pendientes no se inventan ni se incluyen.</p><ul>{% for reference in missing_workspaces %}<li>{{ reference }}</li>{% endfor %}</ul></section>{% endif %}
+
+<div class="invitation-workspace-layout">
+  <main class="invitation-workspace-main">
+    <section class="workspace-card">
+      <div class="section-heading"><div><span class="eyebrow">Información que se enviará</span><h2>{% if consolidated %}Pólizas vigentes del ramo{% else %}Registros de la póliza{% endif %}</h2></div></div>
+      <p>Esta vista operativa reúne una sola vez los datos confirmados del workspace. Cada aseguradora conserva su propia plantilla y mapping.</p>
+      <div class="policy-search" role="search"><label for="invitation-filter">Filtrar registros</label><input id="invitation-filter" type="search" placeholder="Placa, documento o asegurado…" autocomplete="off" data-invitation-filter></div>
+      {% include "cotizacion_colectivos/_invitation_operational_table.html" with show_policy_column=consolidated %}
+    </section>
+
+    <details class="workspace-card invitation-technical"><summary>Información de plantillas y campos pendientes</summary><div class="workspace-accordion-grid">
+      {% for preview in previews %}<article class="relation-row"><div><strong>{{ preview.template.insurer_name }}</strong><span>{{ preview.template.purpose }}</span><small>{{ preview.rows }} registros{% if preview.output_files > 1 %} · {{ preview.output_files }} archivos sin truncamiento{% endif %}</small></div><span class="state-chip">{% if preview.status == 'ready' %}Lista{% elif preview.status == 'ready_manual' %}Completar manualmente{% elif preview.status == 'validation' %}Requiere validación{% else %}No disponible{% endif %}</span><p>{{ preview.message }}</p>{% if preview.missing_required %}<div><strong>Campos obligatorios pendientes</strong><ul>{% for field in preview.missing_required %}<li>{{ field }}</li>{% endfor %}</ul></div>{% endif %}{% if preview.template.limitation %}<p class="muted">{{ preview.template.limitation }}</p>{% endif %}</article>{% empty %}<p class="muted">No hay plantillas registradas para este ramo.</p>{% endfor %}
+    </div></details>
+  </main>
+
+  <aside class="workspace-card invitation-actions-panel" aria-label="Acciones de invitación">{% include "cotizacion_colectivos/_invitation_actions.html" %}</aside>
+</div>
+<script src="{% static 'js/colectivos-invitations.js' %}" defer></script>
+{% endblock %}

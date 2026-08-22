@@ -1,5 +1,7 @@
 # Centro de Control
 
+> Documento histórico conservado como antecedente. La referencia vigente es [`cardmanager/operations.md`](cardmanager/operations.md) y [`cardmanager/audit_and_monitoring.md`](cardmanager/audit_and_monitoring.md).
+
 ## Proposito
 
 Vista exclusiva del Administrador para una operacion pequena. No mide concurrencia masiva, no crea rankings y no muestra PAN, vencimiento, valores revelados, secretos, tokens o codigos MFA.

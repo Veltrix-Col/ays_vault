@@ -309,7 +309,7 @@ class VaultIdentitySecurityTests(TestCase):
     def test_pan_expiry_encrypted_and_duplicate_rejected(self):
         stored = PaymentCard.objects.get(pk=self.card.pk)
         self.assertNotIn(PAN, stored.encrypted_pan); self.assertNotIn("12/29", stored.encrypted_expiry); self.assertTrue(luhn_valid(PAN))
-        form = CardForm(data={"company_name": "Empresa Demo", "client_name": "Otro", "cardholder_name": "Demo", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30", "code": "CODIGO-DEMO"})
+        form = CardForm(data={"company_name": "Empresa Demo", "client_name": "Otro", "cardholder_name": "Demo", "identity_document": "1000000006", "email": "demo@example.invalid", "phone": "+57 300 000 0006", "brand": "VISA", "purpose": "Demo", "active": True, "pan": PAN, "expiry": "10/30", "code": "CODIGO-DEMO"})
         self.assertFalse(form.is_valid())
 
     def test_session_records_contain_no_plain_session_key(self):

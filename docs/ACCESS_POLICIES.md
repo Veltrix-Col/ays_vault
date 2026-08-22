@@ -1,5 +1,7 @@
 # Politicas de acceso
 
+> Documento histórico conservado como antecedente. La referencia vigente es [`cardmanager/roles_and_permissions.md`](cardmanager/roles_and_permissions.md) y [`cardmanager/security_model.md`](cardmanager/security_model.md).
+
 ## Configuracion central
 
 `PolicyConfiguration` es singleton y contiene zona horaria, horarios, sesiones, reautenticacion, inactividad, vencimiento/escalamiento de alertas y comportamiento fuera de horario. Su cache dura cinco minutos y todo cambio administrativo la invalida inmediatamente.

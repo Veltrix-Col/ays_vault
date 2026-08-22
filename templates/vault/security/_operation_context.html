@@ -1,7 +1,7 @@
 <form method="post" action="{% url 'vault:protected_confirm' %}" data-protected-context novalidate autocomplete="off">
   {% csrf_token %}<input type="hidden" name="intent" value="{{ intent }}">
   {{ form.non_field_errors }}
-  <div class="form-section-header"><h3>Relacione la consulta con Zoho</h3><p>La referencia autoriza los campos protegidos de la tarjeta actual. Al cambiar de tarjeta deberá registrar una nueva.</p></div>
+  <div class="form-section-header"><h3>Relacione la consulta con la póliza</h3><p>La póliza autoriza los campos protegidos de la tarjeta actual. Al cambiar de tarjeta deberá registrarla nuevamente.</p></div>
   {% include 'includes/form_field.html' with field=form.zoho_reference %}
   <div class="form-actions"><button class="btn primary" type="submit">Confirmar y continuar</button><button class="btn ghost" type="button" data-protected-close>Cancelar</button></div>
 </form>

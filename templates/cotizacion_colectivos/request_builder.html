@@ -1,0 +1,36 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% load static %}
+{% block title %}Crear solicitud al cliente{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:novelties_index' %}">Novedades</a><span>/</span><span>Compatibilidad histórica</span></nav>
+<header class="page-heading page-heading--compact"><span class="eyebrow">Expediente multipóliza</span><h1>Crear solicitud al cliente</h1><p>Seleccione únicamente las pólizas y los ajustes que el cliente podrá responder en un solo enlace.</p></header>
+{% if form.non_field_errors %}<div class="status-message status-message--error">{{ form.non_field_errors }}</div>{% endif %}
+<form method="post" class="builder-layout" data-request-builder>
+  {% csrf_token %}
+  <section class="builder-content">
+    <div class="builder-step"><span>1</span><div><h2>Seleccione las pólizas</h2><p>Solo aparecen pólizas colectivas clasificadas mediante la allowlist vigente.</p></div></div>
+    <div class="policy-selector-grid">
+      {% for option in policies %}<article class="policy-selector-card">
+        <label class="policy-selector-heading">{{ option.selector }}<span><strong>{{ option.policy.branch_name }}</strong><small>{{ option.policy.full_reference|default:option.policy.masked_reference }} · {{ option.policy.state }}</small></span></label>
+        <dl><div><dt>Aseguradora</dt><dd>{{ option.policy.insurer }}</dd></div><div><dt>Vigencia</dt><dd>{{ option.policy.start_date|default:"Sin inicio" }} – {{ option.policy.end_date|default:"Sin fin" }}</dd></div><div><dt>Relaciones</dt><dd>{{ option.policy.related_count }}</dd></div></dl>
+        <fieldset><legend>Ajustes habilitados</legend>{{ option.adjustment_selector }}{% for error in option.adjustment_selector.errors %}<p class="field-error">{{ error }}</p>{% endfor %}</fieldset>
+        {% for warning in option.policy.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}
+      </article>{% empty %}<div class="empty-state"><h2>No hay pólizas colectivas disponibles</h2><p>Las pólizas ambiguas o sin parametrización no pueden incluirse.</p></div>{% endfor %}
+    </div>
+    {% if pending_branches %}<section class="relation-card relation-card--pending"><h2>Pólizas pendientes de parametrización</h2><p>No pueden seleccionarse hasta contar con clasificación segura.</p>{% for branch in pending_branches %}<p>{{ branch.name }}</p>{% endfor %}</section>{% endif %}
+    {% if unavailable_policies %}<section class="relation-card relation-card--pending"><h2>Otras pólizas no disponibles</h2>{% for unavailable in unavailable_policies %}<p><strong>{{ unavailable.0.full_reference|default:unavailable.0.masked_reference }}</strong> · {{ unavailable.1 }}</p>{% endfor %}</section>{% endif %}
+  </section>
+  <aside class="builder-summary">
+    <div class="builder-step"><span>2</span><div><h2>Resumen y generación</h2><p>El enlace y el correo se gestionan después de crear el snapshot.</p></div></div>
+    <p class="builder-counter" aria-live="polite"><strong data-selected-count>0</strong> pólizas seleccionadas · <strong data-adjustment-count>0</strong> ajustes seleccionados</p>
+    {{ form.request_type.label_tag }}{{ form.request_type }}
+    {{ form.deadline.label_tag }}{{ form.deadline }}{{ form.deadline.errors }}
+    {{ form.internal_notes.label_tag }}{{ form.internal_notes }}
+    <label class="check-row">{{ form.is_test }} {{ form.is_test.label }}</label>
+    <label class="check-row">{{ form.confirm_snapshot }} {{ form.confirm_snapshot.label }}</label>{{ form.confirm_snapshot.errors }}
+    <button type="submit" {% if not policies %}disabled{% endif %}>Generar expediente y enlace único</button>
+    <p class="muted">Zoho permanece en modo solo lectura. Crear el expediente no modifica ninguna póliza.</p>
+  </aside>
+</form>
+<script src="{% static 'js/colectivos-builder.js' %}" defer></script>
+{% endblock %}

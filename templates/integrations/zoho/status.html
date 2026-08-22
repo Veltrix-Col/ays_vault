@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Integración Zoho | CardManager{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Integraciones</span>
+    <h1>Zoho CRM</h1>
+    <p>Conexión administrativa de solo lectura con Zoho CRM API V8.</p>
+  </div>
+</div>
+
+{% if zoho.public_setup_enabled %}
+  <div class="help-banner warning" role="alert">
+    Modo temporal de configuración pública activo. Desactívelo antes de desplegar en producción.
+  </div>
+{% endif %}
+
+{% if refresh_token_delivery %}
+  <section class="panel" aria-labelledby="refresh-token-delivery-title">
+    <div class="panel-head">
+      <div>
+        <h2 id="refresh-token-delivery-title">Refresh token generado — copiar ahora</h2>
+        <p>Esta copia se muestra una sola vez y ya fue retirada del almacenamiento efímero.</p>
+        <p>
+          Perfil: <strong>{{ refresh_token_delivery_profile }}</strong> ·
+          Entorno: <strong>{{ refresh_token_delivery_environment }}</strong>
+        </p>
+      </div>
+    </div>
+    <div class="form-field">
+      <label for="zoho-refresh-token-delivery">
+        ZOHO_{{ refresh_token_delivery_profile|upper }}_REFRESH_TOKEN
+      </label>
+      <textarea id="zoho-refresh-token-delivery" readonly rows="4">{{ refresh_token_delivery }}</textarea>
+      <span class="field-help">
+        Guarde este valor en <code>.env</code> como
+        <code>ZOHO_{{ refresh_token_delivery_profile|upper }}_REFRESH_TOKEN</code>.
+        No lo comparta, no lo envíe por correo y no lo suba a Git.
+      </span>
+    </div>
+  </section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Estado de la conexión</h2>
+      <p>La interfaz nunca muestra tokens ni credenciales completas.</p>
+    </div>
+    <span class="badge {% if zoho.valid_configuration %}success{% else %}warning{% endif %}">
+      {% if zoho.valid_configuration %}Configurado{% else %}Incompleto{% endif %}
+    </span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <tbody>
+        <tr><th>Integración</th><td>{% if zoho.enabled %}Habilitada{% else %}Deshabilitada{% endif %}</td></tr>
+        <tr><th>Perfil activo</th><td>{{ zoho.profile }}</td></tr>
+        <tr><th>Entorno SDK</th><td>{{ zoho.environment }}</td></tr>
+        <tr><th>Configuración</th><td>{% if zoho.configured %}Completa{% else %}Incompleta{% endif %}</td></tr>
+        <tr><th>Modo</th><td>Solo lectura</td></tr>
+        <tr><th>Client ID configurado</th><td>{% if zoho.client_id_present %}Sí{% else %}No{% endif %}</td></tr>
+        <tr><th>Client Secret configurado</th><td>{% if zoho.client_secret_present %}Sí{% else %}No{% endif %}</td></tr>
+        <tr><th>Refresh token</th><td>{% if zoho.refresh_present %}Configurado{% else %}No configurado{% endif %}</td></tr>
+        <tr><th>Data Center</th><td>{{ zoho.data_center }}</td></tr>
+        <tr><th>Redirect URI</th><td>{{ zoho.redirect_uri }}</td></tr>
+        <tr><th>Estado general</th><td>{{ zoho.connection_status }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  {% if connection_error %}<div class="form-errors" role="alert">{{ connection_error }}</div>{% endif %}
+  {% if organization and not zoho.public_setup_enabled %}
+    <div class="help-banner">
+      Organización: {{ organization.company_name|default:"Sin nombre" }} ·
+      Zona horaria: {{ organization.timezone|default:"No disponible" }} ·
+      Moneda: {{ organization.currency|default:"No disponible" }}
+    </div>
+  {% endif %}
+  <div class="form-actions">
+    {% for profile in enabled_profiles %}
+      <form method="post" action="{% url 'integrations:zoho_connect' %}">
+        {% csrf_token %}
+        <input type="hidden" name="profile" value="{{ profile.name }}">
+        <button class="btn secondary" type="submit">
+          Autorizar {{ profile.name }}
+        </button>
+      </form>
+      {% if profile.refresh_present %}
+      <form method="post" action="{% url 'integrations:zoho_status' %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="check">
+        <input type="hidden" name="profile" value="{{ profile.name }}">
+        <button class="btn primary" type="submit">
+          Probar conexión {{ profile.name }}
+        </button>
+      </form>
+      {% endif %}
+    {% empty %}
+      <span class="badge warning">No hay perfiles habilitados.</span>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

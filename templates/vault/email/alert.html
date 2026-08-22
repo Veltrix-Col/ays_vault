@@ -26,7 +26,7 @@
     {% if is_reveal_outside and alert.event.card_id %}
     <tr><td style="padding:7px 0;color:#66758a">Tarjeta</td><td style="padding:7px 0;font-weight:600">ID interno #{{ alert.event.card_id }}{% if alert.event.card %} · terminación •••• {{ alert.event.card.last4 }}{% endif %}</td></tr>
     <tr><td style="padding:7px 0;color:#66758a">Campo revelado</td><td style="padding:7px 0;font-weight:600">{{ alert.event.metadata.field|default:"Dato protegido" }}</td></tr>
-    <tr><td style="padding:7px 0;color:#66758a">Número certificado recibo - Zoho</td><td style="padding:7px 0;font-weight:600">{{ alert.event.metadata.reference|default:"No disponible" }}</td></tr>
+    <tr><td style="padding:7px 0;color:#66758a">Póliza</td><td style="padding:7px 0;font-weight:600">{{ alert.event.metadata.reference|default:"No disponible" }}</td></tr>
     {% endif %}
   </table>
   <p style="margin:20px 0 0"><strong>Recomendación:</strong> {{ alert.recommendation|default:"Revise el evento y confirme que corresponda a una actividad autorizada." }}</p>

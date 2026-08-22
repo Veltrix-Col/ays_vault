@@ -23,6 +23,9 @@
       {% include 'includes/form_field.html' with field=form.company_name %}
       {% include 'includes/form_field.html' with field=form.client_name %}
       {% include 'includes/form_field.html' with field=form.cardholder_name %}
+      {% include 'includes/form_field.html' with field=form.identity_document %}
+      {% include 'includes/form_field.html' with field=form.email %}
+      {% include 'includes/form_field.html' with field=form.phone %}
       {% include 'includes/form_field.html' with field=form.brand %}
       {% include 'includes/form_field.html' with field=form.purpose %}
       {% if form.active %}{% include 'includes/form_field.html' with field=form.active %}{% endif %}

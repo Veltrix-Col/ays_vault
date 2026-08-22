@@ -1,0 +1,58 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Bandeja de solicitudes{% endblock %}
+{% block content %}
+<header class="page-heading page-heading--compact inbox-heading">
+  <div><span class="eyebrow">Centro operativo · Área Colectivos</span><h1>Bandeja de solicitudes</h1><p>Encuentre lo que requiere gestión. Los expedientes y respuestas permanecen locales; esta pantalla no escribe en Zoho.</p></div>
+  {% if unread_count %}<span class="attention-counter">{{ unread_count }} respuesta{{ unread_count|pluralize }} nueva{{ unread_count|pluralize }}</span>{% endif %}
+</header>
+
+<section class="search-panel operational-filters" aria-labelledby="inbox-filter-title">
+  <form method="get" id="inbox-sort-form">
+    <div class="operational-filter-primary">
+      <p><label for="{{ form.query.id_for_label }}">Buscar</label>{{ form.query }}<small>Cliente, póliza completa, persona, ramo o código interno.</small></p>
+      <p><label for="{{ form.status.id_for_label }}">Estado</label>{{ form.status }}</p>
+      <p><label for="{{ form.request_type.id_for_label }}">Tipo</label>{{ form.request_type }}</p>
+      <button type="submit">Aplicar filtros</button>
+    </div>
+    <details class="filter-disclosure"{% if form.source_kind.value or form.branch.value or form.task_responsible.value or form.assigned_to.value or form.created_from.value or form.created_to.value or form.deadline_from.value or form.deadline_to.value or form.assigned_to_me.value or form.warning.value %} open{% endif %}>
+      <summary>Más filtros</summary>
+      <div class="filter-grid">
+        <p>{{ form.source_kind.label_tag }}{{ form.source_kind }}</p>
+        <p>{{ form.branch.label_tag }}{{ form.branch }}</p>
+        <p>{{ form.task_responsible.label_tag }}{{ form.task_responsible }}</p>
+        {% if form.assigned_to %}<p>{{ form.assigned_to.label_tag }}{{ form.assigned_to }}</p>{% endif %}
+        <p>{{ form.created_from.label_tag }}{{ form.created_from }}</p>
+        <p>{{ form.created_to.label_tag }}{{ form.created_to }}</p>
+        <p>{{ form.deadline_from.label_tag }}{{ form.deadline_from }}</p>
+        <p>{{ form.deadline_to.label_tag }}{{ form.deadline_to }}</p>
+        {% if form.assigned_to_me %}<p class="checkbox-filter">{{ form.assigned_to_me }}{{ form.assigned_to_me.label_tag }}</p>{% endif %}
+        <p class="checkbox-filter">{{ form.warning }}{{ form.warning.label_tag }}</p>
+      </div>
+    </details>
+    {% if request.GET %}<a class="clear-filters" href="{% url 'cotizacion_colectivos:request_list' %}">Limpiar filtros</a>{% endif %}
+  </form>
+</section>
+
+<section class="operational-inbox" aria-labelledby="requests-title">
+  <div class="section-heading"><div><span class="eyebrow">Actividad operacional</span><h2 id="requests-title">Expedientes</h2></div><label class="inbox-sort">Ordenar <select name="sort" onchange="this.form.submit()" form="inbox-sort-form"><option value="recent"{% if sort_mode == "recent" %} selected{% endif %}>Más recientes</option><option value="oldest"{% if sort_mode == "oldest" %} selected{% endif %}>Más antiguos</option><option value="attention"{% if sort_mode == "attention" %} selected{% endif %}>Requiere gestión primero</option></select></label><span>{{ page.paginator.count }}</span></div>
+  <div class="operational-request-list">
+  {% for item in page %}
+    <article class="operational-request-card operational-request-card--{{ item.inbox_status_tone }}{% if item.has_unread_response %} operational-request-card--unread{% endif %}" data-inbox-kind="{{ item.inbox_kind }}">
+      <div class="operational-request-main">
+        <div class="operational-request-title"><h3>Póliza {{ item.inbox_policy_reference }} <span>· {{ item.inbox_branch_name }}</span></h3>{% if item.has_unread_response %}<span class="new-response-label">Nueva respuesta</span>{% endif %}</div>
+        <p><strong>{{ item.inbox_client_label }}</strong> · {{ item.inbox_type_label }}</p>
+        <div class="operational-request-meta">{% if item.inbox_person_label %}<span>{{ item.inbox_person_label }}</span>{% endif %}{% if item.inbox_public_id %}<span>{{ item.inbox_public_id }}</span>{% endif %}<span>Última actividad {{ item.inbox_last_activity }}</span><span>Vence {{ item.inbox_deadline }}</span>{% if item.inbox_kind == 'request' and item.assigned_to %}<span>Responsable: {{ item.assigned_to }}</span>{% endif %}</div>
+      </div>
+      <div class="operational-current-state">
+        <span class="request-status request-status--{{ item.inbox_status_tone }}">{{ item.inbox_status_label }}{% if item.inbox_requires_attention %}<small>Requiere gestión</small>{% endif %}</span>
+        <small>Enlace: {{ item.inbox_access_summary }}{% if item.inbox_access_opened %} · abierto{% endif %}{% if item.inbox_otp_verified %} · OTP verificado{% endif %}</small>
+      </div>
+      {% if item.inbox_detail_url %}<a class="button-link button-link--secondary" href="{{ item.inbox_detail_url }}">Abrir expediente</a>{% else %}<span class="muted">Esperando al cliente</span>{% endif %}
+    </article>
+  {% empty %}<div class="inbox-empty"><h3>No hay solicitudes para estos filtros</h3><p>Pruebe con otra póliza, cliente, estado o rango de fechas.</p></div>{% endfor %}
+  </div>
+</section>
+
+{% if unread_count and can_manage_notifications %}<form method="post" action="{% url 'cotizacion_colectivos:notifications_read_all' %}" class="inbox-read-all">{% csrf_token %}<button type="submit">Marcar respuestas como leídas</button></form>{% endif %}
+{% if page.has_other_pages %}<nav class="pagination" aria-label="Paginación">{% if page.has_previous %}<a href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.previous_page_number }}">Anterior</a>{% endif %}<span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.next_page_number }}">Siguiente</a>{% endif %}</nav>{% endif %}
+{% endblock %}

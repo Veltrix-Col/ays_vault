@@ -1,0 +1,13 @@
+{% if decision_pending %}
+<section class="workspace-card individual-decision-card" aria-labelledby="individual-decision-title">
+  <span class="eyebrow">Decisión</span><h2 id="individual-decision-title">Cotización</h2>
+  <p>La cotización fue respondida. Seleccione cómo continuar.</p>
+  <div class="workspace-action-stack">
+    <form method="post" action="{% url 'cotizacion_colectivos:individual_accept' token=individual_token %}" data-remote-action data-loading-message="Verificando información en Zoho…">{% csrf_token %}<button class="button-link button-link--primary" type="submit">Cotización aceptada</button></form>
+    <button class="button-link button-link--secondary" type="button" data-dialog-open="individual-reject-dialog">Cotización rechazada</button>
+  </div>
+  <dialog id="individual-reject-dialog" class="individual-dialog zoho-edit-dialog"><div class="zoho-edit-dialog__shell"><header><h2>Confirmar rechazo</h2><button type="button" aria-label="Cerrar" data-dialog-close>×</button></header><p>La respuesta se conservará para consulta y trazabilidad, pero no se permitirán nuevas publicaciones.</p><form method="post" action="{% url 'cotizacion_colectivos:individual_reject' token=individual_token %}">{% csrf_token %}<footer class="zoho-dialog-footer"><button type="button" class="button-link button-link--secondary" data-dialog-close>Cancelar</button><button type="submit" class="button-link button-link--primary">Cotización rechazada</button></footer></form></div></dialog>
+</section>
+{% elif is_rejected %}
+<section class="workspace-card individual-decision-card individual-decision-card--rejected"><span class="eyebrow">Decisión</span><h2>Cotización rechazada</h2><p>Esta cotización fue rechazada. La información se conserva para consulta y trazabilidad, pero no se permiten nuevas publicaciones en Zoho.</p><form method="post" action="{% url 'cotizacion_colectivos:individual_reactivate' token=individual_token %}">{% csrf_token %}<button class="button-link button-link--secondary" type="submit">Reactivar cotización</button></form></section>
+{% endif %}

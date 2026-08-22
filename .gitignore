@@ -6,6 +6,7 @@ env/
 # Variables de entorno y secretos
 .env
 .env.*
+*.env
 !.env.example
 
 # Bases de datos locales
@@ -44,5 +45,13 @@ Thumbs.db
 
 # Referencias operativas privadas (nunca publicar ni versionar)
 private_assets/soat/*.xlsx
+private_assets/colectivos/
+artifacts/zoho/
+runtime/zoho_sdk/
 
 docker-compose.override.yml
+
+docs/cotizacion_colectivos/input/*.xlsx
+artifacts/input/*.xlsx
+
+.codex-deps/

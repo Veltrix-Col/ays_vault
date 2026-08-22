@@ -10,8 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultFile = document.querySelector("[data-result-file]");
   const download = document.querySelector("[data-result-download]");
   const reset = document.querySelector("[data-result-reset]");
-  let objectUrl = null;
-  let outputName = "Informe_SOAT_A&S.xlsx";
+  let downloads = [];
 
   input?.addEventListener("change", () => {
     const file = input.files?.[0];
@@ -38,22 +37,24 @@ document.addEventListener("DOMContentLoaded", () => {
         const text = (await response.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
         throw new Error(text.includes("No fue posible procesar") ? text.slice(0, 400) : "No fue posible procesar el archivo.");
       }
-      const blob = await response.blob();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      objectUrl = URL.createObjectURL(blob);
-      const disposition = response.headers.get("Content-Disposition") || "";
-      const match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-      outputName = match ? decodeURIComponent(match[1]) : outputName;
+      downloads.forEach(({ url }) => URL.revokeObjectURL(url));
+      const payload = await response.formData();
+      const files = [payload.get("report"), payload.get("support")];
+      if (files.some((file) => !(file instanceof Blob))) throw new Error("La respuesta no contiene los dos archivos SOAT.");
+      downloads = files.map((file, index) => {
+        const fallback = index === 0 ? "Informe_SOAT_A&S.xlsx" : "Soporte_SOAT_A&S.xlsx";
+        return { url: URL.createObjectURL(file), name: file.name || fallback };
+      });
       const rawSummary = response.headers.get("X-SOAT-Summary") || "";
       const summary = rawSummary ? JSON.parse(decodeURIComponent(escape(atob(rawSummary.replace(/-/g, "+").replace(/_/g, "/"))))) : {};
       grid.replaceChildren();
       Object.entries(labels).forEach(([key, label]) => {
-        const item = document.createElement("div"); item.className = "result-item";
+        const item = document.createElement("div"); item.className = "tool-meta-item";
         const value = document.createElement("strong"); value.textContent = String(summary[key] ?? 0);
         const caption = document.createElement("span"); caption.textContent = label;
         item.append(value, caption); grid.append(item);
       });
-      resultFile.textContent = outputName; result.hidden = false; result.scrollIntoView({ behavior: "smooth", block: "start" });
+      resultFile.textContent = downloads.map(({ name }) => name).join(" · "); result.hidden = false; result.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       window.alert(error.message || "No fue posible procesar el archivo.");
     } finally {
@@ -61,9 +62,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   download?.addEventListener("click", () => {
-    if (!objectUrl) return;
-    const link = document.createElement("a"); link.href = objectUrl; link.download = outputName;
-    document.body.appendChild(link); link.click(); link.remove();
+    downloads.forEach(({ url, name }) => {
+      const link = document.createElement("a"); link.href = url; link.download = name;
+      document.body.appendChild(link); link.click(); link.remove();
+    });
   });
-  reset?.addEventListener("click", () => { form.reset(); result.hidden = true; fileName.textContent = "Ningún archivo seleccionado"; input?.focus(); });
+  reset?.addEventListener("click", () => { downloads.forEach(({ url }) => URL.revokeObjectURL(url)); downloads = []; form.reset(); result.hidden = true; fileName.textContent = "Ningún archivo seleccionado"; input?.focus(); });
 });

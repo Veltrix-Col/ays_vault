@@ -1,0 +1,108 @@
+{% extends 'cotizacion_colectivos/external/base.html' %}
+{% load static %}
+{% block title %}Mi póliza{% endblock %}
+{% block content %}
+<header class="external-hero">
+  <p class="eyebrow">Portal seguro de A&amp;S</p>
+  <h1>Mi póliza</h1>
+  <p>Revise su grupo y registre únicamente un ingreso o un retiro.</p>
+  <div class="summary">
+    <span>{{ policy_sections|length }} póliza{{ policy_sections|length|pluralize }}</span>
+    <span>Fecha límite {{ item.deadline }}</span>
+    <span>{{ item.get_request_type_display }}</span>
+  </div>
+</header>
+<section class="external-guide" aria-labelledby="external-guide-title"><h2 id="external-guide-title">Antes de comenzar</h2><ol><li>Revise la información de sus pólizas.</li><li>Registre únicamente los ingresos o retiros que desea solicitar.</li><li>Complete los datos de cada persona y revise los cambios.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol></section>
+<section class="external-card external-card--notice" aria-labelledby="important-notice">
+  <h2 id="important-notice">Información importante</h2>
+  <p>Este enlace fue generado para revisar la información de las pólizas indicadas. Si no reconoce el enlace o la información no le corresponde, no realice cambios y comuníquese con A&amp;S.</p>
+  <p>Enviar la respuesta no modifica automáticamente Zoho ni la póliza.</p>
+  <p>Si tiene dudas, {{ contact_channel }}</p>
+</section>
+{% if saved %}<p class="external-card status-message status-message--success" role="status">Sus cambios se guardaron correctamente. Revise la previsualización actual antes de enviar la respuesta.</p>{% endif %}
+{% if saved and saved_preview %}<section class="external-card" aria-labelledby="saved-preview-heading"><h2 id="saved-preview-heading">Previsualización de cambios guardados</h2><ul>{% for item in saved_preview %}<li><strong>{{ item.action }} · {{ item.field|capfirst }}:</strong> {{ item.value }}</li>{% endfor %}</ul></section>{% endif %}
+<section class="external-card external-card--steps">
+  <h2>¿Qué debo hacer?</h2>
+  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Solicite el retiro de un integrante existente o agregue un nuevo ingreso.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
+  {% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
+</section>
+<form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card" data-external-response>
+  {% csrf_token %}
+  <div class="external-section-heading"><div><p class="eyebrow">Su información</p><h2>Mis pólizas y mi grupo</h2></div><span class="external-save-state">Guardado manual</span></div>
+  <nav class="external-policy-nav" aria-label="Pólizas disponibles">
+    {% for section in policy_sections %}<a href="#policy-{{ forloop.counter }}">Póliza {{ forloop.counter }} · {% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</a>{% endfor %}
+  </nav>
+  <div class="external-response-tools">
+    <label>Buscar dentro de mi información<input type="search" data-row-filter placeholder="Nombre, placa, dirección, ciudad, rol, plan o estado" autocomplete="off"></label>
+    <p aria-live="polite"><strong data-progress-count>0</strong> cambios preparados · <strong data-visible-count>0</strong> registros</p>
+  </div>
+  {% for section in policy_sections %}
+  <section class="external-policy" id="policy-{{ forloop.counter }}">
+    <header><div><p class="eyebrow">Mi póliza {{ forloop.counter }}</p><h3>{% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</h3>
+      <p>{% if section.policy %}{{ section.policy.masked_reference }} · {{ section.policy.insurer|default:"Aseguradora sin información" }}{% else %}{{ item.masked_policy_reference }}{% endif %}</p>
+    </div><span class="external-policy-status">Solo lectura hasta guardar cambios</span></header>
+    {% if section.allowed_actions %}
+  <div class="functional-table" role="table" aria-label="Información de la póliza" data-functional-table data-branch-code="{{ section.branch_code }}">
+    <div class="functional-table__header" role="row">
+      {% if section.branch_code == '28' %}
+        <span role="columnheader">#</span><span role="columnheader">Dirección</span><span role="columnheader">Ciudad</span><span role="columnheader">Tipo de uso</span><span role="columnheader">Año</span><span role="columnheader">Valor asegurado</span><span role="columnheader">Estado</span><span role="columnheader">Acción</span>
+      {% elif section.branch_code == '40' %}
+        <span role="columnheader">Placa</span><span role="columnheader">Marca / referencia</span><span role="columnheader">Modelo</span><span role="columnheader">Ciudad</span><span role="columnheader">Asegurado</span><span role="columnheader">Estado</span><span role="columnheader">Acción</span>
+      {% elif section.branch_code == '83' %}
+        <span role="columnheader">Asegurado</span><span role="columnheader">Plan</span><span role="columnheader">Estado</span><span role="columnheader">Valor asegurado</span><span role="columnheader">Fecha de ingreso</span><span role="columnheader">Acción</span>
+      {% else %}
+        <span role="columnheader">Nombre</span><span role="columnheader">Rol</span><span role="columnheader">Parentesco</span><span role="columnheader">Plan</span><span role="columnheader">Estado</span><span role="columnheader">Ingreso</span><span role="columnheader">Acción</span>
+      {% endif %}
+    </div>
+    <div class="functional-table__body" role="rowgroup">
+    {% for group in section.functional_groups %}{% with group_index=forloop.counter %}
+      <div class="functional-group" aria-label="{% if section.branch_code == '28' %}Inmueble {{ group_index }}{% elif section.branch_code == '40' %}Vehículo {{ group_index }}{% else %}Grupo {{ group_index }}{% endif %}">
+        {% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section risk=group.risks.0 entity_index=group_index %}
+        {% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section risk=group.risks.0 entity_index=forloop.counter %}{% endfor %}
+        {% if group.risks and section.branch_code != '28' and section.branch_code != '40' %}
+          <details class="functional-related-details"><summary>Ver coberturas y detalles relacionados</summary><div class="functional-related-list">
+            {% for risk in group.risks %}<article><strong>{{ risk.summary|default:"Detalle relacionado" }}</strong>{% for label, value in risk.attributes.items %}{% if value %}<span><b>{{ label|capfirst }}:</b> {{ value }}</span>{% endif %}{% endfor %}</article>{% endfor %}
+          </div></details>
+        {% endif %}
+      </div>
+    {% endwith %}{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
+    </div>
+    <p class="functional-table__empty" data-filter-empty hidden>No hay registros que coincidan con la búsqueda.</p>
+    <nav class="functional-pagination" aria-label="Paginación local" data-pagination>
+      <label>Filas por página <select data-page-size><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+      <span data-page-status aria-live="polite"></span>
+      <div><button type="button" class="functional-pagination__button" data-page-previous>Anterior</button><button type="button" class="functional-pagination__button" data-page-next>Siguiente</button></div>
+    </nav>
+  </div>
+  {% if section.allows_include or not section.policy %}<button type="button" class="external-add-button" data-drawer-open="include-drawer-{{ forloop.counter }}" aria-controls="include-drawer-{{ forloop.counter }}" aria-haspopup="dialog" aria-expanded="false">Registrar ingreso</button>
+  <aside class="functional-drawer" id="include-drawer-{{ forloop.counter }}" role="dialog" aria-modal="true" aria-labelledby="include-drawer-title-{{ forloop.counter }}" data-drawer hidden>
+    <div class="functional-drawer__header"><div><p class="eyebrow">Novedad</p><h4 id="include-drawer-title-{{ forloop.counter }}" tabindex="-1" data-drawer-title>Solicitar ingreso</h4></div><button type="button" class="functional-drawer__close" data-drawer-close aria-label="Cerrar panel">×</button></div>
+    <div class="functional-drawer__content external-add-card">
+    <label><input type="checkbox" name="{% if section.policy %}include_action_{{ section.policy.pk }}{% else %}include_action{% endif %}" value="INCLUIR" data-include-action> Quiero solicitar este ingreso</label>
+    <input type="hidden" name="{% if section.policy %}include_{{ section.policy.pk }}_rol{% else %}include_rol{% endif %}" value="Asegurado">
+    <label>Tipo de identificación<select name="{% if section.policy %}include_{{ section.policy.pk }}_tipo_id{% else %}include_tipo_id{% endif %}"><option value="">Seleccione</option>{% for choice in contact_id_types %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}</select></label>
+    <label>Documento<input name="{% if section.policy %}include_{{ section.policy.pk }}_documento{% else %}include_documento{% endif %}" inputmode="numeric" maxlength="30"></label>
+    <label>Nombres<input name="{% if section.policy %}include_{{ section.policy.pk }}_nombres{% else %}include_nombres{% endif %}" maxlength="120"></label>
+    <label>Apellidos<input name="{% if section.policy %}include_{{ section.policy.pk }}_apellidos{% else %}include_apellidos{% endif %}" maxlength="120"></label>
+    <label>Fecha de nacimiento<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_nacimiento{% else %}include_fecha_nacimiento{% endif %}"></label>
+    <label>Correo electrónico<input type="email" name="{% if section.policy %}include_{{ section.policy.pk }}_email{% else %}include_email{% endif %}" maxlength="254"></label>
+    <label>Teléfono<input type="tel" name="{% if section.policy %}include_{{ section.policy.pk }}_phone{% else %}include_phone{% endif %}" maxlength="40"></label>
+    <label>Fecha solicitada de ingreso<input type="date" name="{% if section.policy %}include_{{ section.policy.pk }}_fecha_ingreso{% else %}include_fecha_ingreso{% endif %}" required></label>
+    <label>Observaciones<input name="{% if section.policy %}include_{{ section.policy.pk }}_observaciones{% else %}include_observaciones{% endif %}" maxlength="500"></label>
+    </div>
+    <div class="functional-drawer__actions"><button type="button" class="functional-drawer__cancel" data-drawer-close>Cancelar</button><button type="button" data-drawer-done>Preparar ingreso</button></div>
+  </aside>
+  {% endif %}
+    {% else %}<p>Esta póliza no tiene ajustes editables habilitados.</p>{% endif %}
+  </section>
+  {% endfor %}
+  <div class="functional-drawer-backdrop" data-drawer-backdrop hidden></div>
+  <label>¿Hay algo más que debamos saber?<textarea name="client_observations" maxlength="2000"></textarea></label>
+  <div class="external-sticky-save"><span>Sus cambios no se envían a Zoho automáticamente.</span><button type="submit">Guardar mis cambios</button></div>
+  {% if latest %}<p>Último borrador: versión {{ latest.version }} · {{ latest.updated_at }}</p>{% endif %}
+</form>
+<section class="external-card"><details><summary><strong>Prefiero trabajar con Excel</strong></summary><p>Descargue la plantilla o cargue un archivo para revisarlo antes de aplicarlo a esta respuesta.</p><div class="external-excel-actions"><form method="post" action="{% url 'colectivos_external:download_template' %}">{% csrf_token %}<button type="submit">Descargar plantilla</button></form><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_excel' %}">{% csrf_token %}<label>Archivo XLSX<input type="file" name="workbook" accept=".xlsx" required></label><button type="submit">Revisar archivo</button></form></div></details></section>
+{% if latest %}<section class="external-card"><h2>Adjuntos</h2><p>PDF, JPG o PNG.</p><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_attachment' %}">{% csrf_token %}{{ attachment_form.as_p }}<button type="submit">Cargar soporte</button></form></section>{% endif %}
+<section class="external-card"><h2>Confirmar y enviar</h2><form method="post" action="{% url 'colectivos_external:submit' %}">{% csrf_token %}<label>Observaciones del cliente<textarea name="client_observations" maxlength="2000"></textarea></label>{{ submit_form.as_p }}<button type="submit">Enviar respuesta</button></form></section>
+<script src="{% static 'js/colectivos-external.js' %}" defer></script>
+{% endblock %}

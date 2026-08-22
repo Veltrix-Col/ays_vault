@@ -1,5 +1,7 @@
 # Informes y exportaciones seguras
 
+> Documento histórico conservado como antecedente. La referencia vigente es [`cardmanager/reports_and_exports.md`](cardmanager/reports_and_exports.md).
+
 ## Alcance implementado
 
 El Centro de Informes es exclusivo del Administrador y ofrece seis informes iniciales. Líder y Analista no pueden abrir el catálogo, llamar endpoints de exportación ni descargar archivos:

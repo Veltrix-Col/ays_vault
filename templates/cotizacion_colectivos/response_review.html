@@ -1,0 +1,30 @@
+{% extends 'cotizacion_colectivos/base.html' %}
+{% block title %}Revisión {{ item.public_id }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs"><a href="{% url 'cotizacion_colectivos:request_detail' item.public_id %}">{{ item.public_id }}</a><span>/</span><span>Respuesta v{{ response.version }}</span></nav>
+<header class="page-heading"><span class="eyebrow">Revisión interna</span><h1>Comparación y decisiones</h1><p>La respuesta original permanece inmutable; las decisiones se almacenan por separado.</p></header>
+{% if error %}<p class="status-message status-message--error">{{ error }}</p>{% endif %}
+<form method="post">
+  {% csrf_token %}
+  <section class="relation-card group-table-wrap">
+    <table class="group-table">
+      <thead><tr><th>Póliza</th><th>Registro</th><th>Campo</th><th>Acción</th><th>Decisión</th><th>Valor aprobado</th><th>Observación interna</th><th>Observación cliente</th></tr></thead>
+      <tbody>{% for change in response.changes.all %}<tr>
+        <td>{% if change.policy %}<strong>{{ change.policy.branch_name }}</strong><br><small>{{ change.policy.operational_reference|default:change.policy.masked_policy_reference }}</small>{% else %}Póliza histórica{% endif %}</td>
+        <td>{% if change.original_record %}Registro {{ change.original_record.original_position }}{% else %}Inclusión{% endif %}</td>
+        <td>{{ change.functional_field }}</td><td>{{ change.get_action_display }}</td>
+        <td><select name="decision_{{ change.pk }}"><option value="">Pendiente</option><option value="APROBAR">Aprobar</option><option value="RECHAZAR">Rechazar</option><option value="REQUIERE_CORRECCION">Requiere corrección</option><option value="APROBAR_CON_AJUSTE">Aprobar con ajuste</option></select></td>
+        <td><input name="approved_{{ change.pk }}" maxlength="500"></td>
+        <td><input name="internal_{{ change.pk }}" maxlength="1000"></td>
+        <td><input name="client_{{ change.pk }}" maxlength="1000"></td>
+      </tr>{% endfor %}</tbody>
+    </table>
+  </section>
+  <div class="policy-actions"><button type="submit">Guardar decisiones</button><button type="submit" name="finalize" value="correction">Solicitar corrección</button><button type="submit" name="finalize" value="approve">Aprobar respuesta</button></div>
+</form>
+<div class="policy-actions">
+  <form method="post" action="{% url 'cotizacion_colectivos:response_export' item.public_id response.version %}">{% csrf_token %}<button type="submit">Descargar respuesta</button></form>
+  <form method="post" action="{% url 'cotizacion_colectivos:response_comparison' item.public_id response.version %}">{% csrf_token %}<button type="submit">Descargar comparativo</button></form>
+  {% if response.status == 'APROBADA' %}<form method="post" action="{% url 'cotizacion_colectivos:response_approved_export' item.public_id response.version %}">{% csrf_token %}<button type="submit">Descargar consolidado aprobado</button></form>{% endif %}
+</div>
+{% endblock %}
