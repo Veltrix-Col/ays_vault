@@ -11,7 +11,7 @@ document.addEventListener("submit", function (event) {
   status.setAttribute("role", "status");
   status.textContent = form.dataset.loadingMessage || (form.action.includes("/entidad/") && form.action.includes("/editar/")
     ? "Actualizando vehículo…" : form.action.includes("/responsable/") || form.action.includes("/tasks/")
-    ? "Publicando Task…" : form.matches("[data-request-builder]")
+    ? "Publicando Tarea…" : form.matches("[data-request-builder]")
     ? "Preparando la información de la póliza…"
     : "Consultando información en Zoho…");
   form.appendChild(status);

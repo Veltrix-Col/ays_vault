@@ -52,6 +52,7 @@ class InternalPublicAccessTests(TestCase):
         filters = RequestFilterForm(public_access=True)
         self.assertNotIn("assigned_to", filters.fields)
         self.assertNotIn("assigned_to_me", filters.fields)
+        self.assertIn("task_responsible", filters.fields)
 
     def test_configured_technical_actor_is_non_privileged_and_not_anonymous(self):
         actor = get_internal_actor(self.request, create=True)

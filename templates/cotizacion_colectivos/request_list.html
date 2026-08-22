@@ -14,11 +14,12 @@
       <p><label for="{{ form.request_type.id_for_label }}">Tipo</label>{{ form.request_type }}</p>
       <button type="submit">Aplicar filtros</button>
     </div>
-    <details class="filter-disclosure"{% if form.source_kind.value or form.branch.value or form.assigned_to.value or form.created_from.value or form.created_to.value or form.deadline_from.value or form.deadline_to.value or form.assigned_to_me.value or form.warning.value %} open{% endif %}>
+    <details class="filter-disclosure"{% if form.source_kind.value or form.branch.value or form.task_responsible.value or form.assigned_to.value or form.created_from.value or form.created_to.value or form.deadline_from.value or form.deadline_to.value or form.assigned_to_me.value or form.warning.value %} open{% endif %}>
       <summary>Más filtros</summary>
       <div class="filter-grid">
         <p>{{ form.source_kind.label_tag }}{{ form.source_kind }}</p>
         <p>{{ form.branch.label_tag }}{{ form.branch }}</p>
+        <p>{{ form.task_responsible.label_tag }}{{ form.task_responsible }}</p>
         {% if form.assigned_to %}<p>{{ form.assigned_to.label_tag }}{{ form.assigned_to }}</p>{% endif %}
         <p>{{ form.created_from.label_tag }}{{ form.created_from }}</p>
         <p>{{ form.created_to.label_tag }}{{ form.created_to }}</p>

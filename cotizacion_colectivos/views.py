@@ -1526,8 +1526,52 @@ def request_list(request):
     if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     form = RequestFilterForm(request.GET, public_access=public_internal_access_enabled())
+    # The filter uses the same values sent to Tasks.Responsable.  Options are
+    # loaded once (metadata is cached), never once per inbox row; local user
+    # assignments remain available for legacy request tasks.
+    responsible_choices = [("", "Todos"), ("__pending__", "Pendiente de selección")]
+    if not public_internal_access_enabled():
+        try:
+            responsible_choices.extend(
+                (option.actual_value, option.display_value)
+                for option in task_responsible_options()
+            )
+        except Exception:
+            pass
+    if not public_internal_access_enabled():
+        try:
+            responsible_choices.extend(
+                (f"__user:{user.pk}", user.get_full_name() or user.username)
+                for user in get_user_model().objects.filter(is_active=True).order_by("username")
+            )
+        except Exception:
+            pass
+    try:
+        for access in AccesoCotizacionIndividual.objects.only("encrypted_context", "safe_metadata").iterator(chunk_size=200):
+            try:
+                context = json.loads(decrypt(access.encrypted_context))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                context = {}
+            safe_access_metadata = access.safe_metadata or {}
+            actual = str(context.get("task_responsible") or safe_access_metadata.get("task_responsible") or "").strip()
+            display = str(context.get("task_responsible_display") or safe_access_metadata.get("task_responsible_display") or actual).strip()
+            if actual and display:
+                responsible_choices.append((actual, display))
+    except Exception:
+        pass
+    requested_responsible = str(request.GET.get("task_responsible") or "").strip()
+    if requested_responsible and requested_responsible not in {value for value, _label in responsible_choices}:
+        # Keep an unknown submitted value valid so it produces an empty result,
+        # rather than silently dropping every other filter.
+        responsible_choices.append((requested_responsible, requested_responsible))
+    form.fields["task_responsible"].choices = tuple(dict.fromkeys(responsible_choices))
     queryset = SolicitudColectivo.objects.select_related("assigned_to").prefetch_related(
         "policies",
+        Prefetch(
+            "task_outbox",
+            queryset=ColectivosTaskOutbox.objects.order_by("-updated_at", "-pk"),
+            to_attr="inbox_task_outboxes",
+        ),
         Prefetch(
             "external_accesses",
             queryset=AccesoExternoSolicitudColectivo.objects.order_by("-created_at", "-pk"),
@@ -1582,6 +1626,10 @@ def request_list(request):
             queryset = queryset.filter(request_type=data["request_type"])
         if data.get("assigned_to"):
             queryset = queryset.filter(assigned_to=data["assigned_to"])
+        if data.get("task_responsible"):
+            selected_responsible = data["task_responsible"]
+            if selected_responsible.startswith("__user:"):
+                queryset = queryset.filter(assigned_to_id=selected_responsible.split(":", 1)[1])
         if data["created_from"]:
             queryset = queryset.filter(created_at__date__gte=data["created_from"])
         if data["created_to"]:
@@ -1625,6 +1673,19 @@ def request_list(request):
         item.inbox_detail_url = reverse(
             "cotizacion_colectivos:request_detail", args=[item.public_id],
         )
+        selected_responsible = data.get("task_responsible") if form.is_valid() else ""
+        if selected_responsible and not selected_responsible.startswith("__user:"):
+            task_values = []
+            for outbox in getattr(item, "inbox_task_outboxes", ()):
+                try:
+                    task_values.append(str(json.loads(decrypt(outbox.encrypted_payload)).get("Responsable") or "").strip())
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            if selected_responsible == "__pending__":
+                if any(task_values):
+                    continue
+            elif selected_responsible not in task_values:
+                continue
         operational_entries.append(item)
 
     individual_entries = []
@@ -1679,6 +1740,19 @@ def request_list(request):
                 continue
             if data.get("assigned_to") and data["assigned_to"].pk != access.created_by_id:
                 continue
+            selected_responsible = data.get("task_responsible")
+            if selected_responsible:
+                safe_access_metadata = access.safe_metadata or {}
+                stored_responsible = str(
+                    context.get("task_responsible")
+                    or safe_access_metadata.get("task_responsible")
+                    or ""
+                ).strip()
+                if selected_responsible == "__pending__":
+                    if stored_responsible:
+                        continue
+                elif not selected_responsible.startswith("__user:") and stored_responsible != selected_responsible:
+                    continue
             if data.get("created_from") and access.created_at.date() < data["created_from"]:
                 continue
             if data.get("created_to") and access.created_at.date() > data["created_to"]:
@@ -2011,16 +2085,16 @@ def request_publish_task(request, public_id, outbox_id):
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
     outbox = get_object_or_404(ColectivosTaskOutbox, pk=outbox_id, request=item)
     if outbox.status == outbox.Status.PUBLISHED:
-        messages.info(request, "La Task ya fue publicada.")
+        messages.info(request, "La Tarea ya fue publicada.")
     else:
         publish_task_outbox(outbox.pk)
         outbox.refresh_from_db()
         if outbox.status == outbox.Status.PUBLISHED:
-            messages.success(request, "Task publicada correctamente en Zoho Sandbox.")
+            messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
         elif outbox.status == outbox.Status.RECONCILE:
             messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
         else:
-            messages.error(request, "La Task no pudo publicarse; revise el estado del expediente.")
+            messages.error(request, "La Tarea no pudo publicarse; revise el estado del expediente.")
     return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
 
 
@@ -2812,15 +2886,15 @@ def individual_update_responsible(request, token):
             str(quotation.public_id), bool(outbox), bool(getattr(option, "actual_value", "")), bool(email), publish_scheduled, publish_result,
         )
         if publish_result == "published":
-            messages.success(request, "Responsable actualizado y Task publicada correctamente.")
+            messages.success(request, "Responsable actualizado y Tarea publicada correctamente.")
         elif not email:
-            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Task.")
+            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Tarea.")
         elif publish_result == "reconcile":
-            messages.warning(request, "Responsable actualizado; la Task requiere conciliación y no se reintentará automáticamente.")
+            messages.warning(request, "Responsable actualizado; la Tarea requiere conciliación y no se reintentará automáticamente.")
         elif publish_result == "blocked":
-            messages.warning(request, "Responsable actualizado; la Task permanece bloqueada por una causa operativa previa.")
+            messages.warning(request, "Responsable actualizado; la Tarea permanece bloqueada por una causa operativa previa.")
         else:
-            messages.success(request, "Responsable actualizado; la Task quedó lista para publicación controlada.")
+            messages.success(request, "Responsable actualizado; la Tarea quedó lista para publicación controlada.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
         raise Http404("Respuesta no encontrada")
     except ValidationError as exc:
@@ -2838,16 +2912,16 @@ def individual_publish_task(request, token):
         _ensure_individual_can_manage_task(quotation)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
         if outbox is None:
-            messages.warning(request, "Todavía no existe una intención de Task para publicar.")
+            messages.warning(request, "Todavía no existe una intención de Tarea para publicar.")
         else:
             publish_task_outbox(outbox.pk)
             outbox.refresh_from_db()
             if outbox.status == outbox.Status.PUBLISHED:
-                messages.success(request, "Task publicada correctamente.")
+                messages.success(request, "Tarea publicada correctamente.")
             elif outbox.status == outbox.Status.RECONCILE:
                 messages.warning(request, "La publicación quedó en conciliación; no se reintentará automáticamente.")
             else:
-                messages.warning(request, "La Task no pudo publicarse; revise el estado operativo.")
+                messages.warning(request, "La Tarea no pudo publicarse; revise el estado operativo.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
         raise Http404("Respuesta no encontrada")
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
@@ -2986,7 +3060,7 @@ def individual_expedient(request, token):
     ]
     if latest_outbox:
         history.append({
-            "label": f"Zoho Task: {latest_outbox.get_status_display()}",
+            "label": f"Zoho Tarea: {latest_outbox.get_status_display()}",
             "at": latest_outbox.updated_at,
         })
     history.sort(key=lambda row: row["at"], reverse=True)

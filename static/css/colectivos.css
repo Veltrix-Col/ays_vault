@@ -4,9 +4,9 @@
 .colectivos-header { min-height: 76px; padding: 14px clamp(18px, 4vw, 56px); display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #fff; border-bottom: 1px solid #dfe4ed; }
 .colectivos-brand { display: flex; align-items: center; gap: 16px; color: #172137; text-decoration: none; font-weight: 700; }
 .colectivos-brand img { display: block; width: auto; height: 42px; }
-.header-actions { display: flex; align-items: center; gap: 12px; }
+.header-actions { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
 .header-actions > a { color: #245879; font-weight: 700; text-decoration: none; }
-.notification-link { position: relative; }
+.notification-link { position: relative; display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid #c7dce9; border-radius: 10px; background: #eef7fc; color: #174a6b !important; font-weight: 800; text-decoration: none; }
 .notification-link span { position: absolute; top: -10px; right: -10px; min-width: 18px; padding: 2px 5px; border-radius: 999px; background: #a21e2d; color: #fff; font-size: .65rem; text-align: center; }
 .environment-badge, .state-chip { display: inline-flex; align-items: center; border-radius: 999px; background: #e7f6ef; color: #176347; padding: 7px 12px; font-size: .82rem; font-weight: 700; }
 .environment-badge--production { background: #fff0df; color: #8a3f00; border: 1px solid #e7b57d; }
@@ -146,9 +146,10 @@
 .skip-link { position: absolute; left: -9999px; }
 .skip-link:focus { left: 12px; top: 12px; z-index: 10; background: #fff; padding: 10px; }
 @media (max-width: 760px) {
-  .colectivos-header { align-items: flex-start; }
+  .colectivos-header { align-items: flex-start; flex-wrap: wrap; }
+  .header-actions { width: 100%; justify-content: flex-end; }
   .colectivos-brand span { display: none; }
-  .environment-badge { font-size: .72rem; }
+  .environment-badge { max-width: 100%; font-size: .72rem; overflow-wrap: anywhere; }
   .search-choice-grid, .detail-grid, .branch-grid, .compact-grid, .builder-layout { grid-template-columns: 1fr; }
   .builder-summary { position: static; }
   .policy-selector-card dl { grid-template-columns: 1fr; }
