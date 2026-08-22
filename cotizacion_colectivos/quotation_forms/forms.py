@@ -124,13 +124,13 @@ class IndividualQuotationForm(forms.Form):
         if not isinstance(raw_groups, dict):
             raise forms.ValidationError("La información agregada no es válida.")
         normalized = {}
+        all_entity_keys_seen = set()
         for group in self.schema.repeatables:
             rows = raw_groups.get(group.key, [])
             if not isinstance(rows, list) or not group.minimum <= len(rows) <= group.maximum:
                 self.add_error("items_payload", f"Agregue entre {group.minimum} y {group.maximum} {group.plural.lower()}.")
                 continue
             normalized_rows = []
-            entity_keys_seen = set()
             if group.key == "people" and self.schema.slug == "salud":
                 requester_flags = sum(
                     row.get("is_requester", row.get("use_requester")) in {True, 1, "1", "Sí", "Si", "sí", "si", "true", "True"}
@@ -183,9 +183,9 @@ class IndividualQuotationForm(forms.Form):
                 # is never a Zoho id and is revalidated when files are stored.
                 entity_key = str(source_row.get("entity_key") or "").strip()
                 if entity_key and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", entity_key):
-                    if entity_key in entity_keys_seen:
+                    if entity_key in all_entity_keys_seen:
                         self.add_error("items_payload", f"{group.singular.title()} {position}: identificador de entidad duplicado.")
-                    entity_keys_seen.add(entity_key)
+                    all_entity_keys_seen.add(entity_key)
                     normalized_row["entity_key"] = entity_key
                 if group.key == "vehicles":
                     zero_km = normalized_row.get("zero_km")
@@ -234,9 +234,15 @@ class IndividualQuotationForm(forms.Form):
         entity_files = {}
         for key in self.files:
             if key.startswith("entity_attachment_"):
-                entity_files[key.removeprefix("entity_attachment_")] = self.files.get(key)
-        affiliate_file = self.files.get("affiliate_document")
-        if affiliate_file is not None:
-            entity_files["affiliate"] = affiliate_file
+                values = self.files.getlist(key)
+                if len(values) != 1:
+                    self.add_error("items_payload", "Cada entidad puede tener máximo un documento.")
+                    continue
+                entity_files[key.removeprefix("entity_attachment_")] = values[0]
+        affiliate_values = self.files.getlist("affiliate_document")
+        if len(affiliate_values) > 1:
+            self.add_error("items_payload", "Cada entidad puede tener máximo un documento.")
+        elif affiliate_values:
+            entity_files["affiliate"] = affiliate_values[0]
         cleaned["entity_attachments"] = entity_files
         return cleaned

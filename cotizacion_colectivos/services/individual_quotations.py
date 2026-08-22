@@ -220,7 +220,7 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
     return tuple(validated)
 
 
-def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document"):
+def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key=""):
     """Encrypt and persist one file with an explicit local functional owner."""
     uploaded = item["uploaded"]
     content = uploaded.read()
@@ -250,9 +250,12 @@ def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="l
             safe_metadata={
                 "encrypted": True,
                 "antivirus": "not_configured",
+                "owner_type": "risk" if owner_role == "risk" else "contact" if owner_role in {"affiliate", "insured"} else "legacy",
                 "owner_role": str(owner_role)[:24],
                 "owner_key": str(owner_key)[:80],
                 "document_type": str(document_type)[:32],
+                "field_key": str(field_key or document_type)[:64],
+                **({"risk_key": str(risk_key)[:80]} if risk_key else {}),
             },
         ), target
     except Exception:
@@ -272,11 +275,21 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         for index, row in enumerate(rows or ()):
             if not isinstance(row, dict):
                 continue
-            entity_key = str(row.get("entity_key") or f"{group_key}-{index}")
+            explicit_entity_key = str(row.get("entity_key") or "").strip()
+            entity_key = explicit_entity_key or f"{group_key}-{index}"
+            if not explicit_entity_key:
+                fallback_keys = {entity_key}
+                if group_key == "vehicles" and not row.get("insured_same_as_requester"):
+                    fallback_keys.add(f"{entity_key}-insured")
+                if fallback_keys.intersection(entity_files):
+                    raise ValidationError("El documento requiere una clave estable de entidad.")
             same_person = bool(row.get("is_requester")) if group_key == "people" else False
             row_owners[entity_key] = (
                 "risk" if group_key == "vehicles" else "insured",
-                "risk_document" if group_key == "vehicles" else "identity_document",
+                # Canonical contract for new Mobility vehicle documents.  The
+                # publisher accepts the legacy value explicitly for historical
+                # rows, but new captures must use the Zoho-facing name.
+                "vehicle_registration" if group_key == "vehicles" else "identity_document",
                 same_person,
             )
             if group_key == "vehicles" or not same_person:
@@ -347,6 +360,8 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 owner_role=role,
                 owner_key=owner_key,
                 document_type=document_type,
+                field_key=document_type,
+                risk_key=owner_key if role == "risk" else "",
             )
             created_paths.append(target)
         if actor is not None:
@@ -373,7 +388,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
             policy_context=str(task_context.get("policy_label") or ""),
             branch_code=str(schema.code),
             local_reference=str(quotation.public_id),
-            has_attachments=bool(files),
+            has_attachments=bool(files or entity_files),
             subject=" · ".join(filter(None, (
                 "Cotización", str(task_context.get("branch_name") or schema.name),
                 str(task_context.get("affiliate_label") or task_fields.get("nombre") or task_fields.get("name") or ""),

@@ -77,7 +77,7 @@ from .services.person_contract import (
 from .services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
 from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
-from .services.individual_attachment_publisher import IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk
+from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
 from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
@@ -2644,12 +2644,6 @@ def individual_create_person(request, token):
             metadata["zoho_entities"] = entities
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
-        try:
-            publish_pending_for_person(quotation=quotation, document=selected_document, record_id=contact_id)
-        except IndividualAttachmentUncertain:
-            messages.warning(request, "El afiliado fue creado; el documento requiere conciliación.")
-        except (ValidationError, ZohoError) as exc:
-            messages.warning(request, f"El afiliado fue creado; no se pudo publicar el documento: {exc}")
         messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
@@ -2780,12 +2774,6 @@ def individual_create_risk(request, token, vehicle_index):
             item.pop(key, None)
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["risks"] = risks
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
-        try:
-            publish_pending_for_risk(quotation=quotation, vehicle_index=vehicle_index, record_id=result["record_id"])
-        except IndividualAttachmentUncertain:
-            messages.warning(request, "El vehículo fue creado; el documento requiere conciliación.")
-        except (ValidationError, ZohoError) as exc:
-            messages.warning(request, f"El vehículo fue creado; no se pudo publicar el documento: {exc}")
         messages.success(request, "Riesgo creado en Zoho Sandbox.")
     except (RiskPublishingDisabled, RiskPublicationRejected, ValidationError) as exc:
         code = "BLOCKED" if isinstance(exc, RiskPublishingDisabled) else "REJECTED" if isinstance(exc, RiskPublicationRejected) else "VALIDATION"
@@ -2855,8 +2843,9 @@ def individual_create_subrisk(request, token, vehicle_index):
             item.get("candidate") or {}, profile=active_profile,
             confirmation=configured_confirmation(
                 "subrisk", active_profile,
-                legacy_setting="COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION",
+                legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION",
             ),
+            operational=True,
         )
         confirmed_id = str(result["record_id"])
         item.update({"status": "created", "created": True, "remote_id": confirmed_id, "riesgos1_id": confirmed_id, "created_at": timezone.now().isoformat()})
@@ -2864,10 +2853,28 @@ def individual_create_subrisk(request, token, vehicle_index):
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
         messages.success(request, "Riesgo asociado a la póliza en Zoho Sandbox.")
     except (SubriskPublishingDisabled, SubriskPublicationRejected, ValidationError) as exc:
+        item["last_error"] = str(exc)[:180]
+        item["last_error_code"] = exc.__class__.__name__[:40]
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, str(exc))
     except SubriskPublicationUncertain:
+        item["last_error"] = "Resultado incierto; requiere conciliación en Zoho."
+        item["last_error_code"] = "UNCERTAIN"
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, "La asociación requiere conciliación en Zoho.")
     except ZohoError:
+        item["last_error"] = "Zoho no pudo asociar el riesgo."
+        item["last_error_code"] = "ZOHO_ERROR"
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, "Zoho no pudo asociar el Riesgo. Revise los datos y el estado operativo.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
@@ -3095,6 +3102,45 @@ def individual_expedient(request, token):
             insured = risk.get("insured") if isinstance(risk.get("insured"), dict) else None
             if insured is not None:
                 insured["documents"] = tuple(documents_by_owner.get(f"{owner_key}-insured", ()))
+    # Publish is available only when the server has resolved the owning
+    # Contact/Risk. Remote IDs are never trusted from the browser.
+    resolved_contact_ids = {}
+    for person in zoho_entities.get("people") or ():
+        if not isinstance(person, dict):
+            continue
+        remote_id = str(person.get("remote_id") or person.get("contact_id") or "").strip()
+        if not remote_id:
+            continue
+        keys = [person.get("owner_key"), *(person.get("owner_keys") or ())]
+        if person.get("role") == "Afiliado":
+            keys.append("affiliate")
+        for key in keys:
+            if key:
+                resolved_contact_ids[str(key)] = remote_id
+    resolved_risk_ids = {}
+    for index, risk in enumerate(zoho_entities.get("risks") or ()):
+        if not isinstance(risk, dict):
+            continue
+        remote_id = str(risk.get("remote_id") or risk.get("risk_id") or "").strip()
+        if not remote_id:
+            continue
+        row = vehicle_rows[index] if isinstance(vehicle_rows, list) and index < len(vehicle_rows) and isinstance(vehicle_rows[index], dict) else {}
+        key = str(row.get("entity_key") or risk.get("owner_key") or f"vehicles-{index}")
+        resolved_risk_ids[key] = remote_id
+    for attachment in individual_attachments:
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        owner_key = str(metadata.get("owner_key") or "")
+        owner_type = str(metadata.get("owner_type") or "")
+        attachment.can_publish = (
+            str(metadata.get("zoho_status") or "").lower() != "uploaded"
+            and bool(
+                resolved_contact_ids.get(owner_key)
+                if owner_type == "contact"
+                else resolved_risk_ids.get(owner_key)
+                if owner_type == "risk"
+                else False
+            )
+        )
     created_people = tuple(
         person for person in people_lookup
         if person.get("created") or (person.get("status") == "found" and person.get("contact_id"))
@@ -3266,7 +3312,29 @@ def individual_attachment_publish(request, token, attachment_id):
             raise ValidationError("Primero debe resolver la entidad en Zoho.")
         publish_attachment(attachment=attachment, module=module, record_id=remote_id)
         messages.success(request, "Documento publicado en Zoho.")
-    except (ValidationError, IndividualAttachmentUncertain, ZohoError) as exc:
+    except (ValidationError, IndividualAttachmentUncertain, IndividualAttachmentBlocked, ZohoError) as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_attachment_reconcile(request, token, attachment_id):
+    """Reconcile an uncertain attachment without retrying its upload."""
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = _individual_entity_quotation(token)
+        attachment = quotation.attachments.get(pk=attachment_id)
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        target = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
+        module = str(target.get("module") or metadata.get("zoho_module") or "")
+        record_id = str(target.get("record_id") or metadata.get("zoho_record_id") or "")
+        if module not in {"Contacts", "Riesgos"} or not record_id.isdigit():
+            raise ValidationError("No hay un destino válido para reconciliar.")
+        reconcile_attachment(attachment=attachment, module=module, record_id=record_id)
+        messages.success(request, "Documento conciliado con Zoho.")
+    except (ValidationError, IndividualAttachmentUncertain, IndividualAttachmentBlocked, ZohoError) as exc:
         messages.warning(request, str(exc))
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 

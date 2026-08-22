@@ -295,17 +295,18 @@ def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
 
 def create_mobility_subrisk_sandbox(payload: Mapping[str, object], *,
                                     confirmation: str, zoho=None,
-                                    profile: str | None = None) -> dict[str, object]:
+                                    profile: str | None = None,
+                                    operational: bool = False) -> dict[str, object]:
     """Guarded CREATE for the explicit Movilidad ensayo only."""
     profile = str(profile or getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
     require_write_guard(
         entity="subrisk", profile=profile, confirmation=confirmation,
         feature_flag="COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
-        legacy_setting="COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION",
-        expected_override=MOBILITY_SUBRISK_CONFIRMATION,
+        legacy_setting=("COLECTIVOS_SUBRISK_WRITE_CONFIRMATION" if operational else "COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION"),
+        expected_override=("" if operational else MOBILITY_SUBRISK_CONFIRMATION),
         disabled_error=SubriskPublishingDisabled,
     )
-    if not getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_ENABLED", False):
+    if not operational and not getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_ENABLED", False):
         raise SubriskPublishingDisabled("El seed Movilidad está deshabilitado.")
     if set(payload) - SUBRISK_FIELDS or not MOBILITY_REQUIRED_FIELDS.issubset(payload):
         raise ValidationError("El payload Movilidad no coincide con la allowlist.")

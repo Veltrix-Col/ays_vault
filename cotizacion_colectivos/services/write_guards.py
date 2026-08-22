@@ -11,12 +11,14 @@ PROFILE_CONFIRMATIONS = {
         "contact": "SANDBOX_CONTACT_WRITE",
         "risk": "SANDBOX_MOBILITY_RISK_SEED",
         "subrisk": "SANDBOX_SUBRISK_WRITE",
+        "attachment": "SANDBOX_ATTACHMENT_WRITE",
     },
     "production": {
         "task": "PRODUCTION_TASK_WRITE",
         "contact": "PRODUCTION_CONTACT_WRITE",
         "risk": "PRODUCTION_RISK_WRITE",
         "subrisk": "PRODUCTION_SUBRISK_WRITE",
+        "attachment": "PRODUCTION_ATTACHMENT_WRITE",
     },
 }
 

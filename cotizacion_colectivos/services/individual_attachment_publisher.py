@@ -16,10 +16,40 @@ import json
 from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
 
 from vault.crypto import decrypt
+from .write_guards import require_write_guard
+
+
+CANONICAL_RISK_DOCUMENT_TYPE = "vehicle_registration"
+LEGACY_RISK_DOCUMENT_TYPES = frozenset({"risk_document"})
+
+
+def _validate_document_contract(*, module: str, owner_type: str, document_type: str) -> str:
+    """Validate the closed document contract and return its canonical type.
+
+    ``risk_document`` is retained solely as an explicit compatibility alias
+    for attachments persisted before the vehicle contract was unified.
+    """
+    if module == "Contacts":
+        if owner_type != "contact" or document_type != "identity_document":
+            raise ValidationError("El documento no corresponde al destino indicado.")
+        return "identity_document"
+    if module == "Riesgos":
+        if owner_type != "risk":
+            raise ValidationError("El documento no corresponde al destino indicado.")
+        if document_type == CANONICAL_RISK_DOCUMENT_TYPE:
+            return CANONICAL_RISK_DOCUMENT_TYPE
+        if document_type in LEGACY_RISK_DOCUMENT_TYPES:
+            return CANONICAL_RISK_DOCUMENT_TYPE
+        raise ValidationError("El documento no corresponde al destino indicado.")
+    raise ValidationError("El documento no corresponde al destino indicado.")
 
 
 class IndividualAttachmentUncertain(RuntimeError):
     reconciliation_required = True
+
+
+class IndividualAttachmentBlocked(RuntimeError):
+    pass
 
 
 def publish_attachment(*, attachment, module: str, record_id: str, zoho=None):
@@ -27,10 +57,35 @@ def publish_attachment(*, attachment, module: str, record_id: str, zoho=None):
     record_id = str(record_id or "").strip()
     if module not in {"Contacts", "Riesgos"} or not record_id.isdigit() or int(record_id) <= 0:
         raise ValidationError("Destino de documento inválido.")
+    metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+    owner_type = str(metadata.get("owner_type") or "").strip()
+    document_type = str(metadata.get("document_type") or "").strip()
+    _validate_document_contract(module=module, owner_type=owner_type, document_type=document_type)
+    previous = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
+    if (
+        str(previous.get("status") or "").upper() == "UPLOADED"
+        and str(previous.get("module") or "") == module
+        and str(previous.get("record_id") or "") == record_id
+        and str(previous.get("attachment_id") or "").strip()
+    ):
+        return {"status": "UPLOADED", "attachment_id": previous["attachment_id"], "module": module, "record_id": record_id, "request_sent": False}
+    if str(previous.get("status") or "").upper() in {"UNCERTAIN", "RECONCILE_REQUIRED"}:
+        raise IndividualAttachmentUncertain("El documento requiere conciliación antes de reintentar.")
+    require_write_guard(
+        entity="attachment", profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+        confirmation=str(
+            getattr(settings, "COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION", "")
+            if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")) == "sandbox"
+            else getattr(settings, "COLECTIVOS_PRODUCTION_ATTACHMENT_WRITE_CONFIRMATION", "")
+        ), feature_flag="COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED",
+        legacy_setting="COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION",
+        disabled_error=IndividualAttachmentBlocked,
+    )
     root = Path(settings.COLECTIVOS_PRIVATE_ROOT).resolve()
     target = (root / "individual_quotations" / str(attachment.stored_path)).resolve()
     if root not in target.parents or not target.is_file():
         raise ValidationError("El documento no está disponible.")
+    _mark_status(attachment, "UPLOADING", module, record_id)
     try:
         content = base64.b64decode(decrypt(target.read_bytes().decode()).encode())
         stream = BytesIO(content)
@@ -40,6 +95,9 @@ def publish_attachment(*, attachment, module: str, record_id: str, zoho=None):
             filename=stream.name, content_type=attachment.detected_mime,
         )
     except (TimeoutError, ConnectionError, ZohoTimeoutError) as exc:
+        if getattr(exc, "request_sent", None) is False:
+            _mark_failed(attachment, module, record_id)
+            raise
         _mark_uncertain(attachment, module, record_id)
         raise IndividualAttachmentUncertain("Resultado incierto; requiere conciliación del documento.") from exc
     except ZohoAPIError as exc:
@@ -49,12 +107,13 @@ def publish_attachment(*, attachment, module: str, record_id: str, zoho=None):
         _mark_failed(attachment, module, record_id)
         raise
     attachment.safe_metadata = {
-        **(attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}),
+        **metadata,
         "zoho_module": module,
         "zoho_record_id": record_id,
         "zoho_attachment_id": (result.get("attachment_id") if isinstance(result, dict) else getattr(result, "attachment_id", "")),
         "zoho_status": "uploaded",
         "published_at": timezone.now().isoformat(),
+        "zoho_attachment": {"status": "UPLOADED", "module": module, "record_id": record_id, "attachment_id": (result.get("attachment_id") if isinstance(result, dict) else getattr(result, "attachment_id", "")), "published_at": timezone.now().isoformat()},
     }
     attachment.save(update_fields=("safe_metadata",))
     return result
@@ -67,14 +126,50 @@ def _get_zoho():
 
 def _mark_uncertain(attachment, module, record_id):
     metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
-    attachment.safe_metadata = {**metadata, "zoho_module": module, "zoho_record_id": record_id, "zoho_status": "reconcile_required"}
+    attachment.safe_metadata = {**metadata, "zoho_module": module, "zoho_record_id": record_id, "zoho_status": "reconcile_required", "zoho_attachment": {"status": "RECONCILE_REQUIRED", "module": module, "record_id": record_id}}
     attachment.save(update_fields=("safe_metadata",))
 
 
 def _mark_failed(attachment, module, record_id):
     metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
-    attachment.safe_metadata = {**metadata, "zoho_module": module, "zoho_record_id": record_id, "zoho_status": "failed"}
+    attachment.safe_metadata = {**metadata, "zoho_module": module, "zoho_record_id": record_id, "zoho_status": "failed", "zoho_attachment": {"status": "FAILED", "module": module, "record_id": record_id}}
     attachment.save(update_fields=("safe_metadata",))
+
+
+def _mark_status(attachment, status, module, record_id):
+    metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+    attachment.safe_metadata = {**metadata, "zoho_status": status.lower(), "zoho_attachment": {"status": status, "module": module, "record_id": record_id}}
+    attachment.save(update_fields=("safe_metadata",))
+
+
+def reconcile_attachment(*, attachment, module: str, record_id: str, zoho=None):
+    """Reconcile one uncertain upload without issuing another upload."""
+    if module not in {"Contacts", "Riesgos"} or not str(record_id).isdigit() or int(record_id) <= 0:
+        raise ValidationError("Destino de documento inválido.")
+    profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+    confirmation = (
+        getattr(settings, "COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION", "")
+        if profile == "sandbox" else getattr(settings, "COLECTIVOS_PRODUCTION_ATTACHMENT_WRITE_CONFIRMATION", "")
+    )
+    require_write_guard(
+        entity="attachment", profile=profile,
+        confirmation=str(confirmation),
+        feature_flag="COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED", legacy_setting="COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION",
+        disabled_error=IndividualAttachmentBlocked,
+    )
+    listed = (zoho or _get_zoho()).attachments.list(module=module, record_id=str(record_id))
+    filename = Path(attachment.safe_original_name).name
+    size = int(getattr(attachment, "size", 0) or 0)
+    matches = [item for item in (listed or ()) if str(item.get("file_name") or item.get("name") or "") == filename and int(item.get("size") or 0) == size]
+    if len(matches) != 1:
+        _mark_uncertain(attachment, module, str(record_id))
+        return {"status": "RECONCILE_REQUIRED", "matches": len(matches), "request_sent": False}
+    item = matches[0]
+    attachment_id = str(item.get("attachment_id") or item.get("id") or "")
+    metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+    attachment.safe_metadata = {**metadata, "zoho_status": "uploaded", "zoho_attachment": {"status": "UPLOADED", "module": module, "record_id": str(record_id), "attachment_id": attachment_id, "reconciled_at": timezone.now().isoformat()}}
+    attachment.save(update_fields=("safe_metadata",))
+    return {"status": "UPLOADED", "attachment_id": attachment_id, "module": module, "record_id": str(record_id), "request_sent": False}
 
 
 def publish_pending_for_person(*, quotation, document: str, record_id: str):

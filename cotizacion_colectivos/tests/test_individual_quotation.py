@@ -35,6 +35,11 @@ from cotizacion_colectivos.services.individual_quotations import (
 )
 from cotizacion_colectivos.services.individual_quotations import _individual_task_observations
 from cotizacion_colectivos.services.person_contract import build_contact_payload
+from cotizacion_colectivos.services.individual_attachment_publisher import (
+    IndividualAttachmentBlocked,
+    _validate_document_contract,
+    publish_attachment,
+)
 from cotizacion_colectivos.services.common import sign_record_id
 
 
@@ -1020,10 +1025,61 @@ class IndividualQuotationTests(TestCase):
         )
         attachment = quotation.attachments.get()
         self.assertEqual(attachment.safe_metadata["owner_role"], "risk")
+        self.assertEqual(attachment.safe_metadata["owner_type"], "risk")
         self.assertEqual(attachment.safe_metadata["owner_key"], "vehicles-stable-1")
-        self.assertEqual(attachment.safe_metadata["document_type"], "risk_document")
+        self.assertEqual(attachment.safe_metadata["risk_key"], "vehicles-stable-1")
+        self.assertEqual(attachment.safe_metadata["document_type"], "vehicle_registration")
+        self.assertEqual(attachment.safe_metadata["field_key"], "vehicle_registration")
         stored = (Path(self.private.name) / "individual_quotations" / attachment.stored_path).read_bytes()
         self.assertNotIn(b"%PDF-1.4 synthetic", stored)
+
+    def test_vehicle_document_contract_is_canonical(self):
+        self.assertEqual(
+            _validate_document_contract(
+                module="Riesgos", owner_type="risk", document_type="vehicle_registration"
+            ),
+            "vehicle_registration",
+        )
+
+    def test_legacy_vehicle_document_contract_remains_controlled(self):
+        self.assertEqual(
+            _validate_document_contract(
+                module="Riesgos", owner_type="risk", document_type="risk_document"
+            ),
+            "vehicle_registration",
+        )
+
+    def test_contact_identity_document_contract_remains_exact(self):
+        self.assertEqual(
+            _validate_document_contract(
+                module="Contacts", owner_type="contact", document_type="identity_document"
+            ),
+            "identity_document",
+        )
+
+    def test_arbitrary_risk_document_type_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            _validate_document_contract(
+                module="Riesgos", owner_type="risk", document_type="arbitrary"
+            )
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="incorrecta",
+        COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION="",
+    )
+    def test_attachment_publish_requires_its_own_sandbox_guard(self):
+        attachment = SimpleNamespace(
+            stored_path="missing.enc",
+            safe_original_name="document.pdf",
+            detected_mime="application/pdf",
+            safe_metadata={"owner_type": "risk", "document_type": "vehicle_registration", "owner_key": "vehicles-a"},
+        )
+        with patch("cotizacion_colectivos.services.individual_attachment_publisher._get_zoho") as get_zoho:
+            with self.assertRaises(IndividualAttachmentBlocked):
+                publish_attachment(attachment=attachment, module="Riesgos", record_id="4991513000000000001")
+            get_zoho.assert_not_called()
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):

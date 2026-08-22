@@ -7,6 +7,20 @@
   const payload = form.querySelector("#id_items_payload");
   let groups;
   try { groups = JSON.parse(payload.value || "{}"); } catch (_) { groups = schema.initial; }
+  // Keep selected File objects keyed by the stable entity key while a
+  // repeatable row is edited/re-rendered.  The server still receives the
+  // actual multipart input; this only prevents a visual re-render from
+  // silently dropping the user's selection.
+  const selectedFiles = new Map();
+  const restoreFile = (input, key) => {
+    const file = selectedFiles.get(key);
+    if (!file || typeof DataTransfer === "undefined") return;
+    try {
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+    } catch (_) { /* browsers that forbid programmatic file assignment */ }
+  };
   const dialog = document.querySelector("[data-item-dialog]");
   const fieldsHost = dialog.querySelector("[data-dialog-fields]");
   let activeGroup = null;
@@ -59,16 +73,22 @@
           input.setAttribute("data-entity-file", row.entity_key);
           label.appendChild(input);
           documentField.appendChild(label);
+          restoreFile(input, row.entity_key);
           const fileName = document.createElement("small");
           fileName.className = "entity-document-name";
           const refreshFileName = () => {
             fileName.textContent = input.files && input.files[0] ? `📎 ${input.files[0].name}` : "";
           };
-          input.addEventListener("change", refreshFileName);
+          refreshFileName();
+          input.addEventListener("change", () => {
+            if (input.files && input.files[0]) selectedFiles.set(row.entity_key, input.files[0]);
+            else selectedFiles.delete(row.entity_key);
+            refreshFileName();
+          });
           documentField.appendChild(fileName);
           const clear = document.createElement("button");
           clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
-          clear.addEventListener("click", () => { input.value = ""; refreshFileName(); });
+          clear.addEventListener("click", () => { input.value = ""; selectedFiles.delete(row.entity_key); refreshFileName(); });
           documentField.appendChild(clear);
           card.appendChild(documentField);
           if (key === "vehicles" && !sameRequester) {
@@ -83,13 +103,19 @@
             insuredInput.setAttribute("data-entity-file", `${row.entity_key}-insured`);
             insuredLabel.appendChild(insuredInput);
             insuredField.appendChild(insuredLabel);
+            restoreFile(insuredInput, `${row.entity_key}-insured`);
             const insuredName = document.createElement("small");
             insuredName.className = "entity-document-name";
-            insuredInput.addEventListener("change", () => { insuredName.textContent = insuredInput.files && insuredInput.files[0] ? `📎 ${insuredInput.files[0].name}` : ""; });
+            insuredName.textContent = insuredInput.files && insuredInput.files[0] ? `📎 ${insuredInput.files[0].name}` : "";
+            insuredInput.addEventListener("change", () => {
+              if (insuredInput.files && insuredInput.files[0]) selectedFiles.set(`${row.entity_key}-insured`, insuredInput.files[0]);
+              else selectedFiles.delete(`${row.entity_key}-insured`);
+              insuredName.textContent = insuredInput.files && insuredInput.files[0] ? `📎 ${insuredInput.files[0].name}` : "";
+            });
             insuredField.appendChild(insuredName);
             const clearInsured = document.createElement("button");
             clearInsured.type = "button"; clearInsured.className = "button-link button-link--secondary"; clearInsured.textContent = "Quitar";
-            clearInsured.addEventListener("click", () => { insuredInput.value = ""; insuredName.textContent = ""; });
+            clearInsured.addEventListener("click", () => { insuredInput.value = ""; selectedFiles.delete(`${row.entity_key}-insured`); insuredName.textContent = ""; });
             insuredField.appendChild(clearInsured);
             card.appendChild(insuredField);
           }
