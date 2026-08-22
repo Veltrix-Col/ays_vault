@@ -6,6 +6,7 @@ env/
 # Variables de entorno y secretos
 .env
 .env.*
+*.env
 !.env.example
 
 # Bases de datos locales

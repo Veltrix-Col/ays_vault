@@ -110,8 +110,8 @@ class PackageBoundaryTests(SimpleTestCase):
             "CompanySearchService", "PersonSearchService", "EntityDetailService", "PolicyService",
         ):
             self.assertIn(exported, exports)
-        self.assertNotIn("GuardedSandboxTaskPublisher", exports)
-        self.assertNotIn("GuardedSandboxContactPublisher", exports)
+        self.assertNotIn("GuardedTaskPublisher", exports)
+        self.assertNotIn("GuardedContactPublisher", exports)
 
         allowed_publishers = {
             (root / "services" / "task_publisher.py").resolve(),
