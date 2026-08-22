@@ -43,6 +43,13 @@ class BranchSchema:
 IDENTIFICATION_CHOICES = ("CC", "CE", "TI", "RC", "Pasaporte", "NIT")
 GENDER_CHOICES = ("Femenino", "Masculino", "Otro", "Prefiero no indicar")
 ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro familiar")
+VEHICLE_CLASS_CHOICES = (
+    "Automovil",
+    "Motocicleta",
+    "Camiones y transporte de carga",
+    "Transporte publico pasajeros",
+    "Vehiculos especiales",
+)
 
 REQUESTER_FIELDS = (
     # Los registros nuevos capturan la identidad estructurada.  requester_name
@@ -90,13 +97,13 @@ VEHICLE_FIELDS = (
     FieldSchema("zero_km", "¿Vehículo 0 km?", "choice", choices=("Sí", "No")),
     FieldSchema(
         "plate", "Placa", required=False,
-        help_text="No se solicita cuando el vehículo es 0 km.",
-        show_when=("zero_km", "No"),
+        help_text="Opcional si el vehículo aún no tiene placa asignada.",
     ),
     FieldSchema("brand", "Marca", required=False),
     FieldSchema("line", "Línea o referencia", required=False),
     FieldSchema("displacement", "Cilindraje", required=False),
     FieldSchema("model", "Modelo"),
+    FieldSchema("class", "Clase", "choice", choices=VEHICLE_CLASS_CHOICES),
     FieldSchema("city", "Ciudad", required=False),
     FieldSchema("use", "Uso", required=False),
     FieldSchema("armored", "¿Vehículo blindado?", "choice", required=False, choices=("Sí", "No")),

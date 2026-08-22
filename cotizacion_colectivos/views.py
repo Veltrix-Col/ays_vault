@@ -2404,7 +2404,10 @@ def individual_accept(request, token):
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError) as exc:
         raise Http404("Respuesta no encontrada") from exc
-    actor = get_internal_actor(request, create=True)
+    if _individual_acceptance_status(quotation) == "rejected":
+        messages.warning(request, "La cotización está rechazada; debe reactivarse antes de aceptarla.")
+        return redirect("cotizacion_colectivos:individual_expedient", token=sign_receipt(quotation.public_id))
+    actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
     quotation = accept_individual_quotation(quotation=quotation, actor=actor)
     try:
         resolve_accepted_person(quotation=quotation)
@@ -2420,12 +2423,90 @@ def individual_accept(request, token):
 
 @never_cache
 @require_http_methods(["POST"])
+def individual_reject(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
+        with transaction.atomic():
+            quotation = CotizacionIndividual.objects.select_for_update().get(public_id=public_id)
+            status = _individual_acceptance_status(quotation)
+            if status != "pending":
+                raise ValidationError("La cotización ya tiene una decisión y no puede rechazarse.")
+            metadata = dict(quotation.safe_metadata or {})
+            acceptance = dict(metadata.get("acceptance") or {})
+            acceptance.update({"status": "rejected", "rejected_at": timezone.now().isoformat(), "rejected_by": int(actor.pk) if actor is not None else None})
+            metadata["acceptance"] = acceptance
+            quotation.safe_metadata = metadata
+            quotation.save(update_fields=("safe_metadata",))
+            audit(request, "UPDATE", reason="Cotización Individual rechazada.", metadata={"quotation_id": str(quotation.public_id), "status": "rejected"})
+        messages.success(request, "La cotización fue rechazada y quedó conservada para consulta y trazabilidad.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_reactivate(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
+        with transaction.atomic():
+            quotation = CotizacionIndividual.objects.select_for_update().get(public_id=public_id)
+            if _individual_acceptance_status(quotation) != "rejected":
+                raise ValidationError("Sólo una cotización rechazada puede reactivarse.")
+            metadata = dict(quotation.safe_metadata or {})
+            acceptance = dict(metadata.get("acceptance") or {})
+            acceptance.update({"status": "pending", "reactivated_at": timezone.now().isoformat(), "reactivated_by": int(actor.pk) if actor is not None else None})
+            metadata["acceptance"] = acceptance
+            quotation.safe_metadata = metadata
+            quotation.save(update_fields=("safe_metadata",))
+            audit(request, "UPDATE", reason="Cotización Individual reactivada.", metadata={"quotation_id": str(quotation.public_id), "status": "pending"})
+        messages.success(request, "La cotización fue reactivada y quedó pendiente de decisión.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+def _individual_acceptance_status(quotation):
+    metadata = quotation.safe_metadata if isinstance(quotation.safe_metadata, dict) else {}
+    acceptance = metadata.get("acceptance") if isinstance(metadata.get("acceptance"), dict) else {}
+    return str(acceptance.get("status") or "pending").strip().lower()
+
+
+def _ensure_individual_can_operate_zoho(quotation):
+    if _individual_acceptance_status(quotation) != "accepted":
+        raise ValidationError("La cotización debe estar aceptada para operar en Zoho.")
+
+
+def _ensure_individual_can_manage_task(quotation):
+    """Task assignment/publication predates the decision gate.
+
+    Pending responses may still have a COTIZACION outbox that needs a
+    responsible or controlled publication.  Rejected quotations remain
+    closed to any new operation.
+    """
+    if _individual_acceptance_status(quotation) == "rejected":
+        raise ValidationError("La cotización rechazada no permite gestionar la Task.")
+
+
+@never_cache
+@require_http_methods(["POST"])
 def individual_create_person(request, token):
     if not has_internal_permission(request, "approve_responses"):
         return permission_denied_response()
     try:
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        _ensure_individual_can_operate_zoho(quotation)
         resolve_accepted_person(quotation=quotation)
         if quotation.branch_slug == "movilidad":
             resolve_mobility_entities(quotation=quotation)
@@ -2502,6 +2583,7 @@ def individual_complete_person(request, token):
     try:
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        _ensure_individual_can_operate_zoho(quotation)
         form = PersonCompletionForm(request.POST)
         if not form.is_valid():
             for error in form.errors.values():
@@ -2539,6 +2621,8 @@ def individual_complete_person(request, token):
         messages.success(request, "Datos de la persona guardados; se volvió a validar en Zoho.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
@@ -2555,6 +2639,7 @@ def individual_update_entity(request, token, entity, vehicle_index):
         raise Http404("Entidad no encontrada")
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         metadata = dict(quotation.safe_metadata or {})
         entities = metadata.get("zoho_entities") if isinstance(metadata.get("zoho_entities"), dict) else {}
         bucket = list(entities.get("risks" if entity == "risk" else "subrisks") or [])
@@ -2585,6 +2670,7 @@ def individual_create_risk(request, token, vehicle_index):
         return permission_denied_response()
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
         risks = list(entities.get("risks") or [])
         if vehicle_index < 0 or vehicle_index >= len(risks):
@@ -2655,6 +2741,7 @@ def individual_create_subrisk(request, token, vehicle_index):
         return permission_denied_response()
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
         subrisks = list(entities.get("subrisks") or [])
         if vehicle_index < 0 or vehicle_index >= len(subrisks):
@@ -2686,6 +2773,7 @@ def individual_update_responsible(request, token):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        _ensure_individual_can_manage_task(quotation)
         options = task_responsible_options()
         option = next((item for item in options if item.actual_value == str(request.POST.get("responsible") or "").strip()), None)
         if option is None:
@@ -2747,6 +2835,7 @@ def individual_publish_task(request, token):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        _ensure_individual_can_manage_task(quotation)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
         if outbox is None:
             messages.warning(request, "Todavía no existe una intención de Task para publicar.")
@@ -2812,6 +2901,7 @@ def individual_expedient(request, token):
         context.setdefault(optional_key, "")
     safe_metadata = quotation.safe_metadata or {}
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
+    decision_status = _individual_acceptance_status(quotation)
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
     people_lookup = [dict(item) for item in (safe_metadata.get("people_lookup") or ()) if isinstance(item, dict)]
     if not people_lookup and person_lookup:
@@ -2915,6 +3005,12 @@ def individual_expedient(request, token):
         "remote_task_id": remote_task_id,
         "history": tuple(history),
         "acceptance": acceptance,
+        "decision_status": decision_status,
+        "decision_pending": decision_status == "pending",
+        "is_rejected": decision_status == "rejected",
+        "can_reject": decision_status == "pending",
+        "can_reactivate": decision_status == "rejected",
+        "can_operate_zoho": decision_status == "accepted",
         "person_lookup": person_lookup,
         "people_lookup": tuple(people_lookup),
         "created_people": created_people,
