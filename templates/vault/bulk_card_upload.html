@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}Cargue masivo de tarjetas · CardManager{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <span class="section-kicker">Administración de tarjetas</span>
+    <h1>Cargue masivo de tarjetas</h1>
+    <p>Descargue la plantilla, consulte la hoja de instrucciones y cargue todas las tarjetas en una única operación atómica.</p>
+  </div>
+  <a class="btn secondary" href="{% url 'vault:bulk_card_template' %}">Descargar plantilla</a>
+</div>
+<section class="panel bulk-card-panel" aria-labelledby="bulk-upload-title">
+  <div class="panel-head"><div><h2 id="bulk-upload-title">Seleccionar archivo Excel</h2><p>Use la lista de franquicias incluida en la plantilla. Si una fila contiene errores, ninguna tarjeta será creada.</p></div></div>
+  <form method="post" enctype="multipart/form-data" class="form-card" data-single-submit novalidate>
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    {% include 'includes/form_field.html' with field=form.file %}
+    <button class="btn primary" type="submit">Validar y cargar</button>
+  </form>
+  {% if row_errors %}
+    <div class="bulk-errors" role="alert" aria-labelledby="bulk-errors-title">
+      <h3 id="bulk-errors-title">Corrija el archivo antes de cargarlo</h3>
+      <ul>{% for error in row_errors %}<li>{{ error }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

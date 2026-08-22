@@ -124,10 +124,13 @@ class UserProfile(models.Model):
 
 
 class PaymentCard(models.Model):
-    BRAND = [("VISA", "Visa"), ("MC", "Mastercard"), ("AMEX", "American Express")]
+    BRAND = [("VISA", "Visa"), ("MC", "Mastercard"), ("AMEX", "American Express"), ("DINERS", "Diners")]
     company_name = models.CharField(max_length=160, blank=True)
     client_name = models.CharField(max_length=140)
     cardholder_name = models.CharField(max_length=140)
+    identity_document = models.CharField(max_length=40, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=40, blank=True, default="")
     brand = models.CharField(max_length=10, choices=BRAND)
     encrypted_pan = models.TextField(editable=False)
     pan_fingerprint = models.CharField(max_length=64, editable=False, unique=True)

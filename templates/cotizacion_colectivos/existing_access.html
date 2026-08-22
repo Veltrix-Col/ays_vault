@@ -1,0 +1,7 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Acceso vigente{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'cotizacion_colectivos:policy_detail' policy_token %}">Volver a la póliza</a><span>/</span><span>Acceso del cliente</span></nav>
+<header class="detail-hero"><span class="eyebrow">Acceso del cliente</span><h1>Enlace vigente</h1><span class="state-chip">Vigente</span></header>
+<section class="relation-card external-card--notice"><h2>El enlace está protegido</h2><p>Existe un enlace vigente, pero por seguridad no puede recuperarse. Genere uno nuevo para copiarlo.</p><p class="muted">El enlace vigente vence el {{ access.expires_at }}.</p><div class="policy-actions"><form method="post" action="{% url 'cotizacion_colectivos:policy_generate_access_simple' policy_token %}">{% csrf_token %}<input type="hidden" name="request_type" value="{{ request_type }}"><input type="hidden" name="force_new" value="1"><button type="submit">Generar nuevo enlace</button></form><form method="post" action="{% url 'cotizacion_colectivos:request_external_access_revoke' item.public_id %}">{% csrf_token %}<button type="submit" class="button-danger">Revocar</button></form><a class="button-link button-link--secondary" href="{% url 'cotizacion_colectivos:request_detail' item.public_id %}">Ver solicitud</a></div></section>
+{% endblock %}

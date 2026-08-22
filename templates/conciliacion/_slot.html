@@ -1,0 +1,20 @@
+{% comment %}
+Un slot de carga de archivo. Recibe:
+  field     -> el BoundField del formulario (cobro/recibo/relacion/personas/novedades)
+  slot      -> clave del slot (str), usada por el JS para actualizar el contenido por ramo
+  slotdata  -> dict de presentación del slot para el ramo inicial (label/help/accept/required/temporal/nota_temporal)
+El JS reemplaza label/help/accept/nota al cambiar de ramo.
+{% endcomment %}
+<div class="tool-slot" data-slot="{{ slot }}">
+  <label class="tool-dropzone" for="{{ field.id_for_label }}">
+    <span class="tool-dropzone-badge" data-slot-badge>{{ slotdata.accept }}</span>
+    <strong data-slot-label>{{ slotdata.label }}{% if not slotdata.required %} <span class="tool-optional">(opcional)</span>{% endif %}</strong>
+    <span class="tool-dropzone-help" data-slot-help>{{ slotdata.help }}</span>
+    <span class="tool-file-name" data-file-name>Ningún archivo seleccionado</span>
+    {{ field }}
+  </label>
+  <p class="conc-slot-note" data-slot-temporal {% if not slotdata.nota_temporal %}hidden{% endif %}>
+    <span aria-hidden="true">*</span> <span data-slot-temporal-text>{{ slotdata.nota_temporal }}</span>
+  </p>
+  {% if field.errors %}<p class="tool-error" role="alert">{{ field.errors|striptags }}</p>{% endif %}
+</div>

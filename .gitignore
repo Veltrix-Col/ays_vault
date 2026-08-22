@@ -44,5 +44,13 @@ Thumbs.db
 
 # Referencias operativas privadas (nunca publicar ni versionar)
 private_assets/soat/*.xlsx
+private_assets/colectivos/
+artifacts/zoho/
+runtime/zoho_sdk/
 
 docker-compose.override.yml
+
+docs/cotizacion_colectivos/input/*.xlsx
+artifacts/input/*.xlsx
+
+.codex-deps/

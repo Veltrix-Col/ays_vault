@@ -1,5 +1,7 @@
 # MFA y seguridad de sesiones
 
+> Documento histórico conservado como antecedente. La referencia vigente es [`cardmanager/authentication_and_mfa.md`](cardmanager/authentication_and_mfa.md).
+
 ## Flujo de autenticación
 
 1. El usuario presenta credenciales al endpoint propio de login, integrado con Django Auth y Axes.

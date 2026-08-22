@@ -66,6 +66,8 @@ def detected_brand(number):
         return "MC"
     if number.startswith(("34", "37")):
         return "AMEX"
+    if number.startswith(("300", "301", "302", "303", "304", "305", "3095", "36", "38", "39")):
+        return "DINERS"
     return ""
 
 
@@ -77,8 +79,30 @@ class CardForm(forms.ModelForm):
 
     class Meta:
         model = PaymentCard
-        fields = ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active"]
-        labels = {"company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
+        fields = ["company_name", "client_name", "cardholder_name", "identity_document", "email", "phone", "brand", "purpose", "active"]
+        labels = {
+            "company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular",
+            "identity_document": "Cédula / Documento de identidad",
+            "email": "Correo electrónico", "phone": "Teléfono",
+            "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field_name in ("identity_document", "email", "phone"):
+            self.fields[field_name].required = True
+
+    def clean_identity_document(self):
+        value = self.cleaned_data["identity_document"].strip()
+        if any(ord(character) < 32 for character in value):
+            raise forms.ValidationError("El documento contiene caracteres no permitidos.")
+        return value
+
+    def clean_phone(self):
+        value = self.cleaned_data["phone"].strip()
+        if not re.fullmatch(r"[+()\- .0-9]{7,40}", value) or sum(character.isdigit() for character in value) < 7:
+            raise forms.ValidationError("Ingrese un teléfono válido.")
+        return value
 
     def clean_pan(self):
         digits = "".join(character for character in self.cleaned_data["pan"] if character.isdigit())
@@ -123,8 +147,13 @@ class CardEditForm(forms.ModelForm):
     company_name = forms.CharField(label="EMP.", min_length=2, max_length=160, widget=forms.TextInput(attrs={"autocomplete": "organization", "placeholder": "Razón social"}))
     class Meta:
         model = PaymentCard
-        fields = ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active"]
-        labels = {"company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular", "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa"}
+        fields = ["company_name", "client_name", "cardholder_name", "identity_document", "email", "phone", "brand", "purpose", "active"]
+        labels = {
+            "company_name": "EMP.", "client_name": "Alias", "cardholder_name": "Titular",
+            "identity_document": "Cédula / Documento de identidad",
+            "email": "Correo electrónico", "phone": "Teléfono",
+            "brand": "Franquicia", "purpose": "Referencia", "active": "Tarjeta activa",
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -134,6 +163,18 @@ class CardEditForm(forms.ModelForm):
         # El estado se presenta en el formulario, pero continúa gobernado por
         # la operación sensible dedicada de desactivación.
         self.fields["active"].disabled = True
+
+    def clean_identity_document(self):
+        value = self.cleaned_data.get("identity_document", "").strip()
+        if any(ord(character) < 32 for character in value):
+            raise forms.ValidationError("El documento contiene caracteres no permitidos.")
+        return value
+
+    def clean_phone(self):
+        value = self.cleaned_data.get("phone", "").strip()
+        if value and (not re.fullmatch(r"[+()\- .0-9]{7,40}", value) or sum(character.isdigit() for character in value) < 7):
+            raise forms.ValidationError("Ingrese un teléfono válido.")
+        return value
 
     def clean_pan(self):
         value = self.cleaned_data.get("pan", "")
@@ -181,6 +222,22 @@ class CardEditForm(forms.ModelForm):
         if commit:
             obj.save()
         return obj
+
+
+class BulkCardUploadForm(forms.Form):
+    file = forms.FileField(
+        label="Archivo Excel",
+        help_text="Use exclusivamente la plantilla .xlsx descargada desde CardManager.",
+        widget=forms.ClearableFileInput(attrs={"accept": ".xlsx"}),
+    )
+
+    def clean_file(self):
+        uploaded = self.cleaned_data["file"]
+        if not uploaded.name.lower().endswith(".xlsx"):
+            raise forms.ValidationError("Seleccione un archivo Excel con extensión .xlsx.")
+        if uploaded.size > 5 * 1024 * 1024:
+            raise forms.ValidationError("El archivo supera el tamaño máximo permitido de 5 MB.")
+        return uploaded
 
 
 class CardSearchForm(forms.Form):
@@ -258,13 +315,13 @@ class ReauthenticationForm(forms.Form):
 
 class OperationContextForm(forms.Form):
     zoho_reference = forms.CharField(
-        label="Número certificado recibo - Zoho",
+        label="Póliza",
         min_length=1,
         max_length=120,
         strip=True,
-        help_text="Este número permite relacionar la consulta con la gestión registrada en Zoho.",
+        help_text="Este número permite relacionar la consulta con la póliza correspondiente.",
         widget=forms.TextInput(attrs={
-            "placeholder": "Ingrese el número del certificado o recibo registrado en Zoho",
+            "placeholder": "Ingrese el número de póliza",
             "autocomplete": "off",
         }),
     )

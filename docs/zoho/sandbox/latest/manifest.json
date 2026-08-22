@@ -1,0 +1,23 @@
+{
+  "api_version": "v8",
+  "backend": "sdk",
+  "environment": "sandbox",
+  "errors_total": 185,
+  "generated_at": "2026-08-14T23:07:25.481589+00:00",
+  "layouts_total": 0,
+  "modules_fields_failed": 26,
+  "modules_fields_ok": 63,
+  "modules_total": 89,
+  "organization_id": "4991513000000020005",
+  "organization_name": "AYS Seguros",
+  "profile": "sandbox",
+  "read_only": true,
+  "related_lists_total": 0,
+  "relationships_total": 146,
+  "schema_version": 2,
+  "sdk_version": "1.1.0",
+  "semantic_digest": "38f9146e2f8fd594c0ddbecb3688e70bbd375458a88b18bc4a71718fed41bf00",
+  "source": "zoho_metadata",
+  "status": "partial",
+  "subforms_total": 11
+}

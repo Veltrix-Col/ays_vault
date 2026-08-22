@@ -27,6 +27,7 @@ SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 logger = logging.getLogger("vault.notifications")
 EMAIL_BRAND_CID = "cardmanager-brand-logo"
 EMAIL_BRAND_STATIC_PATH = "img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png"
+OTP_NOTIFICATION_TYPES = frozenset({"COLECTIVOS_OTP", "COLECTIVOS_INDIVIDUAL_OTP"})
 
 
 class EmailDeliveryError(Exception):
@@ -233,7 +234,7 @@ def get_backend():
     raise EmailDeliveryError("EMAIL_BACKEND_NOT_SUPPORTED")
 
 
-def _redact_email_content(value, alert=None):
+def _redact_email_content(value, alert=None, *, redact_one_time_code=True):
     safe = value or ""
     safe = re.sub(r"(?<!\d)\d{13,19}(?!\d)", "[DATO PROTEGIDO OMITIDO]", safe)
     # Un vencimiento aislado (MM/AA o MM/AAAA) se redacta, pero el mismo
@@ -244,7 +245,8 @@ def _redact_email_content(value, alert=None):
         "[DATO PROTEGIDO OMITIDO]",
         safe,
     )
-    safe = re.sub(r"(?<!\d)\d{6}(?!\d)", "[CÓDIGO OMITIDO]", safe)
+    if redact_one_time_code:
+        safe = re.sub(r"(?<!\d)\d{6}(?!\d)", "[CÓDIGO OMITIDO]", safe)
     for secret in (getattr(settings, "EMAIL_HOST_PASSWORD", ""), getattr(settings, "MS_GRAPH_CLIENT_SECRET", "")):
         if secret:
             safe = safe.replace(secret, "[SECRETO OMITIDO]")
@@ -290,7 +292,10 @@ def send_notification(
     alert=None,
     force_retry=False,
     require_external_delivery=False,
+    contains_one_time_code=False,
 ):
+    if contains_one_time_code and notification_type not in OTP_NOTIFICATION_TYPES:
+        raise ValueError("Sólo las notificaciones OTP autorizadas pueden entregar un código de un solo uso.")
     idempotency = hashlib.sha256(idempotency_key.encode()).hexdigest()
     record, created = NotificationRecord.objects.get_or_create(
         idempotency_hash=idempotency,
@@ -316,9 +321,16 @@ def send_notification(
     ):
         return record
 
-    subject = _redact_email_content(subject, alert)
-    text_body = _redact_email_content(text_body, alert)
-    html_body = _redact_email_content(html_body, alert)
+    redact_one_time_code = not contains_one_time_code
+    subject = _redact_email_content(
+        subject, alert, redact_one_time_code=redact_one_time_code,
+    )
+    text_body = _redact_email_content(
+        text_body, alert, redact_one_time_code=redact_one_time_code,
+    )
+    html_body = _redact_email_content(
+        html_body, alert, redact_one_time_code=redact_one_time_code,
+    )
     try:
         backend = get_backend()
     except EmailDeliveryError as exc:

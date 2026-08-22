@@ -1,5 +1,7 @@
 # Arquitectura de seguridad de A&S Vault
 
+> Documento histórico conservado como antecedente. La referencia vigente y consolidada de CardManager está en [`cardmanager/README.md`](cardmanager/README.md), especialmente [`cardmanager/security_model.md`](cardmanager/security_model.md).
+
 ## Activos y amenazas
 
 Los activos son PAN, vencimiento, identidad del titular, asociaciones de cliente, credenciales, factores OTP, sesiones, llaves y trazabilidad. Se consideran abuso interno, cuentas comprometidas, IDOR, fuerza bruta, robo/fijación de sesión, exposición frontend/logs, manipulación de auditoría, compromiso de base de datos y pérdida de llaves.

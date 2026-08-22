@@ -41,6 +41,7 @@
         {% if vault_profile.role == 'ADMIN' %}
           <span class="nav-label">Principal</span>
           <a href="{% url 'vault:control_center' %}" {% if current == 'control_center' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">C</span>Centro de Control</a>
+          <a href="{% url 'vault:bulk_card_upload' %}" {% if current == 'bulk_card_upload' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">M</span>Cargue masivo</a>
           <span class="nav-label">Seguridad</span>
           <a href="{% url 'vault:alerts' %}" {% if current == 'alerts' or current == 'alert_detail' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">A</span>Alertas</a>
           <a href="{% url 'vault:timeline' %}" {% if current == 'timeline' %}class="active" aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">L</span>Línea de tiempo</a>

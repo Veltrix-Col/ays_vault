@@ -1,0 +1,128 @@
+"""Regla de conciliacion del recibo (PDF) extraido con el modelo de Foundry.
+
+Corre dos validaciones sobre el `ReciboExtraido` que el source de Foundry
+deja en `ctx.datos_extra["recibo_cu"]` (mismo canal por el que VG pasa su
+desglose de coberturas):
+
+  1. numero_poliza del recibo == poliza que el usuario escribio en el
+     formulario (o --poliza en el CLI), tolerando ceros a la izquierda
+     (mismo criterio que `normalize_doc` usa para documentos). Solo se
+     levanta incidente si NO cuadra o si el PDF no trae poliza.
+
+  2. valor_total_a_pagar del recibo == suma de valor_total_cobro del archivo
+     de cobro (la "relacion de asegurados de la compañia"). Solo se levanta
+     incidente si NO cuadra.
+
+numero_recibo, valor_sin_iva y valor_iva no se comparan todavia contra nada,
+pero se conservan en `ReciboExtraido` y se listan en la observacion de cada
+incidente para no perderlos: quedan disponibles para una validacion futura.
+
+La regla no habla con Foundry: opera sobre el DTO plano, asi que se prueba
+con un `ReciboExtraido` sintetico. Si el recibo no esta disponible
+(`recibo_cu` None, p. ej. porque el ramo no tiene PDF o falta la credencial),
+emite un unico incidente 'N/D' -- consistente con la filosofia de
+`buscar_novedad`, que distingue "no verificado" de "verificado y sin
+diferencia".
+
+Por ahora esta validacion es solo advertencia: todos los Incidente que genera
+llevan `bloqueante=False`, asi que nunca cuentan para `ReporteConciliacion.
+esta_vacio` ni bloquean el acceso a los cobros/enlace de facturacion en Zoho.
+Las filas siguen apareciendo siempre en el Excel para trazabilidad.
+"""
+
+from __future__ import annotations
+
+from conciliador.domain.models import Incidente
+from conciliador.parsing.normalizadores import normalize_doc
+from conciliador.sources.foundry_recibo import ReciboExtraido
+
+_TIPO_POLIZA = "Conciliación recibo (PDF): número de póliza"
+_TIPO_COBRO = "Conciliación recibo (PDF): valor_total_a_pagar vs suma del cobro de la compañía"
+_TIPO_ND = "Validación de recibo (PDF) no realizada"
+
+
+class ReciboConciliacionRule:
+    """Valida el recibo (PDF) de la aseguradora contra la poliza ingresada y contra el cobro."""
+
+    def __init__(self, umbral_pesos: float = 1.0):
+        self.umbral_pesos = umbral_pesos
+
+    def generar(self, ctx) -> list[Incidente]:
+        recibo = ctx.datos_extra.get("recibo_cu")
+        if not isinstance(recibo, ReciboExtraido):
+            return [self._incidente_nd(ctx)]
+
+        incidentes = []
+        incidente_poliza = self._conciliar_poliza(ctx, recibo)
+        if incidente_poliza is not None:
+            incidentes.append(incidente_poliza)
+        incidente_cobro = self._conciliar_cobro(ctx, recibo)
+        if incidente_cobro is not None:
+            incidentes.append(incidente_cobro)
+        return incidentes
+
+    # -- Validacion 1: numero_poliza vs poliza ingresada (solo si no cuadra) --
+    def _conciliar_poliza(self, ctx, recibo: ReciboExtraido) -> Incidente | None:
+        poliza_pdf = normalize_doc(recibo.numero_poliza or "")
+        poliza_form = normalize_doc(ctx.poliza or "")
+        if poliza_pdf and poliza_form and poliza_pdf == poliza_form:
+            return None
+        return self._incidente(
+            ctx, _TIPO_POLIZA, recibo,
+            observacion=(
+                f"Póliza ingresada {ctx.poliza or 's/n'} vs. póliza del recibo "
+                f"{recibo.numero_poliza or 's/n'}. NO cuadra. "
+                f"{self._detalle_recibo(recibo)}"
+            ),
+        )
+
+    # -- Validacion 2: valor_total_a_pagar vs suma del cobro (solo si no cuadra) --
+    def _conciliar_cobro(self, ctx, recibo: ReciboExtraido) -> Incidente | None:
+        if "valor_total_cobro" not in ctx.cobro.columns or recibo.valor_total_a_pagar is None:
+            return None
+        suma = round(float(ctx.cobro["valor_total_cobro"].fillna(0).sum()), 2)
+        diferencia = round(recibo.valor_total_a_pagar - suma, 2)
+        if abs(diferencia) < self.umbral_pesos:
+            return None
+        return self._incidente(
+            ctx, _TIPO_COBRO, recibo, suma_comparada=suma, diferencia=diferencia,
+            observacion=(
+                f"Póliza {recibo.numero_poliza or 's/n'}: valor_total_a_pagar del recibo "
+                f"${recibo.valor_total_a_pagar:,.2f} vs suma del cobro de la compañía "
+                f"${suma:,.2f} (diferencia ${diferencia:,.2f}). NO cuadra. "
+                f"{self._detalle_recibo(recibo)}"
+            ),
+        )
+
+    @staticmethod
+    def _detalle_recibo(recibo: ReciboExtraido) -> str:
+        return (
+            f"[numero_recibo={recibo.numero_recibo or 's/n'}, "
+            f"valor_sin_iva={recibo.valor_sin_iva if recibo.valor_sin_iva is not None else 's/n'}, "
+            f"valor_iva={recibo.valor_iva if recibo.valor_iva is not None else 's/n'}]"
+        )
+
+    # -- Recibo no disponible ------------------------------------------------
+    def _incidente_nd(self, ctx) -> Incidente:
+        return Incidente(
+            fecha_reporte=ctx.hoy, ramo=ctx.ramo, periodo=ctx.periodo,
+            tipo_incidente=_TIPO_ND,
+            observacion=("No se pudo validar el recibo (PDF): archivo no disponible o "
+                         "servicio de extracción sin configurar para este ramo."),
+            bloqueante=False,
+        )
+
+    def _incidente(self, ctx, tipo: str, recibo: ReciboExtraido, *,
+                   observacion: str, suma_comparada: float | None = None,
+                   diferencia: float | None = None) -> Incidente:
+        # La validación de recibo (PDF) con IA es, por ahora, solo advertencia:
+        # nunca debe bloquear "sin incidentes" ni el acceso a conciliar en Zoho.
+        return Incidente(
+            fecha_reporte=ctx.hoy, ramo=ctx.ramo, periodo=ctx.periodo,
+            tipo_incidente=tipo,
+            valor_cobro=suma_comparada,
+            valor_total_cobro=recibo.valor_total_a_pagar,
+            diferencia_valor=diferencia,
+            observacion=observacion,
+            bloqueante=False,
+        )

@@ -2,20 +2,21 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 
 from .decorators import role_required
-from .forms import CardEditForm, CardForm, CardSearchForm, OperationContextForm, ProtectedActionForm, ReauthenticationForm
+from .forms import BulkCardUploadForm, CardEditForm, CardForm, CardSearchForm, OperationContextForm, ProtectedActionForm, ReauthenticationForm
+from .bulk_cards import build_template, create_cards_atomically, validate_workbook
 from .models import AuditEvent, PaymentCard, PendingSensitiveOperation, SecurityAlert, UserProfile
 from .security import audit, cached_chain_status, consume_copy_grant, create_reveal_grant
 from .identity import create_alert, current_secure_session, has_recent_reauth, verify_totp
@@ -137,6 +138,58 @@ def card_list(request):
     return render(request, "vault/card_list.html", context)
 
 
+@role_required(UserProfile.ADMIN)
+@require_http_methods(["GET", "POST"])
+def bulk_card_upload(request):
+    if not has_recent_reauth(request, "cards_manage"):
+        return redirect(
+            f"{reverse('vault:reauthenticate')}?purpose=cards_manage&next={reverse('vault:bulk_card_upload')}"
+        )
+    form = BulkCardUploadForm(request.POST or None, request.FILES or None)
+    row_errors = ()
+    if request.method == "POST":
+        if form.is_valid():
+            result = validate_workbook(form.cleaned_data["file"])
+            row_errors = result.errors
+            if not row_errors:
+                try:
+                    cards = create_cards_atomically(result.forms, request.user)
+                except IntegrityError:
+                    row_errors = ("No fue posible completar el cargue. Ninguna tarjeta fue creada; valide duplicados e intente nuevamente.",)
+                else:
+                    audit(
+                        request,
+                        "CREATE",
+                        reason="Cargue masivo de tarjetas",
+                        metadata={"created_count": len(cards), "source": "xlsx"},
+                    )
+                    count = len(cards)
+                    message = (
+                        "Cargue completado correctamente. 1 tarjeta fue creada."
+                        if count == 1
+                        else f"Cargue completado correctamente. {count} tarjetas fueron creadas."
+                    )
+                    messages.success(request, message)
+                    return redirect("vault:bulk_card_upload")
+        if form.errors or row_errors:
+            messages.error(request, "El archivo contiene errores. No se creó ninguna tarjeta.")
+    return render(
+        request,
+        "vault/bulk_card_upload.html",
+        {"form": form, "row_errors": row_errors},
+    )
+
+
+@role_required(UserProfile.ADMIN)
+def bulk_card_template(request):
+    response = HttpResponse(
+        build_template(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = 'attachment; filename="plantilla_cargue_tarjetas.xlsx"'
+    return response
+
+
 @role_required(UserProfile.LEADER)
 def card_create(request):
     gate = _enforce_schedule(request, "CREATE")
@@ -219,7 +272,7 @@ def execute_pending_card_create(request, operation):
         card,
         reason=operation.reason,
         metadata={
-            "fields": ["company_name", "client_name", "cardholder_name", "brand", "purpose", "active", "pan", "expiry", "code"],
+            "fields": ["company_name", "client_name", "cardholder_name", "identity_document", "email", "phone", "brand", "purpose", "active", "pan", "expiry", "code"],
             "operation_id": str(operation.public_id),
         },
     )
@@ -441,7 +494,7 @@ def protected_confirm(request):
         request,
         window,
         card,
-        "Consulta asociada a certificado o recibo Zoho",
+        "Consulta asociada a póliza",
         form.cleaned_data["zoho_reference"],
     )
     if not context:

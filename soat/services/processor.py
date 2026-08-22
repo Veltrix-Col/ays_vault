@@ -20,8 +20,10 @@ class SoatProcessingError(ValueError):
 
 @dataclass(frozen=True)
 class SoatResult:
-    content: bytes
-    filename: str
+    report_content: bytes
+    report_filename: str
+    support_content: bytes
+    support_filename: str
     summary: dict[str, object]
 
 
@@ -62,7 +64,8 @@ def process_soat(uploaded_file) -> SoatResult:
     with TemporaryDirectory(prefix="ays-soat-") as directory:
         root = Path(directory)
         source = root / "source.xlsx"
-        output = root / "result.xlsx"
+        report_output = root / "report.xlsx"
+        support_output = root / "support.xlsx"
         with source.open("wb") as stream:
             for chunk in uploaded_file.chunks():
                 stream.write(chunk)
@@ -83,8 +86,16 @@ def process_soat(uploaded_file) -> SoatResult:
         fuente = _sanitize_frame(fuente)
         soat = _sanitize_frame(soat)
         movilidad = _sanitize_frame(movilidad)
-        legacy.exportar(output, formato, fuente, soat, movilidad, trazabilidad)
-        _remove_hyperlinks(output)
+        legacy.exportar(
+            report_output, formato, fuente, soat, movilidad, trazabilidad,
+            hojas=("Formato informe",),
+        )
+        legacy.exportar(
+            support_output, formato, fuente, soat, movilidad, trazabilidad,
+            hojas=("Trazabilidad", "SOAT seleccionados", "Movilidad seleccionada", "Fuente Zoho"),
+        )
+        _remove_hyperlinks(report_output)
+        _remove_hyperlinks(support_output)
 
         criteria = formato[legacy.COLUMNA_CRITERIO_INTERNO].value_counts().sort_index().to_dict()
         management = formato["Gestión SOAT A&S"].fillna("En blanco").value_counts().to_dict()
@@ -101,7 +112,9 @@ def process_soat(uploaded_file) -> SoatResult:
         }
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return SoatResult(
-            content=output.read_bytes(),
-            filename=f"Informe_SOAT_A&S_{stamp}.xlsx",
+            report_content=report_output.read_bytes(),
+            report_filename=f"Informe_SOAT_A&S_{stamp}.xlsx",
+            support_content=support_output.read_bytes(),
+            support_filename=f"Soporte_SOAT_A&S_{stamp}.xlsx",
             summary=summary,
         )

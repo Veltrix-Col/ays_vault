@@ -1,0 +1,16 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Cotización Individual{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><span>Cotización Individual</span></nav>
+<header class="page-heading"><span class="eyebrow">Colectivos</span><h1>Cotización Individual</h1><p>Capture una solicitud uno a uno dentro del contexto de una colectiva, sin escribir en Zoho.</p></header>
+<section aria-labelledby="branch-heading">
+  <div class="section-heading"><div><span class="eyebrow">Paso 1</span><h2 id="branch-heading">¿Qué desea cotizar?</h2></div></div>
+  <div class="individual-branch-grid">
+    {% for branch in branches %}<a class="individual-branch-card" href="{% url 'cotizacion_colectivos:individual_form' branch.slug %}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ branch.icon_path }}"/></svg><div><h3>{{ branch.name }}</h3><p>{{ branch.description }}</p></div><span>Continuar →</span>
+    </a>{% endfor %}
+  </div>
+  <p class="individual-context-action"><a class="button-secondary" href="{% url 'cotizacion_colectivos:individual_client_search' %}">Usar un cliente existente como contexto</a></p>
+</section>
+<aside class="tool-mode-note"><strong>Demo parametrizable:</strong> los campos definitivos, documentos y reglas especiales se validarán con el equipo de Colectivos.</aside>
+{% endblock %}

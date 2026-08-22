@@ -1,5 +1,7 @@
 # Configuración local de correo de CardManager
 
+> Guía operativa histórica. La matriz vigente de variables y estados está en [`cardmanager/configuration.md`](cardmanager/configuration.md); nunca copie credenciales en esta guía.
+
 CardManager centraliza alertas y pruebas administrativas en `vault.notifications`.
 `ALERT_EMAIL_BACKEND` selecciona `console`, `smtp` o `graph`. Los mensajes nunca
 deben contener PAN, vencimiento, empresa protegida, OTP, códigos de recuperación,
@@ -24,10 +26,10 @@ EMAIL_HOST=smtp.office365.com
 EMAIL_PORT=587
 EMAIL_USE_TLS=True
 EMAIL_USE_SSL=False
-EMAIL_HOST_USER=correo@dominio.com
-EMAIL_HOST_PASSWORD=PEGAR_AQUI_LA_CLAVE_DE_APLICACION
-DEFAULT_FROM_EMAIL=correo@dominio.com
-ALERT_EMAIL_FROM=correo@dominio.com
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+DEFAULT_FROM_EMAIL=
+ALERT_EMAIL_FROM=
 EMAIL_TIMEOUT_SECONDS=10
 EMAIL_MAX_RETRIES=3
 ```

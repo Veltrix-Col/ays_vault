@@ -1,0 +1,23 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% load static %}
+{% block title %}Ramo {{ branch.code }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs"><a href="{% url 'cotizacion_colectivos:invitations_client_detail' entity_kind entity_token %}">Ficha del cliente</a><span>/</span><span>Ramo {{ branch.code }}</span></nav>
+<header class="detail-hero detail-hero--compact branch-workspace-hero"><div><span class="eyebrow">Ramo {{ branch.code }}</span><h1>{{ branch.name }}</h1></div><span class="branch-policy-count"><strong>{{ active_policies|length }}</strong><span>pólizas vigentes</span></span><p>Revise el consolidado local y prepare las invitaciones del ramo.</p></header>
+
+<section class="workspace-card branch-policy-selector"><div class="section-heading"><div><span class="eyebrow">Pólizas vigentes del ramo</span><h2>Contexto disponible</h2></div></div>
+  <div class="branch-policy-table-wrap"><table class="branch-policy-table"><thead><tr><th><span class="visually-hidden">Seleccionar</span></th><th>Póliza</th><th>Aseguradora</th><th>Vigencia</th><th>Estado</th><th>Registros</th><th></th></tr></thead><tbody>
+  {% for item in branch_policy_items %}<tr class="{% if item.workspace_missing %}branch-policy-pending{% endif %}"><td><input class="branch-policy-radio" type="radio" name="branch-policy" value="{{ item.key }}" aria-label="Mostrar sólo la póliza {{ item.reference }}" data-invitation-policy-filter {% if not item.workspace_available %}disabled{% endif %}></td><td><strong>{{ item.reference }}</strong></td><td>{{ item.policy.insurer|default:"—" }}</td><td>{{ item.policy.start_date|default:"—" }}{% if item.policy.end_date %}<span> a {{ item.policy.end_date }}</span>{% endif %}</td><td><span class="state-chip">{{ item.policy.state }}</span>{% if item.workspace_missing %}<small>Información pendiente de actualizar</small>{% endif %}</td><td>{% if item.workspace_available %}{{ item.record_count }}{% else %}—{% endif %}</td><td><a class="text-link" href="{% url 'cotizacion_colectivos:invitations_policy_detail' item.policy.detail_token %}">Ver póliza</a></td></tr>{% empty %}<tr><td colspan="7">No hay pólizas vigentes en este ramo.</td></tr>{% endfor %}
+  </tbody></table></div>
+  <button type="button" class="button-secondary branch-selection-clear" data-invitation-policy-clear>Limpiar selección</button>
+</section>
+
+{% if missing_workspaces %}<div class="status-message status-message--warning" role="status"><strong>Información local pendiente:</strong> {% for reference in missing_workspaces %}{{ reference }}{% if not forloop.last %}, {% endif %}{% endfor %}. Las pólizas con información local disponible continúan operativas.</div>{% endif %}
+
+<div class="invitation-workspace-layout">
+  <main class="invitation-workspace-main"><section class="workspace-card"><div class="section-heading"><div><span class="eyebrow">Información consolidada del ramo</span><h2>Registros disponibles</h2></div></div><div class="policy-search branch-data-search" role="search"><label for="invitation-filter">Buscar en el consolidado</label><input id="invitation-filter" type="search" placeholder="Placa, documento, nombre o póliza…" autocomplete="off" data-invitation-filter></div>{% include "cotizacion_colectivos/_invitation_operational_table.html" with show_policy_column=True %}</section>
+  {% if previews %}<details class="workspace-card invitation-technical"><summary>Información de plantillas</summary><div class="workspace-accordion-grid">{% for preview in previews %}<article class="relation-row"><div><strong>{{ preview.template.insurer_name }}</strong><span>{{ preview.template.purpose }}</span><small>{{ preview.rows }} registros{% if preview.output_files > 1 %} · {{ preview.output_files }} archivos sin truncamiento{% endif %}</small></div>{% if preview.missing_required %}<details><summary>Campos manuales pendientes</summary><ul>{% for field in preview.missing_required %}<li>{{ field }}</li>{% endfor %}</ul></details>{% endif %}</article>{% endfor %}</div></details>{% endif %}</main>
+  <aside class="workspace-card invitation-actions-panel" aria-label="Acciones del ramo">{% include "cotizacion_colectivos/_invitation_actions.html" with consolidated=True %}</aside>
+</div>
+<script src="{% static 'js/colectivos-invitations.js' %}" defer></script>
+{% endblock %}

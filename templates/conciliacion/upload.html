@@ -1,0 +1,106 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conciliador de Facturación | A&amp;S</title>
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/tools-common.css' %}">
+  <link rel="stylesheet" href="{% static 'css/conciliacion.css' %}">
+  <script defer src="{% static 'js/conciliacion.js' %}"></script>
+</head>
+<body class="tool-page">
+  <a class="skip-link" href="#contenido">Ir al contenido principal</a>
+  <header class="tool-header">
+    <a href="{% url 'public_home' %}" class="tool-brand" aria-label="Volver al Banco de Herramientas">
+      <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S">
+      <span>Banco de Herramientas</span>
+    </a>
+  </header>
+
+  <main id="contenido" class="tool-shell">
+    <section class="tool-heading">
+      <span class="eyebrow">Herramienta pública</span>
+      <h1>Conciliador de Facturación</h1>
+      <p>Concilie la relación de asegurados contra el cobro de la aseguradora por ramo.
+         El proceso es efímero: los archivos no se almacenan.</p>
+      <div class="tool-banner is-warn">Por el momento, esta herramienta solo soporta la conciliación de facturación de pólizas de <strong>SURA</strong>.</div>
+    </section>
+
+    <section class="tool-card" aria-labelledby="form-title">
+      <h2 id="form-title">Datos de la conciliación</h2>
+      <form method="post" enctype="multipart/form-data" data-conc-form novalidate>
+        {% csrf_token %}
+
+        <div class="tool-fields">
+          <div class="tool-field">
+            <label for="{{ form.ramo.id_for_label }}">Ramo</label>
+            {{ form.ramo }}
+            {% if form.ramo.errors %}<p class="tool-error" role="alert">{{ form.ramo.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="tool-field">
+            <label for="{{ form.poliza.id_for_label }}">Número de póliza</label>
+            {{ form.poliza }}
+            {% if form.poliza.errors %}<p class="tool-error" role="alert">{{ form.poliza.errors|striptags }}</p>{% endif %}
+          </div>
+        </div>
+
+        <div class="conc-slot-group">
+          <h3>Archivos de la aseguradora</h3>
+          <div class="conc-slots">
+            {% include "conciliacion/_slot.html" with field=form.cobro slot="cobro" slotdata=slots_iniciales_map.cobro %}
+            {% include "conciliacion/_slot.html" with field=form.recibo slot="recibo" slotdata=slots_iniciales_map.recibo %}
+          </div>
+        </div>
+
+        <div class="conc-slot-group">
+          <h3>Novedades</h3>
+          <p class="tool-muted">La relación de asegurados y las personas se consultan siempre directo en Zoho, filtradas por la póliza indicada arriba. Novedades solo se resuelve por API en los ramos que lo soportan; en los demás (p. ej. VG Deudores, cuya novedad la reporta el banco) se sigue subiendo a mano.</p>
+          <div class="conc-slots">
+            {% include "conciliacion/_slot.html" with field=form.novedades slot="novedades" slotdata=slots_iniciales_map.novedades %}
+          </div>
+        </div>
+
+        {% if processing_error %}
+          <div class="tool-error tool-error--block" role="alert">
+            <strong>No fue posible procesar la conciliación</strong><br>{{ processing_error }}
+          </div>
+        {% endif %}
+
+        <button class="tool-button tool-button--block" type="submit" data-conc-submit>Enviar y conciliar</button>
+        <p class="tool-progress" data-conc-progress hidden role="status">Conciliando… esto puede tomar algunos segundos.</p>
+      </form>
+    </section>
+
+    <section class="tool-result" data-conc-result hidden aria-labelledby="result-title">
+      <h2 id="result-title">Resultado de la conciliación</h2>
+      <div class="tool-meta-grid" data-result-meta></div>
+      <div class="tool-banner" data-result-banner></div>
+      <div class="conc-incidents" data-result-incidents hidden>
+        <h3>Incidentes por tipo</h3>
+        <ul data-incidents-list></ul>
+      </div>
+      <div class="conc-cobros" data-cobros-section hidden>
+        <h3>Cobros en Zoho</h3>
+        <p class="tool-muted" data-cobros-empty hidden>No se encontraron cobros para esta póliza en Zoho.</p>
+        <div class="conc-cobros-field" data-cobros-field hidden>
+          <select id="conc-cobro-select" data-cobros-select aria-label="Cobro"></select>
+        </div>
+        <div class="conc-cobro-actions">
+          <a class="tool-button" data-action-facturar href="#" target="_blank" rel="noopener noreferrer" hidden>Facturar cobro</a>
+          <a class="tool-button tool-button--secondary" data-poliza-link href="#" target="_blank" rel="noopener noreferrer" hidden>Ver póliza</a>
+        </div>
+      </div>
+      <div class="tool-result-actions">
+        <button class="tool-button tool-button--tertiary" type="button" data-action-download hidden>Descargar Excel de incidentes</button>
+        <button class="tool-button tool-button--tertiary" type="button" data-action-reset>Nueva conciliación</button>
+      </div>
+    </section>
+  </main>
+
+  <script type="application/json" id="conc-slots-catalog">{{ slots_catalog_json|safe }}</script>
+  <script type="application/json" id="conc-novedades-catalog">{{ novedades_api_catalog_json|safe }}</script>
+</body>
+</html>

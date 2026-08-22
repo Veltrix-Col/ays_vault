@@ -1,0 +1,22 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% load static %}
+{% block title %}Enlace listo{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Migas de pan">{% if policy_token %}<a href="{% url 'cotizacion_colectivos:policy_detail' policy_token %}">Volver a la póliza</a>{% else %}<a href="{% url 'cotizacion_colectivos:request_detail' item.public_id %}">Solicitud {{ item.public_id }}</a>{% endif %}<span>/</span><span>Enlace externo</span></nav>
+<header class="detail-hero"><span class="eyebrow">Enlace externo listo</span><h1>{{ item.get_request_type_display }}</h1><span class="state-chip">{{ item.policies.count|default:1 }} póliza{{ item.policies.count|pluralize }}</span></header>
+{% if invitation_sent %}<div class="status-message" role="status">El correo fue enviado. El enlace sigue siendo el mismo.</div>{% endif %}
+{% if success_message %}<div class="status-message" role="status">{{ success_message }}</div>{% endif %}
+<section class="relation-card">
+  <h2>Copiar y compartir</h2>
+  <p>Copie el enlace para compartirlo con el cliente. Vence el {{ expires_at }} y puede revocarse o generarse nuevamente.</p>
+  <label for="generated-link">Enlace seguro</label>
+  <textarea id="generated-link" class="generated-link" readonly rows="4">{{ generated_url }}</textarea>
+  <div class="policy-actions"><button type="button" data-copy-target="generated-link">Copiar enlace</button><a class="button-link" href="{{ generated_url }}" target="_blank" rel="noopener noreferrer">Abrir enlace</a><form method="post" action="{% url 'cotizacion_colectivos:request_external_access_quick_regenerate' item.public_id %}" onsubmit="return confirm('El enlace anterior dejará de funcionar. ¿Desea generar uno nuevo?');">{% csrf_token %}<button type="submit">Generar nuevo</button></form><form method="post" action="{% url 'cotizacion_colectivos:request_external_access_revoke' item.public_id %}" onsubmit="return confirm('¿Desea revocar el enlace vigente?');">{% csrf_token %}<button type="submit" class="button-link--secondary">Revocar</button></form>{% if policy_token %}<a class="button-link button-link--secondary" href="{% url 'cotizacion_colectivos:policy_detail' policy_token %}">Volver a la póliza</a>{% endif %}</div>
+</section>
+<section class="relation-card">
+  <h2>Enviar por correo (opcional)</h2>
+  <p>Puede omitir este paso y compartir el enlace por un canal autorizado.</p>
+  <form method="post" action="{% url 'cotizacion_colectivos:request_external_access_email' item.public_id %}">{% csrf_token %}{{ email_form.as_p }}<input type="hidden" name="access_token" value="{{ generated_token }}"><button type="submit">Enviar enlace</button></form>
+</section>
+<script src="{% static 'js/colectivos-access.js' %}" defer></script>
+{% endblock %}

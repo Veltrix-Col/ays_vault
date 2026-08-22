@@ -102,16 +102,25 @@ class PendingSensitiveOperationTests(TestCase):
         self.assertEqual(query["operation"], [str(operation_id)])
         return operation_id, response
 
-    def test_login_opens_fixed_30_minute_window_bound_to_same_session(self):
+    def test_login_opens_fixed_60_minute_window_bound_to_same_session(self):
         self.login_user(self.leader)
+        recovery_page = self.client.get(reverse("recovery_codes_confirm"))
+        self.assertContains(
+            recovery_page,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png",
+        )
+        self.assertNotContains(
+            recovery_page,
+            "/static/img/branding/logo-ays-azul.png",
+        )
         session_key = self.client.session.session_key
         window = SensitiveOperationWindow.objects.get(
             user=self.leader,
             revoked_at__isnull=True,
         )
         lifetime = (window.expires_at - window.created_at).total_seconds()
-        self.assertGreaterEqual(lifetime, 1799)
-        self.assertLessEqual(lifetime, 1801)
+        self.assertGreaterEqual(lifetime, 3599)
+        self.assertLessEqual(lifetime, 3601)
 
         window.expires_at = timezone.now() - timedelta(seconds=1)
         window.save(update_fields=["expires_at"])
@@ -121,6 +130,11 @@ class PendingSensitiveOperationTests(TestCase):
         )
         self.assertContains(page, 'name="password"', count=1)
         self.assertNotContains(page, 'name="token"')
+        self.assertContains(
+            page,
+            "/static/img/branding/cardmanager/Logo-CardManager-CO-BLANCO.png",
+        )
+        self.assertNotContains(page, "/static/img/branding/logo-ays-azul.png")
         response = self.client.post(
             reverse("vault:reauthenticate"),
             {
@@ -140,8 +154,8 @@ class PendingSensitiveOperationTests(TestCase):
             revoked_at__isnull=True,
         )
         renewed_lifetime = (renewed.expires_at - renewed.created_at).total_seconds()
-        self.assertGreaterEqual(renewed_lifetime, 1799)
-        self.assertLessEqual(renewed_lifetime, 1801)
+        self.assertGreaterEqual(renewed_lifetime, 3599)
+        self.assertLessEqual(renewed_lifetime, 3601)
 
     def complete_reset(self, operation_id):
         return self.client.post(

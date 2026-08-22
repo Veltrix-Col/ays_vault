@@ -66,6 +66,24 @@
   padding: clamp(38px, 7vh, 72px) 0;
 }
 
+.tool-search { margin-bottom: 34px; padding: 22px; border: 1px solid var(--line); border-radius: 22px; background: rgba(255,255,255,.9); }
+.tool-search label { display: block; margin-bottom: 8px; color: var(--navy); font-weight: 800; }
+.tool-search input { box-sizing: border-box; width: 100%; min-height: 48px; padding: 11px 15px; border: 1px solid rgba(21,32,54,.22); border-radius: 14px; font: inherit; }
+.tool-search input:focus-visible { outline: 3px solid rgba(0, 124, 255, .25); outline-offset: 2px; border-color: var(--blue); }
+.tool-search p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.application-areas { display: grid; gap: 38px; }
+.application-area[hidden], .application-card[hidden] { display: none; }
+.area-heading { margin-bottom: 14px; }
+.area-heading span { color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.area-heading h2 { margin: 2px 0 0; color: var(--navy); font-size: clamp(24px,3vw,34px); }
+.tool-search-empty { padding: 36px; text-align: center; color: var(--muted); }
+.tool-results[hidden], [data-area-packages][hidden] { display: none; }
+.tool-results-grid { margin-top: 14px; }
+.tool-result-card { min-height: 230px; }
+.area-tool-count { display: inline-block; margin-top: 15px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.portal-breadcrumb { margin-bottom: 28px; display: flex; gap: 8px; color: var(--muted); font-size: 13px; }
+.portal-breadcrumb a { color: var(--blue-dark); font-weight: 700; }
+
 .application-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -73,7 +91,7 @@
 }
 
 .application-card {
-  min-height: 310px;
+  min-height: 280px;
   padding: clamp(26px, 4vw, 38px);
   display: flex;
   flex-direction: column;
@@ -147,6 +165,7 @@
 
 .application-copy h2 { margin: 0 0 10px; font-size: 30px; color: var(--navy); }
 .application-copy p { max-width: 470px; margin: 0; line-height: 1.7; }
+.application-area-label { display: inline-block; margin-bottom: 7px; color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .application-action { margin-top: auto; padding-top: 30px; }
 
 .portal-button {
@@ -170,6 +189,26 @@
   box-shadow: 0 12px 26px rgba(0, 43, 255, .22);
 }
 .portal-button:focus-visible { outline-color: var(--cyan); }
+.operational-center {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 22px;
+  margin-top: 28px;
+  padding: 24px 28px;
+  color: #fff;
+  border-radius: 26px 26px 26px 9px;
+  background: linear-gradient(135deg, var(--navy), #203a67);
+  box-shadow: 0 18px 38px rgba(21, 32, 54, .18);
+}
+.operational-center h2, .operational-center p { margin: 0; }
+.operational-center h2 { margin-bottom: 5px; font-size: clamp(22px, 3vw, 30px); }
+.operational-center p { max-width: 680px; color: #dce8f5; line-height: 1.55; }
+.operational-center .application-area-label { color: #78ddff; }
+.operational-center-icon { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 18px 18px 18px 6px; background: rgba(0, 204, 255, .16); color: #78ddff; }
+.operational-center-icon svg { width: 32px; height: 32px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.portal-button--operational { min-width: 154px; background: #fff; color: var(--navy); }
+.portal-button--operational:hover { color: #fff; }
 .access-unavailable {
   display: inline-flex;
   align-items: center;
@@ -212,6 +251,8 @@
   .application-logo--cardmanager { width: min(100%, 240px); height: 116px; }
   .application-logo--cardmanager img { width: 305px; }
   .portal-button { width: 100%; }
+  .operational-center { grid-template-columns: 1fr; padding: 24px; }
+  .operational-center-icon { width: 52px; height: 52px; }
   .portal-footer { align-items: flex-start; flex-direction: column; gap: 5px; }
 }
 

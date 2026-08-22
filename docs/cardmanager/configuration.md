@@ -1,0 +1,27 @@
+# Configuración de CardManager
+
+No incluya valores reales en documentación ni control de versiones.
+
+## Aplicación y base de datos
+
+`APP_ENV`, `DEBUG`, `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `TOOLS_ACCESS_MODE`, `TOOLS_DELEGATED_ACCESS_VALIDATOR`.
+
+Fuera de desarrollo, PostgreSQL, `SECRET_KEY`, `FIELD_ENCRYPTION_KEY` y `FIELD_FINGERPRINT_KEY` son obligatorios. `local_public` solo se permite con DEBUG.
+
+## Identidad y seguridad
+
+`FIELD_ENCRYPTION_KEY`, `FIELD_FINGERPRINT_KEY`, `SESSION_INACTIVITY_SECONDS`, `SESSION_ACTIVITY_THROTTLE_SECONDS`, `REAUTH_TTL_SECONDS`, `MFA_FAILURE_LIMIT`, `MFA_ISSUER`, `OFFICE_START`, `OFFICE_END`, `VAULT_BASE_URL`.
+
+## Correo
+
+Comunes: `ALERT_EMAIL_BACKEND`, `ALERT_EMAIL_FROM`, `ALERT_EMAIL_ADMIN`, `ALERT_EMAIL_LEADER`, `DEFAULT_FROM_EMAIL`, `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_RETRIES`.
+
+SMTP: `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`.
+
+Graph: `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER`.
+
+En producción se rechazan consola/backends desconocidos y configuraciones incompletas. Las pruebas fuerzan correo local y no heredan SMTP/Graph.
+
+## Reportes
+
+`REPORT_XLSX_MAX_ROWS`, `REPORT_PDF_MAX_ROWS`, `REPORT_DEFAULT_MAX_DAYS`, `REPORT_LARGE_EXPORT_ALERT_THRESHOLD`.

@@ -63,6 +63,9 @@ class IntegralVaultFlowTests(TestCase):
             company_name=COMPANY,
             client_name="Cliente Seguro",
             cardholder_name="Titular Autorizado",
+            identity_document="1000000001",
+            email="titular@example.invalid",
+            phone="+57 300 000 0001",
             brand="VISA",
             purpose="Operación autorizada",
             created_by=cls.leader,
@@ -137,9 +140,9 @@ class IntegralVaultFlowTests(TestCase):
                 {"intent": intent, "password": PASSWORD},
             )
             self.assertEqual(identity.status_code, 200)
-            self.assertContains(identity, "Relacione la consulta con Zoho")
+            self.assertContains(identity, "Relacione la consulta con la póliza")
         else:
-            self.assertIn("Número certificado recibo - Zoho", payload["form_html"])
+            self.assertIn("Póliza", payload["form_html"])
             self.assertNotIn("Ingrese su contraseña", payload["form_html"])
         confirm = client.post(
             reverse("vault:protected_confirm"),
@@ -218,10 +221,10 @@ class IntegralVaultFlowTests(TestCase):
         html = response.content.decode()
         self.assertEqual(html.count(self.card.cardholder_name), 1)
         self.assertLess(
-            html.index('class="cardholder-summary"'),
+            html.index('class="administrative-data"'),
             html.index("<h2>Datos protegidos</h2>"),
         )
-        holder_start = html.index('<section class="cardholder-summary"')
+        holder_start = html.index('<section class="administrative-data"')
         holder_end = html.index(
             '<section class="panel protected-data-panel"', holder_start
         )
@@ -229,9 +232,11 @@ class IntegralVaultFlowTests(TestCase):
         self.assertIn("Titular", holder_block)
         self.assertIn(self.card.cardholder_name, holder_block)
         self.assertIn("data-cardholder-value", holder_block)
-        self.assertIn("data-copy-cardholder", holder_block)
+        self.assertIn('data-copy-visible="visible-cardholder"', holder_block)
+        self.assertIn('data-copy-visible="visible-document"', holder_block)
+        self.assertIn('data-copy-visible="visible-email"', holder_block)
+        self.assertIn('data-copy-visible="visible-phone"', holder_block)
         self.assertIn('type="button"', holder_block)
-        self.assertIn('aria-label="Copiar nombre del titular"', holder_block)
         self.assertIn('aria-live="polite"', holder_block)
         self.assertNotIn("Revelar", holder_block)
         self.assertNotIn("protected-action", holder_block)
@@ -269,12 +274,12 @@ class IntegralVaultFlowTests(TestCase):
         client = self.authenticated_client(self.analyst)
         window, context = self.authorize_operation(client, self.analyst)
         lifetime = (window.expires_at - window.created_at).total_seconds()
-        self.assertGreaterEqual(lifetime, 1799)
-        self.assertLessEqual(lifetime, 1801)
+        self.assertGreaterEqual(lifetime, 3599)
+        self.assertLessEqual(lifetime, 3601)
         self.assertFalse(hasattr(window, "reason"))
         self.assertFalse(hasattr(window, "internal_reference"))
         self.assertEqual(context.card, self.card)
-        self.assertEqual(context.reason, "Consulta asociada a certificado o recibo Zoho")
+        self.assertEqual(context.reason, "Consulta asociada a póliza")
         self.assertEqual(context.internal_reference, "POL-123456")
 
     def test_three_fields_of_same_card_share_context_and_audit_individually(self):
@@ -312,13 +317,13 @@ class IntegralVaultFlowTests(TestCase):
         first_context.refresh_from_db()
         self.assertIsNotNone(first_context.closed_at)
         self.assertEqual(second_context.card, self.other_card)
-        self.assertEqual(second_context.reason, "Consulta asociada a certificado o recibo Zoho")
+        self.assertEqual(second_context.reason, "Consulta asociada a póliza")
         self.assertEqual(second_context.internal_reference, "REF-SEGUNDA")
         self.assertEqual(second_context.reason, first_context.reason)
         response = client.post(reverse("vault:reveal", args=[self.other_card.pk]), {"field": "expiry", "action": "reveal"})
         self.assertEqual(response.status_code, 200)
         event = AuditEvent.objects.filter(action="REVEAL", card=self.other_card).latest("sequence")
-        self.assertEqual(event.reason, "Consulta asociada a certificado o recibo Zoho")
+        self.assertEqual(event.reason, "Consulta asociada a póliza")
         self.assertEqual(event.metadata["reference"], "REF-SEGUNDA")
         self.assertNotIn("REF-PRIMERA", str(event.metadata))
 
@@ -332,7 +337,7 @@ class IntegralVaultFlowTests(TestCase):
             client, self.analyst, reason="Nueva operación", reference="REF-2", expect_identity=False,
         )
         self.assertEqual(same_window.pk, window.pk)
-        self.assertEqual(second_context.reason, "Consulta asociada a certificado o recibo Zoho")
+        self.assertEqual(second_context.reason, "Consulta asociada a póliza")
 
     def test_identity_must_succeed_before_context_and_context_rejects_protected_values(self):
         client = self.authenticated_client(self.analyst)
@@ -340,7 +345,7 @@ class IntegralVaultFlowTests(TestCase):
         intent = start.json()["intent"]
         bad = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": "incorrecta"})
         self.assertEqual(bad.status_code, 422)
-        self.assertNotContains(bad, "Número certificado recibo - Zoho", status_code=422)
+        self.assertNotContains(bad, "Póliza", status_code=422)
         premature = client.post(reverse("vault:protected_confirm"), {"intent": intent, "zoho_reference": "POL-1"})
         self.assertEqual(premature.status_code, 409)
         ok = client.post(reverse("vault:protected_reauthenticate"), {"intent": intent, "password": PASSWORD})
@@ -471,6 +476,9 @@ class IntegralVaultFlowTests(TestCase):
             "company_name": "Empresa Nueva S.A.S.",
             "client_name": "Cliente Nuevo",
             "cardholder_name": "Titular Nuevo",
+            "identity_document": "1000000002",
+            "email": "nuevo@example.invalid",
+            "phone": "+57 300 000 0002",
             "brand": "VISA",
             "purpose": "Renovación",
             "active": "on",
@@ -487,6 +495,9 @@ class IntegralVaultFlowTests(TestCase):
             "company_name": "Empresa Nueva Editada S.A.S.",
             "client_name": "Cliente Nuevo Editado",
             "cardholder_name": "Titular Nuevo",
+            "identity_document": "1000000002",
+            "email": "nuevo@example.invalid",
+            "phone": "+57 300 000 0002",
             "brand": "VISA",
             "purpose": "Renovación",
             "code": "",
@@ -501,6 +512,9 @@ class IntegralVaultFlowTests(TestCase):
             "company_name": "Empresa Nueva Editada S.A.S.",
             "client_name": "Cliente Nuevo Editado",
             "cardholder_name": "Titular Nuevo",
+            "identity_document": "1000000002",
+            "email": "nuevo@example.invalid",
+            "phone": "+57 300 000 0002",
             "brand": "VISA",
             "purpose": "Renovación",
             "code": replacement,
@@ -518,6 +532,9 @@ class IntegralVaultFlowTests(TestCase):
             "company_name": "Empresa Pendiente S.A.S.",
             "client_name": "Cliente Pendiente",
             "cardholder_name": "Titular Pendiente",
+            "identity_document": "1000000003",
+            "email": "pendiente@example.invalid",
+            "phone": "+57 300 000 0003",
             "brand": "VISA",
             "purpose": "Pago pendiente seguro",
             "active": "on",
@@ -599,8 +616,8 @@ class IntegralVaultFlowTests(TestCase):
         window = SensitiveOperationWindow.objects.get(user=self.leader, revoked_at__isnull=True)
         original_expiry = window.expires_at
         lifetime = (window.expires_at - window.created_at).total_seconds()
-        self.assertGreaterEqual(lifetime, 1799)
-        self.assertLessEqual(lifetime, 1801)
+        self.assertGreaterEqual(lifetime, 3599)
+        self.assertLessEqual(lifetime, 3601)
 
         edit_page = client.get(reverse("vault:card_edit", args=[self.card.pk]))
         self.assertEqual(edit_page.status_code, 200)
@@ -616,6 +633,9 @@ class IntegralVaultFlowTests(TestCase):
                 "company_name": self.card.company_name,
                 "client_name": "Alias actualizado",
                 "cardholder_name": self.card.cardholder_name,
+                "identity_document": self.card.identity_document,
+                "email": self.card.email,
+                "phone": self.card.phone,
                 "brand": "VISA",
                 "purpose": self.card.purpose,
                 "code": "",
@@ -666,6 +686,9 @@ class IntegralVaultFlowTests(TestCase):
                 "company_name": "Empresa transversal S.A.S.",
                 "client_name": "Tarjeta ventana transversal",
                 "cardholder_name": "Titular transversal",
+                "identity_document": "1000000004",
+                "email": "transversal@example.invalid",
+                "phone": "+57 300 000 0004",
                 "brand": "VISA",
                 "purpose": "Operación transversal",
                 "active": "on",
@@ -688,6 +711,9 @@ class IntegralVaultFlowTests(TestCase):
                 "company_name": "Empresa transversal S.A.S.",
                 "client_name": "Tarjeta transversal editada",
                 "cardholder_name": "Titular transversal",
+                "identity_document": "1000000004",
+                "email": "transversal@example.invalid",
+                "phone": "+57 300 000 0004",
                 "brand": "VISA",
                 "purpose": "Operación transversal",
                 "code": "",
@@ -800,6 +826,9 @@ class IntegralVaultFlowTests(TestCase):
                 "client_name": self.card.client_name,
                 "company_name": self.card.company_name,
                 "cardholder_name": self.card.cardholder_name,
+                "identity_document": self.card.identity_document,
+                "email": self.card.email,
+                "phone": self.card.phone,
                 "brand": self.card.brand,
                 "purpose": self.card.purpose,
                 "code": "",
@@ -832,6 +861,9 @@ class IntegralVaultFlowTests(TestCase):
                 "company_name": COMPANY,
                 "client_name": "Alias inválido",
                 "cardholder_name": "Titular",
+                "identity_document": "1000000005",
+                "email": "invalido@example.invalid",
+                "phone": "+57 300 000 0005",
                 "brand": "MC",
                 "purpose": "Referencia",
                 "active": "on",

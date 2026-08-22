@@ -1,0 +1,25 @@
+/* Conciliador de Facturación — estilos específicos de la herramienta.
+   El header, la tarjeta, los botones y los componentes de resultado comunes
+   viven en tools-common.css (mismo lenguaje visual que Colectivos y SOAT). */
+
+.conc-slot-group { margin-top: 14px; }
+.conc-slot-group h3 { margin: 0 0 4px; color: #172137; font-size: 1.05rem; display: flex; align-items: center; gap: 10px; }
+.conc-slot-group > .tool-muted { margin: 0 0 14px; }
+
+.conc-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 14px; }
+
+.conc-slot-note { margin: 0; color: #8a5a00; font-size: .76rem; line-height: 1.5; }
+.conc-slot-note[hidden] { display: none; }
+
+.conc-incidents { margin-top: 18px; }
+.conc-incidents h3 { margin: 0 0 10px; color: #172137; font-size: 1rem; }
+.conc-incidents ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.conc-incidents li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 11px 14px; border: 1px solid #dfe4ed; border-radius: 11px; background: #f8fbfd; }
+.conc-incidents li span { color: #172137; font-size: .9rem; }
+.conc-incidents li strong { color: #172137; font-size: 1.05rem; }
+
+.conc-cobros { margin-top: 18px; }
+.conc-cobros h3 { margin: 0 0 10px; color: #172137; font-size: 1rem; }
+.conc-cobros-field { margin-bottom: 14px; max-width: 480px; }
+.conc-cobro-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.conc-cobro-actions .tool-button { flex: 0 0 auto; }

@@ -1,0 +1,13 @@
+{% extends 'cotizacion_colectivos/external/base.html' %}
+{% block title %}Vista previa de importación{% endblock %}
+{% block content %}
+<header class="external-hero"><p class="eyebrow">Validación técnica completada</p><h1>Vista previa del Excel</h1></header>
+<section class="external-card"><h2>Resumen funcional</h2><p>Esta vista no ha creado ni modificado el borrador de respuesta.</p>
+<div class="responsive-table"><table><tbody>
+<tr><th>Filas válidas</th><td>{{ item.summary.VALIDAS }}</td></tr><tr><th>Errores</th><td>{{ item.summary.ERRORES }}</td></tr><tr><th>Advertencias</th><td>{{ item.summary.ADVERTENCIAS }}</td></tr>
+<tr><th>Inclusiones</th><td>{{ item.summary.INCLUIR }}</td></tr><tr><th>Modificaciones</th><td>{{ item.summary.MODIFICAR }}</td></tr><tr><th>Retiros</th><td>{{ item.summary.RETIRAR }}</td></tr><tr><th>Sin cambios</th><td>{{ item.summary.SIN_CAMBIOS }}</td></tr>
+<tr><th>Duplicados</th><td>{{ item.summary.DUPLICADOS }}</td></tr><tr><th>Pagos en cero</th><td>{{ item.summary.PAGOS_CERO }}</td></tr><tr><th>Pagos negativos</th><td>{{ item.summary.PAGOS_NEGATIVOS }}</td></tr>
+</tbody></table></div><p>La confirmación creará una nueva versión de borrador de forma atómica.</p>
+<form method="post" action="{% url 'colectivos_external:confirm_excel_preview' token %}">{% csrf_token %}<button type="submit">Confirmar importación</button></form>
+<form method="post" action="{% url 'colectivos_external:cancel_excel_preview' token %}">{% csrf_token %}<button type="submit" class="secondary">Cancelar</button></form></section>
+{% endblock %}
