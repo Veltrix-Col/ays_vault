@@ -180,9 +180,7 @@ class IndividualQuotationForm(forms.Form):
                 if group.key == "vehicles":
                     zero_km = normalized_row.get("zero_km")
                     plate = normalized_row.get("plate")
-                    if zero_km == "Sí":
-                        normalized_row["plate"] = ""
-                    elif zero_km == "No" and not plate:
+                    if zero_km == "No" and not plate:
                         self.add_error(
                             "items_payload",
                             f"{group.singular.title()} {position} — Placa: es obligatoria cuando el vehículo no es 0 km.",

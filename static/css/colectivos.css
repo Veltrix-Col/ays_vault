@@ -4,9 +4,9 @@
 .colectivos-header { min-height: 76px; padding: 14px clamp(18px, 4vw, 56px); display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #fff; border-bottom: 1px solid #dfe4ed; }
 .colectivos-brand { display: flex; align-items: center; gap: 16px; color: #172137; text-decoration: none; font-weight: 700; }
 .colectivos-brand img { display: block; width: auto; height: 42px; }
-.header-actions { display: flex; align-items: center; gap: 12px; }
+.header-actions { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
 .header-actions > a { color: #245879; font-weight: 700; text-decoration: none; }
-.notification-link { position: relative; }
+.notification-link { position: relative; display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid #c7dce9; border-radius: 10px; background: #eef7fc; color: #174a6b !important; font-weight: 800; text-decoration: none; }
 .notification-link span { position: absolute; top: -10px; right: -10px; min-width: 18px; padding: 2px 5px; border-radius: 999px; background: #a21e2d; color: #fff; font-size: .65rem; text-align: center; }
 .environment-badge, .state-chip { display: inline-flex; align-items: center; border-radius: 999px; background: #e7f6ef; color: #176347; padding: 7px 12px; font-size: .82rem; font-weight: 700; }
 .environment-badge--production { background: #fff0df; color: #8a3f00; border: 1px solid #e7b57d; }
@@ -146,9 +146,10 @@
 .skip-link { position: absolute; left: -9999px; }
 .skip-link:focus { left: 12px; top: 12px; z-index: 10; background: #fff; padding: 10px; }
 @media (max-width: 760px) {
-  .colectivos-header { align-items: flex-start; }
+  .colectivos-header { align-items: flex-start; flex-wrap: wrap; }
+  .header-actions { width: 100%; justify-content: flex-end; }
   .colectivos-brand span { display: none; }
-  .environment-badge { font-size: .72rem; }
+  .environment-badge { max-width: 100%; font-size: .72rem; overflow-wrap: anywhere; }
   .search-choice-grid, .detail-grid, .branch-grid, .compact-grid, .builder-layout { grid-template-columns: 1fr; }
   .builder-summary { position: static; }
   .policy-selector-card dl { grid-template-columns: 1fr; }
@@ -366,3 +367,5 @@
 @media(max-width:1100px){.request-workspace-layout{grid-template-columns:minmax(0,1.5fr) minmax(340px,1fr)}}
 @media(max-width:1024px){.request-workspace-layout{grid-template-columns:1fr}.request-action-sidebar{grid-template-columns:repeat(2,minmax(0,1fr))}.request-action-sidebar .zoho-semantic-workspace{grid-column:1/-1}}
 @media(max-width:620px){.request-action-sidebar{grid-template-columns:1fr}.request-summary-grid{grid-template-columns:1fr}}
+.individual-decision-card{display:grid;gap:.75rem;margin-bottom:1rem}.individual-decision-card h2{margin:.1rem 0}.individual-decision-card p{margin:0;color:#405a70}.individual-decision-card .workspace-action-stack{display:flex;flex-wrap:wrap;gap:.6rem}.individual-decision-card .workspace-action-stack form{margin:0}.individual-decision-card--rejected{border-color:#e1b8b8;background:#fff8f8}.decision-pending .zoho-semantic-workspace{display:none}.individual-workspace--rejected .zoho-operational-card form,.individual-workspace--rejected .zoho-operational-card button{display:none!important}.individual-workspace--rejected .zoho-semantic-workspace .entity-actions,.individual-workspace--rejected .zoho-semantic-workspace .entity-association form,.individual-workspace--rejected .zoho-semantic-workspace [data-dialog-open],.individual-workspace--rejected .zoho-semantic-workspace dialog{display:none!important}.individual-workspace--rejected .zoho-semantic-workspace > form{display:none}
+@media(max-width:620px){.individual-decision-card .workspace-action-stack{display:grid}.individual-decision-card .workspace-action-stack form,.individual-decision-card .workspace-action-stack button{width:100%}}

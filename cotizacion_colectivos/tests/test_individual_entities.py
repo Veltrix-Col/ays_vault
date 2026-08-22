@@ -327,6 +327,11 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
         self.assertIn("Pendiente de placa", javascript)
         self.assertIn("Complete la placa para buscar o crear este vehículo en Zoho.", javascript)
 
+    def test_vehicle_edit_uses_existing_loading_feedback(self):
+        loading = (Path(__file__).parents[2] / "static" / "js" / "colectivos-loading.js").read_text(encoding="utf-8")
+        self.assertIn("/entidad/", loading)
+        self.assertIn("Actualizando vehículo…", loading)
+
     def test_effective_data_is_moved_inside_entity_cards_and_insured_edit_is_unconditional(self):
         javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-detail.js").read_text(encoding="utf-8")
         self.assertIn('document.querySelectorAll(".zoho-effective-summary").forEach((node) => node.remove())', javascript)

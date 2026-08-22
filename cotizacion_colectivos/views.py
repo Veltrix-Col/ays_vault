@@ -1526,8 +1526,52 @@ def request_list(request):
     if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     form = RequestFilterForm(request.GET, public_access=public_internal_access_enabled())
+    # The filter uses the same values sent to Tasks.Responsable.  Options are
+    # loaded once (metadata is cached), never once per inbox row; local user
+    # assignments remain available for legacy request tasks.
+    responsible_choices = [("", "Todos"), ("__pending__", "Pendiente de selección")]
+    if not public_internal_access_enabled():
+        try:
+            responsible_choices.extend(
+                (option.actual_value, option.display_value)
+                for option in task_responsible_options()
+            )
+        except Exception:
+            pass
+    if not public_internal_access_enabled():
+        try:
+            responsible_choices.extend(
+                (f"__user:{user.pk}", user.get_full_name() or user.username)
+                for user in get_user_model().objects.filter(is_active=True).order_by("username")
+            )
+        except Exception:
+            pass
+    try:
+        for access in AccesoCotizacionIndividual.objects.only("encrypted_context", "safe_metadata").iterator(chunk_size=200):
+            try:
+                context = json.loads(decrypt(access.encrypted_context))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                context = {}
+            safe_access_metadata = access.safe_metadata or {}
+            actual = str(context.get("task_responsible") or safe_access_metadata.get("task_responsible") or "").strip()
+            display = str(context.get("task_responsible_display") or safe_access_metadata.get("task_responsible_display") or actual).strip()
+            if actual and display:
+                responsible_choices.append((actual, display))
+    except Exception:
+        pass
+    requested_responsible = str(request.GET.get("task_responsible") or "").strip()
+    if requested_responsible and requested_responsible not in {value for value, _label in responsible_choices}:
+        # Keep an unknown submitted value valid so it produces an empty result,
+        # rather than silently dropping every other filter.
+        responsible_choices.append((requested_responsible, requested_responsible))
+    form.fields["task_responsible"].choices = tuple(dict.fromkeys(responsible_choices))
     queryset = SolicitudColectivo.objects.select_related("assigned_to").prefetch_related(
         "policies",
+        Prefetch(
+            "task_outbox",
+            queryset=ColectivosTaskOutbox.objects.order_by("-updated_at", "-pk"),
+            to_attr="inbox_task_outboxes",
+        ),
         Prefetch(
             "external_accesses",
             queryset=AccesoExternoSolicitudColectivo.objects.order_by("-created_at", "-pk"),
@@ -1582,6 +1626,10 @@ def request_list(request):
             queryset = queryset.filter(request_type=data["request_type"])
         if data.get("assigned_to"):
             queryset = queryset.filter(assigned_to=data["assigned_to"])
+        if data.get("task_responsible"):
+            selected_responsible = data["task_responsible"]
+            if selected_responsible.startswith("__user:"):
+                queryset = queryset.filter(assigned_to_id=selected_responsible.split(":", 1)[1])
         if data["created_from"]:
             queryset = queryset.filter(created_at__date__gte=data["created_from"])
         if data["created_to"]:
@@ -1625,6 +1673,19 @@ def request_list(request):
         item.inbox_detail_url = reverse(
             "cotizacion_colectivos:request_detail", args=[item.public_id],
         )
+        selected_responsible = data.get("task_responsible") if form.is_valid() else ""
+        if selected_responsible and not selected_responsible.startswith("__user:"):
+            task_values = []
+            for outbox in getattr(item, "inbox_task_outboxes", ()):
+                try:
+                    task_values.append(str(json.loads(decrypt(outbox.encrypted_payload)).get("Responsable") or "").strip())
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            if selected_responsible == "__pending__":
+                if any(task_values):
+                    continue
+            elif selected_responsible not in task_values:
+                continue
         operational_entries.append(item)
 
     individual_entries = []
@@ -1679,6 +1740,19 @@ def request_list(request):
                 continue
             if data.get("assigned_to") and data["assigned_to"].pk != access.created_by_id:
                 continue
+            selected_responsible = data.get("task_responsible")
+            if selected_responsible:
+                safe_access_metadata = access.safe_metadata or {}
+                stored_responsible = str(
+                    context.get("task_responsible")
+                    or safe_access_metadata.get("task_responsible")
+                    or ""
+                ).strip()
+                if selected_responsible == "__pending__":
+                    if stored_responsible:
+                        continue
+                elif not selected_responsible.startswith("__user:") and stored_responsible != selected_responsible:
+                    continue
             if data.get("created_from") and access.created_at.date() < data["created_from"]:
                 continue
             if data.get("created_to") and access.created_at.date() > data["created_to"]:
@@ -2011,16 +2085,16 @@ def request_publish_task(request, public_id, outbox_id):
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
     outbox = get_object_or_404(ColectivosTaskOutbox, pk=outbox_id, request=item)
     if outbox.status == outbox.Status.PUBLISHED:
-        messages.info(request, "La Task ya fue publicada.")
+        messages.info(request, "La Tarea ya fue publicada.")
     else:
         publish_task_outbox(outbox.pk)
         outbox.refresh_from_db()
         if outbox.status == outbox.Status.PUBLISHED:
-            messages.success(request, "Task publicada correctamente en Zoho Sandbox.")
+            messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
         elif outbox.status == outbox.Status.RECONCILE:
             messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
         else:
-            messages.error(request, "La Task no pudo publicarse; revise el estado del expediente.")
+            messages.error(request, "La Tarea no pudo publicarse; revise el estado del expediente.")
     return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
 
 
@@ -2404,7 +2478,10 @@ def individual_accept(request, token):
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError) as exc:
         raise Http404("Respuesta no encontrada") from exc
-    actor = get_internal_actor(request, create=True)
+    if _individual_acceptance_status(quotation) == "rejected":
+        messages.warning(request, "La cotización está rechazada; debe reactivarse antes de aceptarla.")
+        return redirect("cotizacion_colectivos:individual_expedient", token=sign_receipt(quotation.public_id))
+    actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
     quotation = accept_individual_quotation(quotation=quotation, actor=actor)
     try:
         resolve_accepted_person(quotation=quotation)
@@ -2420,12 +2497,90 @@ def individual_accept(request, token):
 
 @never_cache
 @require_http_methods(["POST"])
+def individual_reject(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
+        with transaction.atomic():
+            quotation = CotizacionIndividual.objects.select_for_update().get(public_id=public_id)
+            status = _individual_acceptance_status(quotation)
+            if status != "pending":
+                raise ValidationError("La cotización ya tiene una decisión y no puede rechazarse.")
+            metadata = dict(quotation.safe_metadata or {})
+            acceptance = dict(metadata.get("acceptance") or {})
+            acceptance.update({"status": "rejected", "rejected_at": timezone.now().isoformat(), "rejected_by": int(actor.pk) if actor is not None else None})
+            metadata["acceptance"] = acceptance
+            quotation.safe_metadata = metadata
+            quotation.save(update_fields=("safe_metadata",))
+            audit(request, "UPDATE", reason="Cotización Individual rechazada.", metadata={"quotation_id": str(quotation.public_id), "status": "rejected"})
+        messages.success(request, "La cotización fue rechazada y quedó conservada para consulta y trazabilidad.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_reactivate(request, token):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        actor = request.user if request.user.is_authenticated else get_internal_actor(request, create=True)
+        with transaction.atomic():
+            quotation = CotizacionIndividual.objects.select_for_update().get(public_id=public_id)
+            if _individual_acceptance_status(quotation) != "rejected":
+                raise ValidationError("Sólo una cotización rechazada puede reactivarse.")
+            metadata = dict(quotation.safe_metadata or {})
+            acceptance = dict(metadata.get("acceptance") or {})
+            acceptance.update({"status": "pending", "reactivated_at": timezone.now().isoformat(), "reactivated_by": int(actor.pk) if actor is not None else None})
+            metadata["acceptance"] = acceptance
+            quotation.safe_metadata = metadata
+            quotation.save(update_fields=("safe_metadata",))
+            audit(request, "UPDATE", reason="Cotización Individual reactivada.", metadata={"quotation_id": str(quotation.public_id), "status": "pending"})
+        messages.success(request, "La cotización fue reactivada y quedó pendiente de decisión.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+def _individual_acceptance_status(quotation):
+    metadata = quotation.safe_metadata if isinstance(quotation.safe_metadata, dict) else {}
+    acceptance = metadata.get("acceptance") if isinstance(metadata.get("acceptance"), dict) else {}
+    return str(acceptance.get("status") or "pending").strip().lower()
+
+
+def _ensure_individual_can_operate_zoho(quotation):
+    if _individual_acceptance_status(quotation) != "accepted":
+        raise ValidationError("La cotización debe estar aceptada para operar en Zoho.")
+
+
+def _ensure_individual_can_manage_task(quotation):
+    """Task assignment/publication predates the decision gate.
+
+    Pending responses may still have a COTIZACION outbox that needs a
+    responsible or controlled publication.  Rejected quotations remain
+    closed to any new operation.
+    """
+    if _individual_acceptance_status(quotation) == "rejected":
+        raise ValidationError("La cotización rechazada no permite gestionar la Task.")
+
+
+@never_cache
+@require_http_methods(["POST"])
 def individual_create_person(request, token):
     if not has_internal_permission(request, "approve_responses"):
         return permission_denied_response()
     try:
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        _ensure_individual_can_operate_zoho(quotation)
         resolve_accepted_person(quotation=quotation)
         if quotation.branch_slug == "movilidad":
             resolve_mobility_entities(quotation=quotation)
@@ -2502,6 +2657,7 @@ def individual_complete_person(request, token):
     try:
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        _ensure_individual_can_operate_zoho(quotation)
         form = PersonCompletionForm(request.POST)
         if not form.is_valid():
             for error in form.errors.values():
@@ -2539,6 +2695,8 @@ def individual_complete_person(request, token):
         messages.success(request, "Datos de la persona guardados; se volvió a validar en Zoho.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
+    except ValidationError as exc:
+        messages.warning(request, str(exc))
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
@@ -2555,6 +2713,7 @@ def individual_update_entity(request, token, entity, vehicle_index):
         raise Http404("Entidad no encontrada")
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         metadata = dict(quotation.safe_metadata or {})
         entities = metadata.get("zoho_entities") if isinstance(metadata.get("zoho_entities"), dict) else {}
         bucket = list(entities.get("risks" if entity == "risk" else "subrisks") or [])
@@ -2585,6 +2744,7 @@ def individual_create_risk(request, token, vehicle_index):
         return permission_denied_response()
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
         risks = list(entities.get("risks") or [])
         if vehicle_index < 0 or vehicle_index >= len(risks):
@@ -2655,6 +2815,7 @@ def individual_create_subrisk(request, token, vehicle_index):
         return permission_denied_response()
     try:
         quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
         entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
         subrisks = list(entities.get("subrisks") or [])
         if vehicle_index < 0 or vehicle_index >= len(subrisks):
@@ -2686,6 +2847,7 @@ def individual_update_responsible(request, token):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        _ensure_individual_can_manage_task(quotation)
         options = task_responsible_options()
         option = next((item for item in options if item.actual_value == str(request.POST.get("responsible") or "").strip()), None)
         if option is None:
@@ -2724,15 +2886,15 @@ def individual_update_responsible(request, token):
             str(quotation.public_id), bool(outbox), bool(getattr(option, "actual_value", "")), bool(email), publish_scheduled, publish_result,
         )
         if publish_result == "published":
-            messages.success(request, "Responsable actualizado y Task publicada correctamente.")
+            messages.success(request, "Responsable actualizado y Tarea publicada correctamente.")
         elif not email:
-            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Task.")
+            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Tarea.")
         elif publish_result == "reconcile":
-            messages.warning(request, "Responsable actualizado; la Task requiere conciliación y no se reintentará automáticamente.")
+            messages.warning(request, "Responsable actualizado; la Tarea requiere conciliación y no se reintentará automáticamente.")
         elif publish_result == "blocked":
-            messages.warning(request, "Responsable actualizado; la Task permanece bloqueada por una causa operativa previa.")
+            messages.warning(request, "Responsable actualizado; la Tarea permanece bloqueada por una causa operativa previa.")
         else:
-            messages.success(request, "Responsable actualizado; la Task quedó lista para publicación controlada.")
+            messages.success(request, "Responsable actualizado; la Tarea quedó lista para publicación controlada.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
         raise Http404("Respuesta no encontrada")
     except ValidationError as exc:
@@ -2747,18 +2909,19 @@ def individual_publish_task(request, token):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        _ensure_individual_can_manage_task(quotation)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
         if outbox is None:
-            messages.warning(request, "Todavía no existe una intención de Task para publicar.")
+            messages.warning(request, "Todavía no existe una intención de Tarea para publicar.")
         else:
             publish_task_outbox(outbox.pk)
             outbox.refresh_from_db()
             if outbox.status == outbox.Status.PUBLISHED:
-                messages.success(request, "Task publicada correctamente.")
+                messages.success(request, "Tarea publicada correctamente.")
             elif outbox.status == outbox.Status.RECONCILE:
                 messages.warning(request, "La publicación quedó en conciliación; no se reintentará automáticamente.")
             else:
-                messages.warning(request, "La Task no pudo publicarse; revise el estado operativo.")
+                messages.warning(request, "La Tarea no pudo publicarse; revise el estado operativo.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
         raise Http404("Respuesta no encontrada")
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
@@ -2812,6 +2975,7 @@ def individual_expedient(request, token):
         context.setdefault(optional_key, "")
     safe_metadata = quotation.safe_metadata or {}
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
+    decision_status = _individual_acceptance_status(quotation)
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
     people_lookup = [dict(item) for item in (safe_metadata.get("people_lookup") or ()) if isinstance(item, dict)]
     if not people_lookup and person_lookup:
@@ -2896,7 +3060,7 @@ def individual_expedient(request, token):
     ]
     if latest_outbox:
         history.append({
-            "label": f"Zoho Task: {latest_outbox.get_status_display()}",
+            "label": f"Zoho Tarea: {latest_outbox.get_status_display()}",
             "at": latest_outbox.updated_at,
         })
     history.sort(key=lambda row: row["at"], reverse=True)
@@ -2915,6 +3079,12 @@ def individual_expedient(request, token):
         "remote_task_id": remote_task_id,
         "history": tuple(history),
         "acceptance": acceptance,
+        "decision_status": decision_status,
+        "decision_pending": decision_status == "pending",
+        "is_rejected": decision_status == "rejected",
+        "can_reject": decision_status == "pending",
+        "can_reactivate": decision_status == "rejected",
+        "can_operate_zoho": decision_status == "accepted",
         "person_lookup": person_lookup,
         "people_lookup": tuple(people_lookup),
         "created_people": created_people,

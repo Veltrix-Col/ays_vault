@@ -45,7 +45,7 @@ POLICY_GROUP_LIMIT = settings.COLECTIVOS_GROUP_MAX_RECORDS
 RELATED_BATCH_SIZE = 100
 CONTACT_BATCH_FIELDS = (
     "id", "Tipo_de_persona", "Tipo_ID", "N_mero_de_ID", "Full_Name",
-    "First_Name", "Last_Name", "Nombre_comercial", "Raz_n_social", "Estado",
+    "First_Name", "Last_Name", "Date_of_Birth", "Nombre_comercial", "Raz_n_social", "Estado",
     "Email", "Phone", "Mobile", "Ciudad_de_direcci_n_principal", "Direcci_n",
 )
 logger = logging.getLogger("cotizacion_colectivos")
@@ -371,6 +371,12 @@ class PolicyService:
                     insured_key=functional_reference(_lookup_id(relation.get("Asegurado")), "contact"),
                     beneficiary_key=functional_reference(_lookup_id(relation.get("Beneficiario")), "contact"),
                     risk_key=functional_reference(_lookup_id(relation.get("Riesgo")), "risk"),
+                    first_name=_text(contact.get("First_Name")),
+                    last_name=_text(contact.get("Last_Name")),
+                    birth_date=_text(contact.get("Date_of_Birth")),
+                    associate_first_name=_text(associate.get("First_Name")),
+                    associate_last_name=_text(associate.get("Last_Name")),
+                    associate_birth_date=_text(associate.get("Date_of_Birth")),
                 ))
         result = tuple(members)
         self.timings["grouping_ms"] = round((time.monotonic() - grouping_started) * 1000)

@@ -432,6 +432,20 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(requests_page, "Salud colectivo")
         self.assertContains(invitations_page, "Salud colectivo")
         self.assertContains(individual_page, "Salud colectivo")
+        # El selector conserva su contrato de backend y ahora ofrece búsqueda
+        # incremental sobre las opciones ya cargadas en la página.
+        self.assertContains(individual_page, 'data-searchable-select', html=False)
+        self.assertContains(individual_page, 'data-searchable-input', html=False)
+        self.assertContains(individual_page, 'name="affiliate_key"', html=False)
+        self.assertContains(individual_page, "Nuevo afiliado")
+        self.assertContains(individual_page, 'data-responsible-picker', html=False)
+
+        # Buscar cliente sigue disponible en su ubicación funcional, pero no
+        # forma parte de la barra superior compartida.
+        header = individual_page.content.decode(individual_page.charset or "utf-8").split("</header>", 1)[0]
+        self.assertNotIn("Buscar cliente", header)
+        self.assertIn('class="notification-link"', header)
+        self.assertIn("Buzón", header)
 
     @patch("cotizacion_colectivos.views.resolve_task_responsible_email", return_value="responsable@example.test")
     @patch("cotizacion_colectivos.views.task_responsible_options", return_value=(Mock(actual_value="RESP-1", display_value="Responsable Demo"),))

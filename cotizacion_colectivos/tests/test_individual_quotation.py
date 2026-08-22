@@ -227,7 +227,7 @@ class IndividualQuotationTests(TestCase):
     def vehicle(suffix="1"):
         return {
             "zero_km": "No", "plate": f"ABC12{suffix}", "brand": "Marca", "line": "Línea",
-            "model": "2025", "city": "Bogotá", "use": "Familiar",
+            "model": "2025", "class": "Automovil", "city": "Bogotá", "use": "Familiar",
             "insured_name": f"Asegurado {suffix}", "insured_id_type": "CC",
             "insured_document": f"30000000{suffix}",
         }
@@ -235,6 +235,31 @@ class IndividualQuotationTests(TestCase):
     def workspace(self, schema_slug):
         schema = get_branch_schema(schema_slug)
         return policy(), (affiliate(),), {"storage": "database"}, schema
+
+    def test_mobility_vehicle_class_is_an_allowlisted_required_select_and_plate_stays_visible(self):
+        schema = get_branch_schema("movilidad")
+        vehicle = next(group for group in schema.repeatables if group.key == "vehicles")
+        fields = {field.key: field for field in vehicle.fields}
+        self.assertEqual(fields["class"].kind, "choice")
+        self.assertTrue(fields["class"].required)
+        self.assertEqual(fields["class"].choices, (
+            "Automovil", "Motocicleta", "Camiones y transporte de carga",
+            "Transporte publico pasajeros", "Vehiculos especiales",
+        ))
+        self.assertFalse(fields["plate"].required)
+        self.assertFalse(fields["plate"].show_when)
+
+    def test_mobility_vehicle_class_rejects_empty_or_unknown_values_server_side(self):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        base = self.vehicle()
+        for value in ("", "Vehículo inventado"):
+            form = IndividualQuotationForm(
+                schema=schema, context=context,
+                data={"items_payload": json.dumps({"vehicles": [{**base, "class": value}]})},
+            )
+            self.assertFalse(form.is_valid())
+            self.assertIn("Clase", str(form.errors))
 
     def test_tool_entry_goes_to_client_search_and_loose_branch_form_is_closed(self):
         response = self.client.get(reverse("public_home"))
@@ -269,6 +294,58 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("4234567890123456789", token)
         self.assertNotIn("100000001", token)
         self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
+
+    def test_existing_affiliate_prefill_preserves_structured_contact_fields(self):
+        member = replace(
+            affiliate(),
+            first_name="VELTRIX TEST",
+            last_name="MOVILIDAD 001",
+            birth_date="1990-01-01",
+            associate_first_name="VELTRIX TEST",
+            associate_last_name="MOVILIDAD 001",
+            associate_birth_date="1990-01-01",
+            document="990000001001",
+            associate_document="990000001001",
+        )
+        schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(branch_code="40", branch_name="Movilidad colectivo"),
+            members=(member,),
+            affiliate_key="affiliate-hmac-key",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(schema.slug, "movilidad")
+        self.assertEqual(context["first_name"], "VELTRIX TEST")
+        self.assertEqual(context["last_name"], "MOVILIDAD 001")
+        self.assertEqual(context["requester_id_type"], "CC")
+        self.assertEqual(context["requester_document"], "990000001001")
+        self.assertEqual(context["requester_birth_date"], "1990-01-01")
+        self.assertEqual(context["requester_email"], "demo@example.test")
+        self.assertEqual(context["requester_phone"], "3000000000")
+        form = IndividualQuotationForm(
+            schema=schema, context=context,
+            initial={"items_payload": json.dumps({"vehicles": [{}]})},
+        )
+        self.assertEqual(form["first_name"].value(), "VELTRIX TEST")
+        self.assertEqual(form["last_name"].value(), "MOVILIDAD 001")
+        self.assertEqual(form["requester_birth_date"].value(), "1990-01-01")
+
+    def test_existing_affiliate_prefill_does_not_invent_partial_contact_values(self):
+        member = replace(
+            affiliate(),
+            associate_first_name="VELTRIX TEST",
+            associate_last_name="",
+            associate_birth_date="",
+        )
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(), members=(member,), affiliate_key="affiliate-hmac-key",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["first_name"], "VELTRIX TEST")
+        self.assertEqual(context["last_name"], "")
+        self.assertEqual(context["requester_birth_date"], "")
+        self.assertEqual(context["requester_email"], "demo@example.test")
 
     def test_policy_context_allows_a_new_person_without_losing_policy_context(self):
         schema, token, context = build_policy_context(
@@ -512,6 +589,50 @@ class IndividualQuotationTests(TestCase):
         quotation.refresh_from_db()
         self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "accepted")
         self.assertEqual(quotation.safe_metadata["person_lookup"]["status"], "found")
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    @patch("cotizacion_colectivos.views.resolve_accepted_person")
+    def test_decision_rejection_is_reactivatable_and_accepted_is_terminal(self, resolve_person, workspace):
+        workspace.return_value = self.workspace("salud")
+        resolve_person.return_value = {"status": "found"}
+        self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[self.access_token()]),
+            {"items_payload": json.dumps({"people": [self.person("1")]})},
+        )
+        quotation = CotizacionIndividual.objects.get()
+        original_encrypted = quotation.encrypted_payload
+        token = sign_receipt(quotation.public_id)
+        self.client.force_login(self.actor)
+
+        pending = self.client.get(reverse("cotizacion_colectivos:individual_expedient", args=[token]))
+        self.assertContains(pending, "Cotización aceptada")
+        self.assertContains(pending, 'data-loading-message="Verificando información en Zoho…"')
+        self.assertContains(pending, "Cotización rechazada")
+        rendered = pending.content.decode()
+        self.assertGreater(rendered.index("individual-decision-card"), rendered.index("zoho-operational-card"))
+
+        rejected = self.client.post(reverse("cotizacion_colectivos:individual_reject", args=[token]))
+        self.assertEqual(rejected.status_code, 302)
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "rejected")
+        self.assertEqual(quotation.safe_metadata["acceptance"]["rejected_by"], self.actor.pk)
+        self.assertEqual(quotation.encrypted_payload, original_encrypted)
+        rejected_detail = self.client.get(reverse("cotizacion_colectivos:individual_expedient", args=[token]))
+        self.assertContains(rejected_detail, "Cotización rechazada")
+        self.assertNotContains(rejected_detail, "Crear afiliado en Zoho")
+
+        self.client.post(reverse("cotizacion_colectivos:individual_reactivate", args=[token]))
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "pending")
+        self.assertEqual(quotation.safe_metadata["acceptance"]["rejected_by"], self.actor.pk)
+        self.assertEqual(quotation.safe_metadata["acceptance"]["reactivated_by"], self.actor.pk)
+
+        self.client.post(reverse("cotizacion_colectivos:individual_accept", args=[token]))
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "accepted")
+        self.client.post(reverse("cotizacion_colectivos:individual_reject", args=[token]))
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.safe_metadata["acceptance"]["status"], "accepted")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_person_lookup_does_not_auto_select_missing_or_ambiguous_results(self, workspace):
@@ -815,6 +936,9 @@ class IndividualQuotationTests(TestCase):
             {"items_payload": json.dumps({"vehicles": [vehicle]})},
         )
         self.assertEqual(response.status_code, 302)
+        quotation = CotizacionIndividual.objects.get()
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+        self.assertEqual(payload["groups"]["vehicles"][0]["plate"], "")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_non_zero_km_vehicle_requires_plate_server_side(self, workspace):

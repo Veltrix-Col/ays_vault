@@ -398,7 +398,7 @@ class DetailServiceTests(SimpleTestCase):
             "Parentesco": "Afiliado",
             "Plan": "Plan vigente",
         }
-        contact = {**PERSON, "Email": "persona@example.test", "Mobile": "3000000000"}
+        contact = {**PERSON, "Date_of_Birth": "1990-01-01", "Email": "persona@example.test", "Mobile": "3000000000"}
         zoho = FakeZoho(
             search_pages=(
                 Page(({"id": policy_id, "Ramo": "Salud colectivo", "Name": "POL"},)),
@@ -414,6 +414,9 @@ class DetailServiceTests(SimpleTestCase):
         self.assertEqual(members[0].email, "persona@example.test")
         self.assertEqual(members[0].mobile, "3000000000")
         self.assertEqual(members[0].associate_name, contact["Full_Name"])
+        self.assertEqual(members[0].associate_first_name, "Nombre")
+        self.assertEqual(members[0].associate_last_name, "Prueba")
+        self.assertEqual(members[0].associate_birth_date, "1990-01-01")
         self.assertEqual(zoho.coql.calls[0]["query"].split(" from ")[0], f"select {','.join(CONTACT_BATCH_FIELDS)}")
 
     def test_policy_layout_never_exposes_an_sdk_object_representation(self):

@@ -4,8 +4,8 @@
     ["form[action*='/persona/crear/']", "Creando afiliado en Zoho…"],
     ["form[action*='/riesgo/'][action*='/crear/']", "Creando vehículo en Zoho…"],
     ["form[action*='/subriesgo/'][action*='/crear/']", "Agregando a la póliza…"],
-    ["form[action*='/task/publicar/']", "Publicando Task en Zoho…"],
-    ["form[action*='/responsable/']", "Publicando Task en Zoho…"],
+    ["form[action*='/task/publicar/']", "Publicando Tarea en Zoho…"],
+    ["form[action*='/responsable/']", "Publicando Tarea en Zoho…"],
   ];
   loadingForms.forEach(([selector, message]) => {
     document.querySelectorAll(selector).forEach((form) => {

@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,22 @@ def _normalized(value: object) -> str:
         character for character in unicodedata.normalize("NFKD", str(value or "").casefold())
         if not unicodedata.combining(character)
     )
+
+
+def _date_input_value(value: object) -> str:
+    """Normalize supported Zoho date representations for an HTML date input."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return raw
+    if re.match(r"^\d{4}-\d{2}-\d{2}(?:T|\s)", raw):
+        return raw[:10]
+    match = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", raw)
+    if match:
+        day, month, year = match.groups()
+        return f"{year}-{month}-{day}"
+    return raw
 
 
 @dataclass(frozen=True)
@@ -112,12 +129,21 @@ def build_policy_context(*, policy_token, detail, members, affiliate_key, creato
         matching.insured_document if matching else ""
     )
     values = {
+        "first_name": str(
+            (matching.associate_first_name if is_associate and matching else matching.first_name if matching else "") or ""
+        ),
+        "last_name": str(
+            (matching.associate_last_name if is_associate and matching else matching.last_name if matching else "") or ""
+        ),
         "requester_name": str(requester_name or (selected.label if selected else "")),
         "requester_id_type": str(requester_id_type or (selected.id_type if selected else "")),
         "requester_document": str(requester_document or ""),
         "requester_email": str(getattr(matching, "email", "") or ""),
         "requester_phone": str(
             getattr(matching, "mobile", "") or getattr(matching, "phone", "") or ""
+        ),
+        "requester_birth_date": _date_input_value(
+            matching.associate_birth_date if is_associate and matching else matching.birth_date if matching else ""
         ),
         "collective_context": str(detail.holder or detail.source_name or ""),
     }

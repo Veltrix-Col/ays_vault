@@ -20,7 +20,10 @@ from .common import ColectivosServiceError, unsign_record_context
 from .functional_groups import consolidate_functional_groups
 
 
-PREPARATION_VERSION = 1
+# Contact prefill now includes structured First_Name/Last_Name/Date_of_Birth;
+# invalidate older snapshots so link generation cannot reuse an incomplete
+# member representation.
+PREPARATION_VERSION = 2
 PARAMETER_VERSION = 1
 
 

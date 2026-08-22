@@ -10,6 +10,7 @@ CONTACTS_PROFILE_FIELDS = (
     "N_mero_de_ID",
     "First_Name",
     "Last_Name",
+    "Date_of_Birth",
     "Full_Name",
     "Raz_n_social",
     "Nombre_comercial",

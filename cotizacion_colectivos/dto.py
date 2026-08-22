@@ -204,6 +204,14 @@ class GroupMember:
     insured_key: str = ""
     beneficiary_key: str = ""
     risk_key: str = ""
+    # Structured Contact fields used when an existing affiliate is selected
+    # as the requester of an Individual Quotation.
+    first_name: str = ""
+    last_name: str = ""
+    birth_date: str = ""
+    associate_first_name: str = ""
+    associate_last_name: str = ""
+    associate_birth_date: str = ""
 
 
 @dataclass(frozen=True)
