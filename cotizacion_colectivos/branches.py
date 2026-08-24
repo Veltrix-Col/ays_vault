@@ -30,8 +30,23 @@ COLLECTIVE_BRANCH_CONFIG: dict[str, CollectiveBranch] = {
     "91": CollectiveBranch("91", "salud-colectivo", "Salud colectivo", "Colectivos", ("Salud colectivo",), "people_group", "person"),
     "86": CollectiveBranch("86", "exequial-colectivo", "Exequial colectivo", "Colectivos", ("Exequial colectivo",), "family_group", "person", special_rules=("El codigo 86 tambien existe para Exequial individual; exigir valor Zoho exacto.",)),
     "28": CollectiveBranch("28", "hogar-colectivo", "Hogar colectivo", "Colectivos", ("Hogar colectivo",), "property", "property"),
-    "83": CollectiveBranch("83", "vida-grupo-deudores", "Vida grupo deudores", "Colectivos", ("VG deudores", "Vida grupo deudores"), "debtor_group", "obligation", special_rules=("Zoho usa actualmente el valor de picklist VG deudores.", "Obligacion, saldo y entidad acreedora siguen pendientes de API name confirmado.")),
+    "83": CollectiveBranch(
+        "83", "vida-grupo-deudores", "Vida grupo deudores", "Colectivos",
+        (
+            "VG deudores", "Vida grupo deudores", "VG voluntario", "VG voluntaria",
+            "VG flexibilización", "VG legal", "VG mixto", "VG patronal",
+        ),
+        "debtor_group", "obligation",
+        special_rules=("Zoho usa actualmente el valor de picklist VG deudores.", "Obligacion, saldo y entidad acreedora siguen pendientes de API name confirmado."),
+    ),
     "40": CollectiveBranch("40", "movilidad-colectivo", "Movilidad colectivo", "Colectivos", ("Movilidad colectivo",), "vehicle_group", "vehicle", special_rules=("Tratar pagos negativos y estados especiales como advertencias, no como errores.",)),
+}
+
+_BRANCH_FAMILY_BY_CODE = {
+    "91": "salud",
+    "86": "exequial",
+    "83": "vida",
+    "40": "movilidad",
 }
 
 
@@ -63,12 +78,42 @@ def classify_branch(value: object) -> CollectiveBranch | None:
     return None
 
 
+def resolve_branch_family(branch_code: object = "", branch_name: object = "") -> str | None:
+    """Return the canonical individual-quotation family for a policy.
+
+    Codes are authoritative when they are known.  Explicit product aliases
+    are then consulted so a confirmed Vida Grupo product can use the Vida
+    form even when Zoho assigns it a code not present in our collective
+    branch catalogue.  Unknown names never fall through to a broad substring
+    match.
+    """
+    code = str(branch_code or "").strip()
+    family = _BRANCH_FAMILY_BY_CODE.get(code)
+    if family:
+        return family
+    normalized_name = _normalize_branch_value(branch_name)
+    if normalized_name in _BRANCH_FAMILY_ALIASES:
+        return _BRANCH_FAMILY_ALIASES[normalized_name]
+    if normalized_name == "soat":
+        return "soat"
+    return None
+
+
 def _normalize_branch_value(value: object) -> str:
     """Normaliza variaciones tipográficas sin ampliar la allowlist funcional."""
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(character for character in text if not unicodedata.combining(character))
     text = re.sub(r"[\u2010-\u2015]", "-", text)
     return " ".join(text.strip().casefold().split())
+
+
+_BRANCH_FAMILY_ALIASES = {
+    _normalize_branch_value(value): "vida"
+    for value in (
+        "VG deudores", "Vida grupo deudores", "VG voluntario", "VG voluntaria",
+        "VG flexibilización", "VG legal", "VG mixto", "VG patronal",
+    )
+}
 
 
 validate_branch_config()

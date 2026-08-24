@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from django.http import Http404
 
+from ..branches import resolve_branch_family
+
 
 @dataclass(frozen=True)
 class FieldSchema:
@@ -95,6 +97,17 @@ HEALTH_PERSON_FIELDS = (
     FieldSchema("plan_interest", "Plan o interés", required=False),
 )
 
+LIFE_PERSON_FIELDS = (
+    FieldSchema("is_requester", "¿El asegurado principal es el mismo afiliado?", "checkbox", required=False),
+    FieldSchema("first_name", "Nombres"),
+    FieldSchema("last_name", "Apellidos"),
+    FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
+    FieldSchema("document", "Identificación", "document"),
+    FieldSchema("birth_date", "Fecha de nacimiento", "date"),
+    FieldSchema("email", "Correo electrónico", "email"),
+    FieldSchema("phone", "Teléfono", "tel"),
+)
+
 VEHICLE_FIELDS = (
     FieldSchema("zero_km", "¿Vehículo 0 km?", "choice", choices=("Sí", "No")),
     FieldSchema(
@@ -148,8 +161,8 @@ BRANCH_SCHEMAS = (
         "Capture la información básica de una o varias personas por asegurar.",
         "M12 21s-7-4.4-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.6-7 10-7 10z",
         REQUESTER_FIELDS,
-        (RepeatableSchema("people", "asegurado", "Asegurados", "Agregar asegurado", PERSON_FIELDS + (FieldSchema("economic_activity", "Actividad económica", required=False),)),),
-        ("Otros soportes para cotización",),
+        (RepeatableSchema("people", "asegurado", "Asegurados", "Agregar asegurado", LIFE_PERSON_FIELDS, minimum=0),),
+        ("Documento de identidad",),
     ),
     BranchSchema(
         "EXEQUIAL", "exequial", "Exequial",
@@ -177,14 +190,6 @@ BRANCH_SCHEMAS = (
 )
 
 _BY_SLUG = {item.slug: item for item in BRANCH_SCHEMAS}
-_POLICY_BRANCH_TO_SCHEMA = {
-    "40": "movilidad",
-    "83": "vida",
-    "86": "exequial",
-    "91": "salud",
-}
-
-
 def get_branch_schema(slug: str) -> BranchSchema:
     try:
         return _BY_SLUG[slug]
@@ -195,9 +200,7 @@ def get_branch_schema(slug: str) -> BranchSchema:
 def get_policy_branch_schema(branch_code: str, branch_name: str = "") -> BranchSchema:
     """Resolve the form from the already-open policy; never from browser input."""
 
-    slug = _POLICY_BRANCH_TO_SCHEMA.get(str(branch_code or "").strip())
-    if slug is None and "soat" in str(branch_name or "").strip().casefold():
-        slug = "soat"
+    slug = resolve_branch_family(branch_code, branch_name)
     if slug is None:
         raise Http404("El ramo de esta póliza todavía no tiene cotización individual.")
     return get_branch_schema(slug)

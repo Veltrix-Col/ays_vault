@@ -25,6 +25,7 @@
   const fieldsHost = dialog.querySelector("[data-dialog-fields]");
   let activeGroup = null;
   let activeIndex = null;
+  let activePrimary = false;
 
   const groupSchema = key => schema.repeatables.find(group => group.key === key);
   const escapeLabel = value => String(value || "").trim() || "Sin completar";
@@ -80,7 +81,13 @@
     const definition = groupSchema(key);
     const host = form.querySelector(`[data-item-list="${key}"]`);
     host.replaceChildren();
-    const rows = (groups[key] || []).map((row, index) => ({row, index})).filter(({row}) => !(schema.slug === "salud" && key === "people" && row.is_requester));
+    const lifePrimary = schema.slug === "vida" && key === "people"
+      ? (groups.people || []).find(row => row && row.life_primary && !row.is_requester)
+      : null;
+    const rows = (groups[key] || []).map((row, index) => ({row, index})).filter(({row}) => {
+      if ((schema.slug === "salud" || schema.slug === "vida") && key === "people" && row.is_requester) return false;
+      return !(lifePrimary && row === lifePrimary);
+    });
     if (schema.slug === "salud" && key === "people") {
       const primary = {
         first_name: form.querySelector('[name="first_name"]')?.value.trim() || "",
@@ -103,6 +110,45 @@
         });
         card.append(title, summary); host.append(card);
       }
+    }
+    if (schema.slug === "vida" && key === "people") {
+      const primary = lifePrimary || {
+        first_name: form.querySelector('[name="first_name"]')?.value.trim() || "",
+        last_name: form.querySelector('[name="last_name"]')?.value.trim() || "",
+        id_type: form.querySelector('[name="requester_id_type"]')?.value.trim() || "",
+        document: form.querySelector('[name="requester_document"]')?.value.trim() || "",
+        birth_date: form.querySelector('[name="requester_birth_date"]')?.value.trim() || "",
+        email: form.querySelector('[name="requester_email"]')?.value.trim() || "",
+        phone: form.querySelector('[name="requester_phone"]')?.value.trim() || "",
+      };
+      const card = document.createElement("article"); card.className = "repeatable-card repeatable-card--primary";
+      const title = document.createElement("div"); title.className = "repeatable-card__heading";
+      title.innerHTML = `<strong>Asegurado principal</strong><span>${lifePrimary ? "Otra persona" : "Mismo afiliado"}</span>`;
+      const summary = document.createElement("dl"); summary.className = "repeatable-summary";
+      [["Nombres", primary.first_name], ["Apellidos", primary.last_name], ["Identificación", `${primary.id_type || primary.requester_id_type || ""} ${primary.document || ""}`.trim()], ["Fecha de nacimiento", primary.birth_date], ["Correo", primary.email], ["Teléfono", primary.phone]].forEach(([labelText, value]) => {
+        const item = document.createElement("div"); const label = document.createElement("dt"); label.textContent = labelText;
+        const content = document.createElement("dd"); content.textContent = value || "Sin información"; item.append(label, content); summary.appendChild(item);
+      });
+      if (lifePrimary && !lifePrimary.is_requester) {
+        const documentField = document.createElement("div"); documentField.className = "entity-document-field field";
+        const label = document.createElement("label"); label.textContent = "Adjuntar cédula";
+        const input = document.createElement("input"); input.type = "file"; input.name = `entity_attachment_${lifePrimary.entity_key}`;
+        input.accept = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+        input.setAttribute("data-entity-file", lifePrimary.entity_key); label.appendChild(input); documentField.appendChild(label);
+        restoreFile(input, lifePrimary.entity_key);
+        const fileName = document.createElement("small"); fileName.className = "entity-document-name";
+        const refreshFileName = () => { fileName.textContent = input.files && input.files[0] ? `📎 ${input.files[0].name}` : ""; };
+        refreshFileName();
+        input.addEventListener("change", () => { if (input.files && input.files[0]) selectedFiles.set(lifePrimary.entity_key, input.files[0]); else selectedFiles.delete(lifePrimary.entity_key); refreshFileName(); });
+        documentField.appendChild(fileName);
+        const clear = document.createElement("button"); clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
+        clear.addEventListener("click", () => { input.value = ""; selectedFiles.delete(lifePrimary.entity_key); refreshFileName(); });
+        documentField.appendChild(clear); card.appendChild(documentField);
+      }
+      const actions = document.createElement("div"); actions.className = "repeatable-actions";
+      const editPrimary = document.createElement("button"); editPrimary.type = "button"; editPrimary.textContent = lifePrimary ? "Editar asegurado principal" : "Cambiar asegurado principal";
+      editPrimary.addEventListener("click", () => openDialog("people", lifePrimary ? groups.people.indexOf(lifePrimary) : null, true));
+      actions.append(editPrimary); card.append(title, summary, actions); host.append(card);
     }
     rows.forEach(({row, index}) => {
       row.entity_key ||= newEntityKey(key, index);
@@ -196,8 +242,8 @@
     if (addButton && key === "vehicles") addButton.textContent = groups[key]?.length ? "+ Agregar otro vehículo" : "+ Agregar vehículo";
     sync();
   };
-  const openDialog = (key, index = null) => {
-    activeGroup = key; activeIndex = index;
+  const openDialog = (key, index = null, primary = false) => {
+    activeGroup = key; activeIndex = index; activePrimary = primary;
     const definition = groupSchema(key); const row = index === null ? {} : groups[key][index];
     dialog.querySelector("[data-dialog-title]").textContent = `${index === null ? "Agregar" : "Editar"} ${definition.singular}`;
     fieldsHost.replaceChildren();
@@ -258,6 +304,7 @@
       input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
       if (placeholders[field.key] && field.kind !== "choice") input.placeholder = placeholders[field.key];
       if (field.kind === "checkbox") input.checked = Boolean(row[field.key]);
+      if (schema.slug === "vida" && key === "people" && field.key === "is_requester" && index === null && primary) input.checked = true;
       if (key === "people" && field.key === "is_requester") {
         const alreadyAdded = (groups.people || []).some((item, itemIndex) => itemIndex !== index && Boolean(item.is_requester || item.use_requester));
         if (alreadyAdded) {
@@ -304,6 +351,7 @@
     const row = Object.fromEntries([...fieldsHost.querySelectorAll("input,select")].map(input => [input.name, input.type === "checkbox" ? input.checked : input.value.trim()]));
     const previous = activeIndex === null ? null : groups[activeGroup][activeIndex];
     row.entity_key = previous?.entity_key || newEntityKey(activeGroup, activeIndex === null ? groups[activeGroup].length : activeIndex);
+    if (activeGroup === "people" && schema.slug === "vida" && activePrimary) row.life_primary = true;
     if (activeIndex === null) groups[activeGroup].push(row); else groups[activeGroup][activeIndex] = row;
     render(activeGroup); dialog.close();
   });
