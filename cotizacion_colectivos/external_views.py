@@ -60,7 +60,9 @@ from .services.individual_access import (
     IndividualAccessError,
     access_context,
     consume_individual_access,
+    individual_otp_required,
     issue_individual_otp,
+    record_individual_direct_access,
     resolve_individual_session,
     resolve_individual_token,
     verify_individual_otp,
@@ -100,7 +102,10 @@ def _individual_workspace(context):
 def individual_quotation(request, token):
     try:
         access = resolve_individual_token(token)
-        resolve_individual_session(request.COOKIES.get(INDIVIDUAL_COOKIE, ""), access)
+        if individual_otp_required(access):
+            resolve_individual_session(request.COOKIES.get(INDIVIDUAL_COOKIE, ""), access)
+        else:
+            record_individual_direct_access(access)
         context = access_context(access)
         detail, _members, metadata, schema = _individual_workspace(context)
     except IndividualAccessError:
@@ -108,6 +113,8 @@ def individual_quotation(request, token):
             return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
         try:
             access = resolve_individual_token(token)
+            if not individual_otp_required(access):
+                return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
             issue_individual_otp(access)
         except IndividualAccessError:
             return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
@@ -121,9 +128,12 @@ def individual_quotation(request, token):
     except (ColectivosServiceError, signing.BadSignature, Http404, KeyError, ValueError):
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
 
-    initial_items = {
-        group.key: [{} for _ in range(group.minimum)] for group in schema.repeatables
-    }
+    # Repeatable entities are intentionally opt-in.  In particular, Mobility
+    # must not present an empty "Vehículo 1" before the client adds one.
+    # Repeatable people are explicitly opt-in.  The Salud primary insured is
+    # derived from the canonical affiliate fields by the client UI and is
+    # serialized on submit; it must not appear as an empty placeholder card.
+    initial_items = {group.key: [] for group in schema.repeatables}
     form = IndividualQuotationForm(
         request.POST or None,
         request.FILES or None,
@@ -178,6 +188,8 @@ def individual_quotation(request, token):
 def individual_verify(request, token):
     try:
         access = resolve_individual_token(token)
+        if not individual_otp_required(access):
+            return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
     except IndividualAccessError:
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
     form = ExternalOTPForm(request.POST)

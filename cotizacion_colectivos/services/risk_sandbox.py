@@ -11,10 +11,12 @@ from django.core.exceptions import ValidationError
 from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoAPIError, ZohoError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
+from .write_guards import require_write_guard
 
 
 RISK_MODULE = "Riesgos"
 RISK_CONFIRMATION = "SANDBOX_MOBILITY_RISK_SEED"
+OPERATIONAL_RISK_CONFIRMATION = "SANDBOX_RISK_WRITE"
 RISK_FIELDS = frozenset({
     "Name", "Tipo_de_riesgo", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas",
     "Modelo", "Clase", "Ciudad", "Tipo_de_uso",
@@ -87,9 +89,9 @@ def build_risk_payload(*, name: object, plate: object, model: object,
     return payload
 
 
-def resolve_risk_by_plate(*, plate: str, zoho=None) -> dict[str, object]:
+def resolve_risk_by_plate(*, plate: str, zoho=None, profile: str = "sandbox") -> dict[str, object]:
     normalized = normalize_plate(plate)
-    facade = zoho or get_zoho(profile="sandbox")
+    facade = zoho or get_zoho(profile=profile)
     page = facade.search.by_criteria(
         module=RISK_MODULE,
         criteria=f"(Placa_del_vehiculo:equals:{normalized})",
@@ -114,17 +116,16 @@ def resolve_risk_by_plate(*, plate: str, zoho=None) -> dict[str, object]:
 
 
 def create_sandbox_risk(payload: Mapping[str, object], *, confirmation: str,
-                        zoho=None) -> dict[str, object]:
-    if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != "sandbox":
-        raise RiskPublishingDisabled("Riesgos sólo admite Sandbox.")
-    if not getattr(settings, "COLECTIVOS_MOBILITY_RISK_SEED_ENABLED", False):
-        raise RiskPublishingDisabled("El seed de Riesgos está deshabilitado.")
-    if str(getattr(settings, "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION", "")) != RISK_CONFIRMATION:
-        raise RiskPublishingDisabled("Falta la confirmación configurada del seed.")
-    if str(confirmation or "").strip() != RISK_CONFIRMATION:
-        raise RiskPublishingDisabled("Falta la confirmación explícita del seed.")
-    if not ZohoSettings.from_django("sandbox").write_enabled:
-        raise RiskPublishingDisabled("La escritura Sandbox está deshabilitada.")
+                        zoho=None, profile: str | None = None,
+                        operational: bool = False) -> dict[str, object]:
+    profile = str(profile or getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
+    require_write_guard(
+        entity="risk", profile=profile, confirmation=confirmation,
+        feature_flag=("COLECTIVOS_RISK_PUBLISH_ENABLED" if operational else "COLECTIVOS_MOBILITY_RISK_SEED_ENABLED"),
+        legacy_setting=("COLECTIVOS_RISK_WRITE_CONFIRMATION" if operational else "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION"),
+        expected_override=("" if operational else RISK_CONFIRMATION),
+        disabled_error=RiskPublishingDisabled,
+    )
     if set(payload) - RISK_FIELDS or not RISK_REQUIRED.issubset(payload):
         raise ValidationError("El payload Riesgos no coincide con la allowlist.")
     normalized = build_risk_payload(
@@ -133,11 +134,13 @@ def create_sandbox_risk(payload: Mapping[str, object], *, confirmation: str,
         city=payload.get("Ciudad", ""), use=payload.get("Tipo_de_uso", ""),
     )
     with _LOCK:
-        duplicate = resolve_risk_by_plate(plate=normalized["Placa_del_vehiculo"], zoho=zoho)
+        duplicate = resolve_risk_by_plate(
+            plate=normalized["Placa_del_vehiculo"], zoho=zoho, profile=profile
+        )
         if duplicate["status"] != "NOT_FOUND":
             raise RiskPublicationRejected("La placa requiere resolución antes de crear.")
         try:
-            result = (zoho or get_zoho(profile="sandbox")).records.create(
+            result = (zoho or get_zoho(profile=profile)).records.create(
                 module=RISK_MODULE, records=(normalized,)
             )
         except ZohoTimeoutError as exc:

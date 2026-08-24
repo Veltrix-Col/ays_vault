@@ -24,6 +24,7 @@ def _recibo(**overrides) -> ReciboExtraido:
     base = dict(
         numero_poliza="123", numero_recibo="R-1",
         valor_sin_iva=90.0, valor_iva=10.0, valor_total_a_pagar=100.0,
+        fecha_expedicion="2026-01-10",
     )
     base.update(overrides)
     return ReciboExtraido(**base)
@@ -39,6 +40,11 @@ class ReciboConciliacionRuleTests(unittest.TestCase):
         incidentes = ReciboConciliacionRule().generar(ctx)
         self.assertEqual(len(incidentes), 1)
         self.assertFalse(incidentes[0].bloqueante)
+
+    def test_recibo_no_disponible_advierte_que_no_se_prellena_el_cobro(self):
+        ctx = _ctx(datos_extra={})
+        incidentes = ReciboConciliacionRule().generar(ctx)
+        self.assertIn("no se prellenarán", incidentes[0].observacion)
 
     def test_poliza_y_valor_cuadran_no_genera_incidentes(self):
         ctx = _ctx(datos_extra={"recibo_cu": _recibo()}, poliza="123")

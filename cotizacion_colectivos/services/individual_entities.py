@@ -196,6 +196,152 @@ def _resolve_person(data, zoho):
     }
 
 
+def resolve_common_people_entities(*, quotation, zoho=None) -> dict[str, object]:
+    """Resolve Contacts for every implemented person-based individual ramo.
+
+    Mobility keeps its vehicle/subrisk orchestration in
+    :func:`resolve_mobility_entities`; this adapter only normalizes the
+    affiliate/insured Contact candidates so the document publisher can use the
+    same ``people`` snapshot for Salud, Vida and Exequial.
+    """
+    payload = json.loads(decrypt(quotation.encrypted_payload))
+    branch = str(payload.get("schema") or quotation.branch_slug or "").casefold()
+    if branch not in {"movilidad", "salud", "vida", "exequial"}:
+        return {"status": "unsupported", "branch": branch, "people": []}
+    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    requester_document, requester = _requester(fields, context)
+    candidates = []
+    if requester_document:
+        affiliate = dict(requester)
+        affiliate.update({"role": "Afiliado", "owner_key": "affiliate"})
+        candidates.append(affiliate)
+    groups = payload.get("groups") if isinstance(payload.get("groups"), dict) else {}
+    # Salud stores the requester twice: in the top-level requester fields and
+    # in one repeatable ``people`` row.  Canonicalize that row into the single
+    # affiliate candidate before resolving it.  Non-empty row values are the
+    # normalized identity/data source for this schema; empty values never
+    # erase a valid top-level value.
+    if branch != "movilidad" and candidates:
+        people_rows = groups.get("people") if isinstance(groups.get("people"), list) else []
+        requester_row = next(
+            (row for row in people_rows if isinstance(row, Mapping) and _truthy(row.get("is_requester"))),
+            None,
+        )
+        if requester_row is not None:
+            aliases = {
+                "first_name": "First_Name", "First_Name": "First_Name",
+                "last_name": "Last_Name", "Last_Name": "Last_Name",
+                "id_type": "Tipo_ID", "document_type": "Tipo_ID", "Tipo_ID": "Tipo_ID",
+                "document": "N_mero_de_ID", "N_mero_de_ID": "N_mero_de_ID",
+                "birth_date": "Date_of_Birth", "Date_of_Birth": "Date_of_Birth",
+                "email": "Email", "Email": "Email", "phone": "Phone", "Phone": "Phone",
+            }
+            for source_key, target_key in aliases.items():
+                value = requester_row.get(source_key)
+                if value is not None and str(value).strip():
+                    candidates[0][target_key] = value
+            requester_document = str(candidates[0].get("N_mero_de_ID") or "").strip()
+            candidates[0]["label"] = " ".join(filter(None, (candidates[0].get("First_Name"), candidates[0].get("Last_Name")))) or candidates[0].get("label")
+    if branch == "movilidad":
+        rows = groups.get("vehicles") if isinstance(groups.get("vehicles"), list) else []
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping) or _truthy(row.get("insured_same_as_requester")):
+                continue
+            document = str(row.get("insured_document") or "").strip()
+            if not document or document == requester_document:
+                continue
+            key = str(row.get("entity_key") or f"vehicles-{index}") + "-insured"
+            candidates.append({
+                "First_Name": row.get("insured_first_name") or "",
+                "Last_Name": row.get("insured_last_name") or "",
+                "Tipo_ID": row.get("insured_id_type") or "",
+                "N_mero_de_ID": document,
+                "Date_of_Birth": row.get("insured_birth_date") or "",
+                "Email": row.get("insured_email") or "",
+                "Phone": row.get("insured_phone") or "",
+                "Mobile": row.get("insured_phone") or "",
+                "label": "Asegurado del vehículo", "role": "Asegurado", "owner_key": key,
+            })
+    else:
+        rows = groups.get("people") if isinstance(groups.get("people"), list) else []
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                continue
+            is_requester = _truthy(row.get("is_requester"))
+            document = str(row.get("document") or row.get("N_mero_de_ID") or "").strip()
+            # Salud canonicalizes the requester as the affiliate Contact.
+            # The explicit semantic flag is authoritative for legacy rows
+            # whose copied document may be incomplete or differently formatted;
+            # never create a second ``people-*`` snapshot for that role.
+            if not document or is_requester:
+                continue
+            candidates.append({
+                "First_Name": row.get("first_name") or row.get("First_Name") or "",
+                "Last_Name": row.get("last_name") or row.get("Last_Name") or "",
+                "Tipo_ID": row.get("id_type") or row.get("document_type") or row.get("Tipo_ID") or "",
+                "N_mero_de_ID": document,
+                "Date_of_Birth": row.get("birth_date") or row.get("Date_of_Birth") or "",
+                "Email": row.get("email") or "",
+                "Phone": row.get("phone") or "",
+                "Mobile": row.get("mobile") or row.get("phone") or "",
+                "label": " ".join(filter(None, (row.get("first_name"), row.get("last_name")))) or "Asegurado",
+                "role": "Asegurado", "owner_key": str(row.get("entity_key") or f"people-{index}"),
+            })
+    corrections = (quotation.safe_metadata or {}).get("person_corrections") or {}
+    resolved = []
+    seen = {}
+    for data in candidates:
+        document = str(data.get("N_mero_de_ID") or "").strip()
+        correction = corrections.get(document, {}) if isinstance(corrections, Mapping) else {}
+        effective = effective_person_candidate(data, correction)
+        identity = _person_identity_key({"candidate": effective, "document": document})
+        if identity in seen:
+            # Keep one Contact snapshot, but retain every local owner alias so
+            # an attachment for a repeated person can still resolve to the
+            # same remote Contact without creating a second upload target.
+            existing = resolved[seen[identity]]
+            aliases = list(existing.get("owner_keys") or ())
+            owner_key = str(data.get("owner_key") or "")
+            if owner_key and owner_key not in aliases:
+                aliases.append(owner_key)
+                existing["owner_keys"] = aliases
+            continue
+        seen[identity] = len(resolved)
+        try:
+            item = _resolve_person(effective, zoho)
+        except Exception:
+            candidate = _candidate(effective, effective.get("role") or "Asegurado")
+            item = {"status": "blocked", "document": document, "display_name": effective.get("label") or "Asegurado", "role": candidate.role, "candidate": candidate.as_contact_data(), "missing_fields": list(contact_missing_fields(candidate)), "has_complete_data": not contact_missing_fields(candidate)}
+        item["owner_key"] = data.get("owner_key") or "affiliate"
+        item["owner_keys"] = [item["owner_key"]]
+        item["role"] = data.get("role") or item.get("role") or "Asegurado"
+        item["candidate"] = effective_person_candidate(item.get("candidate") or effective, correction)
+        resolved.append(item)
+    metadata = dict(quotation.safe_metadata or {})
+    entities = dict(metadata.get("zoho_entities") or {})
+    previous = {}
+    prior_people = list(entities.get("people") or ()) + list(metadata.get("people_lookup") or ())
+    for old in prior_people:
+        if not isinstance(old, Mapping):
+            continue
+        for key in [old.get("owner_key"), *(old.get("owner_keys") or ())]:
+            if key:
+                previous[str(key)] = old
+    for item in resolved:
+        old = previous.get(str(item.get("owner_key") or ""))
+        if old and (old.get("remote_id") or old.get("contact_id")) and old.get("created"):
+            remote_id = str(old.get("remote_id") or old.get("contact_id"))
+            item.update({"status": "created", "created": True, "remote_id": remote_id, "contact_id": remote_id, "missing_fields": [], "has_complete_data": True})
+    entities.update({"branch": branch, "people": resolved, "resolved_at": timezone.now().isoformat()})
+    metadata["zoho_entities"] = entities
+    metadata["people_lookup"] = resolved
+    metadata["person_lookup"] = resolved[0] if resolved else {"status": "pending_identifier"}
+    quotation.safe_metadata = metadata
+    quotation.save(update_fields=("safe_metadata",))
+    return entities
+
+
 def _risk_row(row):
     plate = str(row.get("plate") or row.get("license_plate") or row.get("Placa_del_vehiculo") or "").strip()
     try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from django import forms
+from django.core.validators import validate_email
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
@@ -281,11 +282,31 @@ class OptionalAccessEmailForm(forms.Form):
 
 
 class IndividualAccessPrepareForm(OptionalAccessEmailForm):
+    recipient = forms.CharField(
+        label="Correo para código de verificación", max_length=254, required=False,
+    )
+    otp_required = forms.BooleanField(
+        label="Solicitar código de verificación por correo", required=False,
+    )
     responsible = forms.ChoiceField(
         label="Responsable de la solicitud",
         required=False,
         choices=(),
     )
+
+    def clean(self):
+        cleaned = super().clean()
+        recipient = str(cleaned.get("recipient") or "").strip()
+        if cleaned.get("otp_required"):
+            if not recipient:
+                self.add_error("recipient", "Indique un correo válido para solicitar el código de verificación.")
+            else:
+                try:
+                    validate_email(recipient)
+                except forms.ValidationError:
+                    self.add_error("recipient", "Indique un correo válido para solicitar el código de verificación.")
+        cleaned["recipient"] = recipient
+        return cleaned
 
 
 class PersonCompletionForm(forms.Form):

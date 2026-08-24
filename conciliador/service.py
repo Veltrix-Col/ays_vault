@@ -21,7 +21,7 @@ from conciliador.domain.models import ReporteConciliacion
 from conciliador.engine import ReconciliationEngine
 from conciliador.ramos import obtener_ramo
 from conciliador.reporting.excel_writer import reporte_a_bytes
-from conciliador.sources.foundry_recibo import extraer_recibo
+from conciliador.sources.foundry_recibo import ReciboExtraido, extraer_recibo
 
 if TYPE_CHECKING:
     from ays_zoho_sdk import ZohoFacade
@@ -55,6 +55,11 @@ class ConciliacionResultado:
     contenido_excel: bytes
     nombre_archivo: str
     resumen: dict[str, int]
+    # Recibo (PDF) extraido con Foundry, si el ramo lo valida y la extraccion
+    # tuvo exito; None en cualquier otro caso (ver `ReciboConciliacionRule`
+    # para el incidente 'N/D' que cubre esos casos). Lo usa `conciliacion.services.
+    # processor` para ofrecer el prellenado de campos del Cobro en Zoho.
+    recibo: ReciboExtraido | None = None
 
 
 class ConciliacionService:
@@ -103,8 +108,10 @@ class ConciliacionService:
                 relacion = ramo.cargar_relacion(archivos.relacion)
                 novedades = ramo.cargar_novedades(archivos.novedades)
             datos_extra = ramo.construir_datos_extra(archivos.cobro) if ramo.construir_datos_extra else {}
+            recibo_extraido: ReciboExtraido | None = None
             if ramo.valida_recibo_pdf:
-                datos_extra = {**datos_extra, "recibo_cu": extraer_recibo(archivos.recibo)}
+                recibo_extraido = extraer_recibo(archivos.recibo)
+                datos_extra = {**datos_extra, "recibo_cu": recibo_extraido}
 
             motor = ReconciliationEngine(ramo.reglas)
             reporte = motor.ejecutar(
@@ -123,4 +130,5 @@ class ConciliacionService:
             contenido_excel=reporte_a_bytes(reporte),
             nombre_archivo=f"Reporte_Conciliacion_{ramo.nombre.replace(' ', '_')}_{marca}.xlsx",
             resumen=reporte.resumen_por_tipo(),
+            recibo=recibo_extraido,
         )

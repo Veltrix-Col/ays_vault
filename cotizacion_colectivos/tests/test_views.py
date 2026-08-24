@@ -211,3 +211,4 @@ class ColectivosViewTests(TestCase):
         self.assertNotContains(response, "Solicitudes y Renovaciones")
         self.assertNotContains(response, "Cotización – Colectivos")
         self.assertContains(response, ">SOAT<", html=False)
+        self.assertNotContains(response, "colectivos-tool-nav")

@@ -9,7 +9,7 @@ from django.template import engines
 from django.test import SimpleTestCase
 from django.urls import resolve
 
-from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_mobility_entities, synchronize_risk_insured
+from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from cotizacion_colectivos.services.person_contract import build_contact_payload
 
 
@@ -35,6 +35,62 @@ class _Facade:
 
 
 class IndividualEntityResolutionTests(SimpleTestCase):
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document")
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_health_resolves_affiliate_and_multiple_insured_people_without_duplication(self, decrypt, resolve):
+        resolve.side_effect = lambda **kwargs: (
+            {"status": "FOUND", "record_id": f"CONTACT-{kwargs['document']}"}
+            if kwargs["document"] in {"111", "222", "333"}
+            else {"status": "NOT_FOUND"}
+        )
+        quotation = self.person_quotation("salud", [
+            {"entity_key": "people-a", "is_requester": True, "document": "111", "first_name": "Afiliado"},
+            {"entity_key": "people-b", "is_requester": False, "document": "222", "first_name": "María"},
+            {"entity_key": "people-c", "is_requester": False, "document": "333", "first_name": "José"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual([item["owner_key"] for item in result["people"]], ["affiliate", "people-b", "people-c"])
+        self.assertEqual([item["status"] for item in result["people"]], ["found", "found", "found"])
+        self.assertEqual(len({item["document"] for item in result["people"]}), 3)
+
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_people_owner_keys_resolve_independently(self, decrypt, resolve):
+        quotation = self.person_quotation("vida", [
+            {"entity_key": "people-juan", "document": "444", "first_name": "Juan"},
+            {"entity_key": "people-maria", "document": "555", "first_name": "María"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual([item["owner_key"] for item in result["people"]], ["affiliate", "people-juan", "people-maria"])
+        self.assertEqual([item["status"] for item in result["people"]], ["not_found"] * 3)
+        self.assertEqual(result["people"][2]["candidate"]["N_mero_de_ID"], "555")
+
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "CONTACT-1"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_exequial_family_documents_keep_distinct_owners(self, decrypt, resolve):
+        quotation = self.person_quotation("exequial", [
+            {"entity_key": "people-a", "document": "777", "first_name": "Ana"},
+            {"entity_key": "people-b", "document": "888", "first_name": "Luis"},
+        ])
+        result = resolve_common_people_entities(quotation=quotation)
+        self.assertEqual({item["owner_key"] for item in result["people"]}, {"affiliate", "people-a", "people-b"})
+        self.assertEqual({item["document"] for item in result["people"]}, {"111111", "777", "888"})
+
+    def person_quotation(self, branch, rows):
+        payload = {
+            "schema": branch,
+            "fields": {
+                "first_name": "Afiliado", "last_name": "Principal", "requester_id_type": "CC",
+                "requester_document": "111111", "requester_birth_date": "1990-01-01",
+                "requester_email": "affiliate@example.com", "requester_phone": "3000000000",
+            },
+            "groups": {"people": rows}, "context": {},
+        }
+        return SimpleNamespace(
+            encrypted_payload=json.dumps(payload), branch_slug=branch, safe_metadata={},
+            save=lambda **kwargs: None,
+        )
+
     def test_created_people_lookup_promotes_stale_entity_without_touching_other_role(self):
         entity_people = [
             {"document": "888 989 898", "candidate": {"Tipo_ID": "CC"}, "role": "Persona principal", "status": "not_found"},
@@ -327,6 +383,21 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
         self.assertIn("Pendiente de placa", javascript)
         self.assertIn("Complete la placa para buscar o crear este vehículo en Zoho.", javascript)
 
+    def test_document_preview_opens_protected_endpoint_in_new_tab(self):
+        partial = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "_document_owner.html").read_text(encoding="utf-8")
+        detail = self.template
+        self.assertIn('target="_blank"', partial)
+        self.assertIn('rel="noopener noreferrer"', partial)
+        self.assertNotIn("data-document-preview-dialog", detail)
+        self.assertNotIn("<iframe", (Path(__file__).parents[2] / "static" / "js" / "colectivos-detail.js").read_text(encoding="utf-8"))
+
+    def test_vehicle_editor_uses_shared_class_and_use_choices(self):
+        self.assertIn('name="Clase"><option value="">Seleccione una clase</option>', self.template)
+        self.assertIn('name="Tipo_de_uso"><option value="">Seleccione un tipo de uso</option>', self.template)
+        self.assertIn('vehicle_class_choices', self.template)
+        self.assertIn('vehicle_use_choices', self.template)
+        self.assertIn('data-zero-km="{{ risk.zero_km }}"', self.template)
+
     def test_vehicle_edit_uses_existing_loading_feedback(self):
         loading = (Path(__file__).parents[2] / "static" / "js" / "colectivos-loading.js").read_text(encoding="utf-8")
         self.assertIn("/entidad/", loading)
@@ -400,6 +471,110 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
         for forbidden in ("<", ">", "input", "%3E"):
             self.assertNotIn(forbidden, action.lower())
 
+    def test_rendered_created_risk_with_pending_document_exposes_publish_action(self):
+        attachment = SimpleNamespace(
+            pk=2,
+            owner_label="Vehículo",
+            safe_original_name="VELTRIX_TEST_ATTACHMENT.pdf",
+            detected_mime="application/pdf",
+            size=128,
+            safe_metadata={
+                "owner_type": "risk",
+                "owner_key": "vehicles-048d3af6-06b3-48cc-bed2-ab9f979472c3",
+                "risk_key": "vehicles-048d3af6-06b3-48cc-bed2-ab9f979472c3",
+            },
+            document_status="pending",
+            can_publish=True,
+            structured_owner=True,
+        )
+        affiliate_document = SimpleNamespace(
+            pk=3, owner_label="Afiliado", safe_original_name="affiliate-id.pdf",
+            detected_mime="application/pdf", size=64,
+            safe_metadata={"owner_type": "contact", "owner_key": "affiliate", "document_type": "identity_document"},
+            document_status="pending", can_publish=True, structured_owner=True,
+        )
+        insured_document = SimpleNamespace(
+            pk=4, owner_label="Asegurado", safe_original_name="insured-id.pdf",
+            detected_mime="application/pdf", size=64,
+            safe_metadata={"owner_type": "contact", "owner_key": "vehicles-048d3af6-06b3-48cc-bed2-ab9f979472c3-insured", "document_type": "identity_document"},
+            document_status="pending", can_publish=True, structured_owner=True,
+        )
+        html = engines["django"].get_template("cotizacion_colectivos/individual/detail.html").render({
+            "individual_token": "test-token",
+            "schema": SimpleNamespace(name="Movilidad"),
+            "individual_context": {},
+            "acceptance": {"status": "accepted"},
+            "people_lookup": ({"role": "Afiliado", "display_name": "Afiliado QA", "status": "found", "document": "111", "candidate": {
+                "First_Name": "Afiliado", "Last_Name": "QA", "Tipo_ID": "CC", "N_mero_de_ID": "111",
+                "Date_of_Birth": "1990-01-01", "Email": "affiliate@example.com", "Phone": "3000000000", "Mobile": "3000000000",
+            }, "documents": (affiliate_document,)},),
+            "individual_attachments": (attachment, affiliate_document, insured_document),
+            "zoho_entities": {
+                "branch": "movilidad",
+                "risks": [{
+                    "status": "created", "remote_id": "4991513000271052016",
+                    "owner_key": "vehicles-048d3af6-06b3-48cc-bed2-ab9f979472c3",
+                    "risk_key": "vehicles-048d3af6-06b3-48cc-bed2-ab9f979472c3",
+                    "documents": (attachment,),
+                    "candidate": {"Placa_del_vehiculo": "AAA111"},
+                    "insured_same_as_affiliate": False,
+                    "insured": {"status": "found", "document": "222", "candidate": {
+                        "First_Name": "Asegurado", "Last_Name": "QA", "Tipo_ID": "CC", "N_mero_de_ID": "222",
+                        "Date_of_Birth": "1991-01-01", "Email": "insured@example.com", "Phone": "3110000000", "Mobile": "3110000000",
+                    }, "documents": (insured_document,)},
+                }],
+                "subrisks": [], "policy": {},
+            },
+        })
+        self.assertIn("Pendiente de Zoho", html)
+        self.assertIn("Adjuntar documento en Zoho", html)
+        class DocumentParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.vehicle_depth = 0
+                self.documents = 0
+                self.preview_links = []
+                self.visible_names = []
+                self._capture_name = False
+                self._capture_depth = 0
+
+            def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                classes = set((attributes.get("class") or "").split())
+                if "vehicle-entity-card" in classes:
+                    self.vehicle_depth += 1
+                if "entity-document" in classes:
+                    self.documents += 1
+                if tag == "a" and "/adjuntos/" in attributes.get("href", ""):
+                    self.preview_links.append(attributes)
+                if tag == "a" and "/adjuntos/2/preview/" in attributes.get("href", ""):
+                    self._capture_name = True
+                    self._capture_depth = 1
+
+            def handle_endtag(self, tag):
+                if tag == "a" and self._capture_name:
+                    self._capture_depth -= 1
+                    if self._capture_depth == 0:
+                        self._capture_name = False
+                if tag == "article" and self.vehicle_depth:
+                    self.vehicle_depth -= 1
+
+            def handle_data(self, data):
+                if self._capture_name and data.strip():
+                    self.visible_names.append(data.strip())
+
+        parser = DocumentParser()
+        parser.feed(html)
+        self.assertEqual(parser.documents, 3)  # risk, affiliate and nested insured cards
+        risk_links = [link for link in parser.preview_links if "/adjuntos/2/preview/" in link.get("href", "")]
+        self.assertEqual(len(risk_links), 1)
+        self.assertEqual(parser.visible_names.count("VELTRIX_TEST_ATTACHMENT.pdf"), 1)
+        affiliate_links = [link for link in parser.preview_links if "/adjuntos/3/preview/" in link.get("href", "")]
+        self.assertEqual(len(affiliate_links), 1)
+        for link in parser.preview_links:
+            self.assertEqual(link.get("target"), "_blank")
+            self.assertEqual(link.get("rel"), "noopener noreferrer")
+
     def test_policy_data_uses_human_language_without_changing_subrisk_contract(self):
         javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-detail.js").read_text(encoding="utf-8")
         self.assertIn("Datos para Zoho", self.template)
@@ -420,7 +595,7 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
         self.assertIn('Agregado a la póliza', javascript)
         self.assertIn('association.querySelectorAll("[data-dialog-open^=\'subrisk-edit-\']").forEach((trigger) => trigger.remove())', javascript)
         self.assertIn('Creando afiliado en Zoho…', javascript)
-        self.assertIn('Creando vehículo en Zoho…', javascript)
+        self.assertIn('Creando riesgo en Zoho…', javascript)
         self.assertIn('Agregando a la póliza…', javascript)
 
     def test_operational_workspace_uses_main_width_and_risk_create_condition(self):

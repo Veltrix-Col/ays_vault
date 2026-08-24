@@ -17,6 +17,7 @@ from integrations.zoho.settings import ZohoSettings
 from vault.crypto import decrypt, encrypt
 
 from ..models import ColectivosTaskOutbox
+from .write_guards import configured_confirmation, require_write_guard
 
 
 TASK_KIND = {
@@ -196,18 +197,12 @@ class GuardedTaskPublisher:
     def __init__(self, *, profile: str, confirmation: str):
         if profile not in _WRITABLE_PROFILES:
             raise TaskPublishingDisabled("Tasks sólo admite los perfiles habilitados (sandbox, production).")
-        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != profile:
-            raise TaskPublishingDisabled("El perfil Zoho activo no coincide con el solicitado.")
-        zoho_config = ZohoSettings.from_django(profile)
-        if not zoho_config.write_enabled:
-            raise TaskPublishingDisabled(f"La escritura del perfil {profile} está deshabilitada.")
-        if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
-            raise TaskPublishingDisabled("La publicación Tasks no está habilitada.")
-        expected = _expected_confirmation(profile)
-        if getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "") != expected:
-            raise TaskPublishingDisabled(f"La configuración no confirma la escritura de {profile}.")
-        if str(confirmation or "").strip() != expected:
-            raise TaskPublishingDisabled(f"Falta la confirmación explícita de escritura de {profile}.")
+        require_write_guard(
+            entity="task", profile=profile, confirmation=confirmation,
+            feature_flag="COLECTIVOS_TASK_PUBLISH_ENABLED",
+            legacy_setting="COLECTIVOS_TASK_WRITE_CONFIRMATION",
+            disabled_error=TaskPublishingDisabled,
+        )
         self.profile = profile
 
     def publish(self, payload: ColectivosTaskPayload) -> Mapping[str, object]:
@@ -296,7 +291,11 @@ def publish_task_outbox(outbox_id: int) -> None:
             )
             result = get_task_publisher(
                 profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
-                confirmation=str(getattr(settings, "COLECTIVOS_TASK_WRITE_CONFIRMATION", "")),
+                confirmation=configured_confirmation(
+                    "task",
+                    str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+                    legacy_setting="COLECTIVOS_TASK_WRITE_CONFIRMATION",
+                ),
             ).publish(payload)
         except TaskPublicationUncertain:
             item.status = item.Status.RECONCILE

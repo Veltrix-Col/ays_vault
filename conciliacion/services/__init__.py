@@ -7,13 +7,23 @@ serializable (bytes del Excel + resumen), traduciendo errores de negocio a
 """
 
 from .processor import (
+    CobroNotFound,
+    CobroPrefillDisabled,
+    CobroPrefillError,
+    CobroPrefillNoData,
     ConciliacionProcessingError,
     ConciliacionOutput,
+    prellenar_cobro,
     procesar_conciliacion,
 )
 
 __all__ = [
+    "CobroNotFound",
+    "CobroPrefillDisabled",
+    "CobroPrefillError",
+    "CobroPrefillNoData",
     "ConciliacionProcessingError",
     "ConciliacionOutput",
+    "prellenar_cobro",
     "procesar_conciliacion",
 ]

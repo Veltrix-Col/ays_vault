@@ -11,6 +11,7 @@ from cotizacion_colectivos.services.subrisk_sandbox import (
     build_subrisk_payload,
     build_mobility_subrisk_payload,
     create_subrisk_sandbox,
+    create_mobility_subrisk_sandbox,
     resolve_mobility_subrisk_relation,
     resolve_policy_by_number,
     validate_lookup_id,
@@ -174,6 +175,29 @@ class SubriskPayloadTests(SimpleTestCase):
 
 
 class SubriskSandboxWriteTests(SimpleTestCase):
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
+        COLECTIVOS_SUBRISK_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_SUBRISK_WRITE_CONFIRMATION="SANDBOX_SUBRISK_WRITE",
+    )
+    @patch("cotizacion_colectivos.services.subrisk_sandbox.ZohoSettings.from_django", return_value=SimpleNamespace(write_enabled=True))
+    def test_operational_mobility_subrisk_uses_profile_confirmation(self, _settings):
+        del _settings
+        zoho = SimpleNamespace(records=Mock())
+        zoho.records.create.return_value = SimpleNamespace(records=(SimpleNamespace(succeeded=True, record_id="4991513000271099999", code="SUCCESS"),))
+        payload = build_mobility_subrisk_payload(
+            policy_id="4991513000000000001", affiliate_contact_id="4991513000270118607",
+            insured_contact_id="4991513000270118608", risk_id="4991513000270982008",
+            subrisk_name="ABC123", entry_date="2026-08-22",
+        )
+        with patch("cotizacion_colectivos.services.subrisk_sandbox.resolve_mobility_subrisk_relation", return_value={"status": "NOT_FOUND"}):
+            result = create_mobility_subrisk_sandbox(
+                payload, profile="sandbox", confirmation="SANDBOX_SUBRISK_WRITE", zoho=zoho, operational=True,
+            )
+        self.assertEqual(result["record_id"], "4991513000271099999")
+        zoho.records.create.assert_called_once()
+
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
         ZOHO_SANDBOX_WRITE_ENABLED=True,
