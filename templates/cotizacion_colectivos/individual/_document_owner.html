@@ -1,0 +1,13 @@
+<div class="entity-document" data-owner-key="{{ document.safe_metadata.owner_key }}">
+  <span class="eyebrow">{% if document.safe_metadata.document_type == "vehicle_registration" %}Tarjeta de propiedad{% elif document.safe_metadata.document_type == "identity_document" %}Documento de identidad{% else %}Documento{% endif %}</span>
+  <strong><a href="{% url 'cotizacion_colectivos:individual_attachment_preview' token=individual_token attachment_id=document.pk %}" target="_blank" rel="noopener noreferrer">{{ document.safe_original_name }}</a></strong>
+  <small>{{ document.detected_mime }} · {{ document.size }} bytes · {% if document.document_status == "uploaded" %}Publicado en Zoho{% elif document.document_status == "reconcile_required" %}Requiere conciliación{% elif document.document_status == "failed" %}Error al publicar{% else %}Pendiente de Zoho{% endif %}</small>
+  <div class="entity-document__actions">
+    {% if document.document_status == "reconcile_required" %}
+      <form method="post" action="{% url 'cotizacion_colectivos:individual_attachment_reconcile' token=individual_token attachment_id=document.pk %}">{% csrf_token %}<button type="submit" class="button-link button-link--secondary">Reconciliar documento</button></form>
+    {% elif document.can_publish %}
+      <form method="post" action="{% url 'cotizacion_colectivos:individual_attachment_publish' token=individual_token attachment_id=document.pk %}">{% csrf_token %}<button type="submit" class="button-link button-link--primary">Adjuntar documento en Zoho</button></form>
+    {% endif %}
+    {% if document.document_status != "uploaded" %}<form method="post" action="{% url 'cotizacion_colectivos:individual_attachment_remove' token=individual_token attachment_id=document.pk %}">{% csrf_token %}<button type="submit" class="button-link button-link--secondary">Quitar</button></form>{% endif %}
+  </div>
+</div>

@@ -16,11 +16,9 @@
     <div class="repeatable-list" data-item-list="{{ group.key }}"></div>
   </section>{% endfor %}
   {% if form.items_payload.errors %}<div class="form-alert" role="alert">{{ form.items_payload.errors }}</div>{% endif %}
-  {# The legacy global attachments field remains accepted server-side for historical clients,
-     but is intentionally not rendered for new quotations. Documents live beside their owner. #}
   <section class="workspace-card review-panel"><div class="section-heading"><div><span class="eyebrow">Finalizar</span><h2>Revisar y enviar</h2></div></div><p data-review-summary>Revise los elementos agregados antes de enviar.</p><p class="muted">La información se guarda localmente cifrada.</p><button type="submit" class="button-primary">Enviar cotización</button></section>
 </form>
 <dialog class="individual-dialog" data-item-dialog><form method="dialog" data-dialog-form><header><h2 data-dialog-title>Agregar elemento</h2><button type="button" data-close-dialog aria-label="Cerrar">×</button></header><div class="individual-field-grid" data-dialog-fields></div><footer><button type="button" class="button-secondary" data-close-dialog>Cancelar</button><button type="submit" class="button-primary">Guardar</button></footer></form></dialog>
 {{ schema_payload|json_script:"individual-schema" }}
-<script src="{% static 'js/colectivos-individual.js' %}" defer></script>
+<script src="{% static 'js/colectivos-individual.js' %}?v=20260823-vehicles" defer></script>
 {% endblock %}

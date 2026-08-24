@@ -28,6 +28,21 @@
 
   const groupSchema = key => schema.repeatables.find(group => group.key === key);
   const escapeLabel = value => String(value || "").trim() || "Sin completar";
+  const displayValue = (value, field) => {
+    if (field.kind === "checkbox") return value ? "Sí" : "No";
+    return String(value || "").trim() || "Sin información";
+  };
+  const placeholders = {
+    first_name: "Ej. Juan Carlos", last_name: "Ej. Pérez Gómez",
+    name: "Ej. Juan Carlos Pérez", id_type: "Seleccione...",
+    document: "Ej. 1030123456", birth_date: "AAAA-MM-DD",
+    email: "Ej. usuario@correo.com", phone: "Ej. 3001234567",
+    insured_first_name: "Ej. Juan Carlos", insured_last_name: "Ej. Pérez Gómez",
+    insured_document: "Ej. 1030123456", insured_birth_date: "AAAA-MM-DD",
+    insured_email: "Ej. usuario@correo.com", insured_phone: "Ej. 3001234567",
+    brand: "Ej. Renault", line: "Ej. Duster", displacement: "Ej. 1600",
+    model: "Ej. 2026", plate: "Ej. ABC123", city: "Ej. Medellín",
+  };
   const newEntityKey = (group, index) => {
     if (window.crypto && typeof window.crypto.randomUUID === "function") return `${group}-${window.crypto.randomUUID()}`;
     return `${group}-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 8)}`;
@@ -53,8 +68,18 @@
       const card = document.createElement("article"); card.className = "repeatable-card";
       const title = document.createElement("div");
       const first = definition.fields.find(field => row[field.key]);
+      title.className = "repeatable-card__heading";
       title.innerHTML = `<strong>${definition.singular} ${index + 1}</strong><span></span>`;
       title.querySelector("span").textContent = first ? escapeLabel(row[first.key]) : "Pendiente de completar";
+      const summary = document.createElement("dl");
+      summary.className = "repeatable-summary";
+      definition.fields.forEach(field => {
+        if (field.key === "entity_key") return;
+        const item = document.createElement("div");
+        const label = document.createElement("dt"); label.textContent = field.label;
+        const value = document.createElement("dd"); value.textContent = displayValue(row[field.key], field);
+        item.append(label, value); summary.appendChild(item);
+      });
       const actions = document.createElement("div"); actions.className = "repeatable-actions";
       const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Editar"; edit.addEventListener("click", () => openDialog(key, index));
       const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Eliminar"; remove.disabled = groups[key].length <= definition.minimum; remove.addEventListener("click", () => { groups[key].splice(index, 1); render(key); sync(); });
@@ -121,8 +146,13 @@
           }
         }
       }
-      actions.append(edit, remove); card.append(actions); host.append(card);
+      actions.append(edit, remove);
+      card.prepend(title, summary);
+      card.append(actions);
+      host.append(card);
     });
+    const addButton = form.querySelector(`[data-add-item="${key}"]`);
+    if (addButton && key === "vehicles") addButton.textContent = groups[key]?.length ? "+ Agregar otro vehículo" : "+ Agregar vehículo";
     sync();
   };
   const openDialog = (key, index = null) => {
@@ -185,6 +215,7 @@
       else { input = document.createElement("input"); input.type = field.kind === "checkbox" ? "checkbox" : ({email:"email",date:"date",tel:"tel"}[field.kind] || "text"); }
       input.name = field.key; input.id = `dialog-${key}-${index === null ? "new" : index}-${field.key}`; label.htmlFor = input.id;
       input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
+      if (placeholders[field.key] && field.kind !== "choice") input.placeholder = placeholders[field.key];
       if (field.kind === "checkbox") input.checked = Boolean(row[field.key]);
       if (key === "people" && field.key === "is_requester") {
         const alreadyAdded = (groups.people || []).some((item, itemIndex) => itemIndex !== index && Boolean(item.is_requester || item.use_requester));
@@ -197,8 +228,31 @@
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });
     fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", () => { copyRequester(); applyConditions(); }));
+    const syncVehiclePlate = () => {
+      if (key !== "vehicles") return;
+      const zeroKm = fieldsHost.querySelector('[name="zero_km"]');
+      const plate = fieldsHost.querySelector('[name="plate"]');
+      if (!zeroKm || !plate) return;
+      let error = fieldsHost.querySelector("[data-plate-error]");
+      if (!error) {
+        error = document.createElement("small"); error.dataset.plateError = "true";
+        error.className = "field-error"; error.hidden = true;
+        plate.parentElement.appendChild(error);
+      }
+      const updateError = () => {
+        const required = zeroKm.value === "No";
+        plate.required = required;
+        plate.placeholder = required ? "Ej. ABC123" : "No obligatorio para vehículo 0 km";
+        error.hidden = !(required && !plate.value.trim());
+        error.textContent = error.hidden ? "" : "La placa es obligatoria cuando el vehículo no es 0 km.";
+      };
+      plate.addEventListener("input", updateError);
+      zeroKm.addEventListener("change", updateError);
+      updateError();
+    };
     copyRequester();
     applyConditions();
+    syncVehiclePlate();
     dialog.showModal();
   };
   form.querySelectorAll("[data-add-item]").forEach(button => button.addEventListener("click", () => openDialog(button.dataset.addItem)));
@@ -207,9 +261,11 @@
     event.preventDefault();
     if (!event.currentTarget.reportValidity()) return;
     const row = Object.fromEntries([...fieldsHost.querySelectorAll("input,select")].map(input => [input.name, input.type === "checkbox" ? input.checked : input.value.trim()]));
+    const previous = activeIndex === null ? null : groups[activeGroup][activeIndex];
+    row.entity_key = previous?.entity_key || newEntityKey(activeGroup, activeIndex === null ? groups[activeGroup].length : activeIndex);
     if (activeIndex === null) groups[activeGroup].push(row); else groups[activeGroup][activeIndex] = row;
     render(activeGroup); dialog.close();
   });
-  schema.repeatables.forEach(definition => { groups[definition.key] ||= [{}]; render(definition.key); });
+  schema.repeatables.forEach(definition => { groups[definition.key] ||= []; render(definition.key); });
   form.addEventListener("submit", sync);
 })();

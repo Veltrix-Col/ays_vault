@@ -9,7 +9,7 @@ PROFILE_CONFIRMATIONS = {
     "sandbox": {
         "task": "SANDBOX_TASK_WRITE",
         "contact": "SANDBOX_CONTACT_WRITE",
-        "risk": "SANDBOX_MOBILITY_RISK_SEED",
+        "risk": "SANDBOX_RISK_WRITE",
         "subrisk": "SANDBOX_SUBRISK_WRITE",
         "attachment": "SANDBOX_ATTACHMENT_WRITE",
     },

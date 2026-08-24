@@ -55,6 +55,7 @@ urlpatterns = [
     path("solicitudes/cotizacion-individual/<str:token>/riesgo/<int:vehicle_index>/crear/", views.individual_create_risk, name="individual_create_risk"),
     path("solicitudes/cotizacion-individual/<str:token>/subriesgo/<int:vehicle_index>/crear/", views.individual_create_subrisk, name="individual_create_subrisk"),
     path("solicitudes/cotizacion-individual/<str:token>/responsable/", views.individual_update_responsible, name="individual_update_responsible"),
+    path("solicitudes/cotizacion-individual/<str:token>/adjuntos/<int:attachment_id>/preview/", views.individual_attachment_download, name="individual_attachment_preview"),
     path("solicitudes/cotizacion-individual/<str:token>/task/publicar/", views.individual_publish_task, name="individual_publish_task"),
     path("solicitudes/<str:public_id>/", views.request_detail, name="request_detail"),
     path("solicitudes/<str:public_id>/tasks/<int:outbox_id>/publicar/", views.request_publish_task, name="request_publish_task"),

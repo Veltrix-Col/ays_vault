@@ -14,11 +14,11 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
         ZOHO_ACTIVE_PROFILE="sandbox",
         COLECTIVOS_TASK_PUBLISH_ENABLED=True,
         COLECTIVOS_CONTACT_PUBLISH_ENABLED=True,
+        COLECTIVOS_RISK_PUBLISH_ENABLED=True,
         COLECTIVOS_SUBRISK_PUBLISH_ENABLED=True,
-        COLECTIVOS_MOBILITY_RISK_SEED_ENABLED=True,
         COLECTIVOS_SANDBOX_TASK_WRITE_CONFIRMATION="SANDBOX_TASK_WRITE",
         COLECTIVOS_SANDBOX_CONTACT_WRITE_CONFIRMATION="SANDBOX_CONTACT_WRITE",
-        COLECTIVOS_SANDBOX_RISK_WRITE_CONFIRMATION="SANDBOX_MOBILITY_RISK_SEED",
+        COLECTIVOS_SANDBOX_RISK_WRITE_CONFIRMATION="SANDBOX_RISK_WRITE",
         COLECTIVOS_SANDBOX_SUBRISK_WRITE_CONFIRMATION="SANDBOX_SUBRISK_WRITE",
     )
     def test_sandbox_accepts_only_sandbox_confirmations_for_all_entities(self):
@@ -29,7 +29,7 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
             for entity, confirmation in (
                 ("task", "SANDBOX_TASK_WRITE"),
                 ("contact", "SANDBOX_CONTACT_WRITE"),
-                ("risk", "SANDBOX_MOBILITY_RISK_SEED"),
+                ("risk", "SANDBOX_RISK_WRITE"),
                 ("subrisk", "SANDBOX_SUBRISK_WRITE"),
             ):
                 require_write_guard(
@@ -37,7 +37,7 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
                     feature_flag={
                         "task": "COLECTIVOS_TASK_PUBLISH_ENABLED",
                         "contact": "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
-                        "risk": "COLECTIVOS_MOBILITY_RISK_SEED_ENABLED",
+                        "risk": "COLECTIVOS_RISK_PUBLISH_ENABLED",
                         "subrisk": "COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
                     }[entity],
                     disabled_error=RuntimeError,
@@ -47,7 +47,7 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
         ZOHO_ACTIVE_PROFILE="sandbox",
         COLECTIVOS_SANDBOX_TASK_WRITE_CONFIRMATION="SANDBOX_TASK_WRITE",
         COLECTIVOS_SANDBOX_CONTACT_WRITE_CONFIRMATION="SANDBOX_CONTACT_WRITE",
-        COLECTIVOS_SANDBOX_RISK_WRITE_CONFIRMATION="SANDBOX_MOBILITY_RISK_SEED",
+        COLECTIVOS_SANDBOX_RISK_WRITE_CONFIRMATION="SANDBOX_RISK_WRITE",
         COLECTIVOS_SANDBOX_SUBRISK_WRITE_CONFIRMATION="SANDBOX_SUBRISK_WRITE",
     )
     def test_sandbox_rejects_production_confirmation(self):
@@ -95,7 +95,7 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
         COLECTIVOS_TASK_PUBLISH_ENABLED=True,
         COLECTIVOS_CONTACT_PUBLISH_ENABLED=True,
         COLECTIVOS_SUBRISK_PUBLISH_ENABLED=True,
-        COLECTIVOS_MOBILITY_RISK_SEED_ENABLED=True,
+        COLECTIVOS_RISK_PUBLISH_ENABLED=True,
         COLECTIVOS_PRODUCTION_TASK_WRITE_CONFIRMATION="PRODUCTION_TASK_WRITE",
         COLECTIVOS_PRODUCTION_CONTACT_WRITE_CONFIRMATION="PRODUCTION_CONTACT_WRITE",
         COLECTIVOS_PRODUCTION_RISK_WRITE_CONFIRMATION="PRODUCTION_RISK_WRITE",
@@ -109,7 +109,7 @@ class ProfileWriteConfirmationTests(SimpleTestCase):
             for entity, confirmation, feature_flag in (
                 ("task", "PRODUCTION_TASK_WRITE", "COLECTIVOS_TASK_PUBLISH_ENABLED"),
                 ("contact", "PRODUCTION_CONTACT_WRITE", "COLECTIVOS_CONTACT_PUBLISH_ENABLED"),
-                ("risk", "PRODUCTION_RISK_WRITE", "COLECTIVOS_MOBILITY_RISK_SEED_ENABLED"),
+                ("risk", "PRODUCTION_RISK_WRITE", "COLECTIVOS_RISK_PUBLISH_ENABLED"),
                 ("subrisk", "PRODUCTION_SUBRISK_WRITE", "COLECTIVOS_SUBRISK_PUBLISH_ENABLED"),
             ):
                 require_write_guard(

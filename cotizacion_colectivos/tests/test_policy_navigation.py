@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from datetime import timedelta
 from html.parser import HTMLParser
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
@@ -444,8 +445,39 @@ class PolicyNavigationTests(TestCase):
         # forma parte de la barra superior compartida.
         header = individual_page.content.decode(individual_page.charset or "utf-8").split("</header>", 1)[0]
         self.assertNotIn("Buscar cliente", header)
-        self.assertIn('class="notification-link"', header)
+        self.assertRegex(header, r'class="[^"]*\bnotification-link\b[^"]*"')
         self.assertIn("Buzón", header)
+        self.assertIn(f'href="{reverse("cotizacion_colectivos:request_list")}"', header)
+        self.assertRegex(header, r"Buzón\s*<span>\d+</span>")
+        self.assertIn("colectivos-tool-nav", header)
+
+    def test_colectivos_header_exposes_canonical_tool_navigation(self):
+        """The shared Colectivos shell links to existing tools only."""
+        with patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService()):
+            response = self.client.get(reverse("cotizacion_colectivos:individual_policy_detail", args=[TOKEN]))
+
+        header = response.content.decode(response.charset or "utf-8").split("</header>", 1)[0]
+        for route_name in (
+            "cotizacion_colectivos:novelties_index",
+            "cotizacion_colectivos:individual_index",
+            "cotizacion_colectivos:invitations_index",
+            "conciliacion:index",
+            "cotizacion_colectivos:request_list",
+        ):
+            self.assertIn(f'href="{reverse(route_name)}"', header)
+        self.assertIn("Novedades", header)
+        self.assertIn("Cotización Individual", header)
+        self.assertIn("Invitaciones", header)
+        self.assertIn("Conciliador", header)
+        self.assertIn("Buzón", header)
+        self.assertIn('class="is-active" aria-current="page"', header)
+        self.assertIn("colectivos-tool-nav", header)
+
+    def test_colectivos_quick_navigation_has_responsive_styles(self):
+        css = (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8")
+        self.assertIn(".colectivos-tool-nav", css)
+        self.assertIn(".colectivos-tool-nav__links", css)
+        self.assertIn("@media (max-width: 760px)", css)
 
     @patch("cotizacion_colectivos.views.resolve_task_responsible_email", return_value="responsable@example.test")
     @patch("cotizacion_colectivos.views.task_responsible_options", return_value=(Mock(actual_value="RESP-1", display_value="Responsable Demo"),))

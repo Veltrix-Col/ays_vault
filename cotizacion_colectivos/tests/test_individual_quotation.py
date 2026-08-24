@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -12,8 +14,10 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils.datastructures import MultiValueDict
 
 from vault.crypto import decrypt
+from vault.crypto import encrypt
 
 from cotizacion_colectivos.dto import ContactSummary, GroupMember, PolicyDetail
 from cotizacion_colectivos.models import (
@@ -37,9 +41,11 @@ from cotizacion_colectivos.services.individual_quotations import _individual_tas
 from cotizacion_colectivos.services.person_contract import build_contact_payload
 from cotizacion_colectivos.services.individual_attachment_publisher import (
     IndividualAttachmentBlocked,
+    IndividualAttachmentUncertain,
     _validate_document_contract,
     publish_attachment,
 )
+from cotizacion_colectivos.views import _HIDDEN_RESPONSE_KEYS, _attachment_can_publish, _attachment_document_status, _human_response_value
 from cotizacion_colectivos.services.common import sign_record_id
 
 
@@ -48,6 +54,29 @@ POLICY_TOKEN = sign_record_id(
     "policy",
     context={"source_id": "5234567890123456789", "source_kind": "company"},
 )
+
+
+def valid_minimal_pdf_bytes():
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+    )
+    body = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(body))
+        body.extend(f"{index} 0 obj\n".encode())
+        body.extend(value)
+        body.extend(b"\nendobj\n")
+    xref_offset = len(body)
+    body.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    body.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        body.extend(f"{offset:010d} 00000 n \n".encode())
+    body.extend(f"trailer\n<< /Root 1 0 R /Size {len(objects) + 1} >>\nstartxref\n{xref_offset}\n%%EOF\n".encode())
+    return bytes(body)
 
 
 def policy(branch_code="91", branch_name="Salud colectivo"):
@@ -108,6 +137,16 @@ def affiliate():
 
 
 class IndividualQuotationTests(TestCase):
+    def test_human_response_formatter_preserves_boolean_semantics(self):
+        self.assertEqual(_human_response_value("is_requester", True), "Sí")
+        self.assertEqual(_human_response_value("is_requester", False), "No")
+        self.assertEqual(_human_response_value("is_requester", ""), "Sin información")
+        self.assertEqual(_human_response_value("is_requester", None), "Sin información")
+
+    def test_entity_key_is_internal_not_a_human_response_value(self):
+        self.assertEqual(_human_response_value("entity_key", "vehicles-stable-1"), "vehicles-stable-1")
+        self.assertIn("entity_key", _HIDDEN_RESPONSE_KEYS)
+
     def setUp(self):
         self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
@@ -248,11 +287,61 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(fields["class"].kind, "choice")
         self.assertTrue(fields["class"].required)
         self.assertEqual(fields["class"].choices, (
-            "Automovil", "Motocicleta", "Camiones y transporte de carga",
+            "Automovil", "Camioneta", "Motocicleta", "Camiones y transporte de carga",
             "Transporte publico pasajeros", "Vehiculos especiales",
         ))
+        self.assertEqual(fields["use"].kind, "choice")
+        self.assertEqual(fields["use"].choices, ("Familiar", "Comercial"))
         self.assertFalse(fields["plate"].required)
         self.assertFalse(fields["plate"].show_when)
+
+    def test_public_mobility_form_uses_placeholders_and_entity_multipart_inputs(self):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        form = IndividualQuotationForm(schema=schema, context=context)
+        self.assertEqual(form.fields["first_name"].widget.attrs["placeholder"], "Ej. Juan Carlos")
+        self.assertEqual(form.fields["requester_document"].widget.attrs["placeholder"], "Ej. 1030123456")
+        self.assertEqual(form.fields["requester_email"].widget.attrs["placeholder"], "Ej. usuario@correo.com")
+        self.assertNotIn("placeholder", form.fields["requester_id_type"].widget.attrs)
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "form.html").read_text(encoding="utf-8")
+        self.assertIn("entity_attachment_${row.entity_key}", javascript)
+        self.assertIn('enctype="multipart/form-data"', template)
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_rendered_mobility_form_exposes_canonical_vehicle_choices_without_fake_vehicle(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        token = self.access_token(schema_slug="movilidad")
+        response = self.client.get(reverse("colectivos_external:individual_quotation", args=[token]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Camioneta")
+        self.assertContains(response, "Familiar")
+        self.assertContains(response, "Comercial")
+        self.assertContains(response, "+ Agregar vehículo")
+        self.assertNotContains(response, "Vehículo 1")
+        self.assertNotContains(response, "Se precarga cuando el enlace se genera desde un cliente.")
+
+    def test_entity_multipart_file_is_parsed_with_its_stable_owner_key(self):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        vehicle = self.vehicle()
+        vehicle["entity_key"] = "vehicles-stable-1"
+        uploaded = SimpleUploadedFile("matricula.pdf", valid_minimal_pdf_bytes(), content_type="application/pdf")
+        form = IndividualQuotationForm(
+            schema=schema, context=context,
+            data={"items_payload": json.dumps({"vehicles": [vehicle]})},
+            files=MultiValueDict({"entity_attachment_vehicles-stable-1": [uploaded]}),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(
+            form.cleaned_data["entity_attachments"]["vehicles-stable-1"].name,
+            "matricula.pdf",
+        )
+
+    def test_dynamic_vehicle_editor_preserves_entity_key_on_edit(self):
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn("const previous = activeIndex === null ? null : groups[activeGroup][activeIndex];", javascript)
+        self.assertIn("row.entity_key = previous?.entity_key || newEntityKey", javascript)
 
     def test_mobility_vehicle_class_rejects_empty_or_unknown_values_server_side(self):
         schema = get_branch_schema("movilidad")
@@ -265,6 +354,18 @@ class IndividualQuotationTests(TestCase):
             )
             self.assertFalse(form.is_valid())
             self.assertIn("Clase", str(form.errors))
+
+    def test_mobility_vehicle_use_rejects_values_outside_the_public_contract(self):
+        schema = get_branch_schema("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        vehicle = self.vehicle()
+        vehicle["use"] = "Caserito"
+        form = IndividualQuotationForm(
+            schema=schema, context=context,
+            data={"items_payload": json.dumps({"vehicles": [vehicle]})},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("Uso", str(form.errors))
 
     def test_tool_entry_goes_to_client_search_and_loose_branch_form_is_closed(self):
         response = self.client.get(reverse("public_home"))
@@ -1041,6 +1142,13 @@ class IndividualQuotationTests(TestCase):
             "vehicle_registration",
         )
 
+    def test_valid_pdf_bytes_survive_attachment_storage_encoding_byte_for_byte(self):
+        original = valid_minimal_pdf_bytes()
+        self.assertTrue(original.startswith(b"%PDF-"))
+        restored = base64.b64decode(decrypt(encrypt(base64.b64encode(original).decode())).encode())
+        self.assertEqual(hashlib.sha256(restored).hexdigest(), hashlib.sha256(original).hexdigest())
+        self.assertEqual(restored, original)
+
     def test_legacy_vehicle_document_contract_remains_controlled(self):
         self.assertEqual(
             _validate_document_contract(
@@ -1063,6 +1171,18 @@ class IndividualQuotationTests(TestCase):
                 module="Riesgos", owner_type="risk", document_type="arbitrary"
             )
 
+    def test_pending_document_is_publishable_for_created_or_found_remote_risk(self):
+        attachment = SimpleNamespace(safe_metadata={"document_type": "vehicle_registration"})
+        self.assertEqual(_attachment_document_status(attachment), "pending")
+        self.assertTrue(_attachment_can_publish(attachment, "4991513000271052016"))
+
+    def test_document_publication_state_blocks_uploaded_or_uncertain(self):
+        uploaded = SimpleNamespace(safe_metadata={"zoho_attachment": {"status": "UPLOADED"}})
+        uncertain = SimpleNamespace(safe_metadata={"zoho_attachment": {"status": "RECONCILE_REQUIRED"}})
+        self.assertFalse(_attachment_can_publish(uploaded, "4991513000271052016"))
+        self.assertFalse(_attachment_can_publish(uncertain, "4991513000271052016"))
+        self.assertFalse(_attachment_can_publish(SimpleNamespace(safe_metadata={}), ""))
+
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
@@ -1080,6 +1200,48 @@ class IndividualQuotationTests(TestCase):
             with self.assertRaises(IndividualAttachmentBlocked):
                 publish_attachment(attachment=attachment, module="Riesgos", record_id="4991513000000000001")
             get_zoho.assert_not_called()
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
+    )
+    def test_uploaded_attachment_metadata_is_idempotent_without_sdk_call(self):
+        attachment = SimpleNamespace(
+            safe_metadata={
+                "owner_type": "contact", "document_type": "identity_document",
+                "zoho_status": "uploaded", "zoho_module": "Contacts",
+                "zoho_record_id": "4991513000000000001",
+                "zoho_attachment_id": "4991513000000000002",
+            },
+        )
+        with patch("cotizacion_colectivos.services.individual_attachment_publisher._get_zoho") as get_zoho:
+            result = publish_attachment(
+                attachment=attachment, module="Contacts", record_id="4991513000000000001"
+            )
+        self.assertEqual(result["status"], "UPLOADED")
+        self.assertEqual(result["attachment_id"], "4991513000000000002")
+        get_zoho.assert_not_called()
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
+    )
+    def test_attachment_in_progress_requires_reconciliation_and_does_not_retry(self):
+        attachment = SimpleNamespace(
+            safe_metadata={
+                "owner_type": "contact", "document_type": "identity_document",
+                "zoho_status": "uploading", "zoho_module": "Contacts",
+                "zoho_record_id": "4991513000000000001",
+                "zoho_upload_started_at": "2099-01-01T00:00:00+00:00",
+                "zoho_attachment": {"status": "UPLOADING", "module": "Contacts", "record_id": "4991513000000000001"},
+            },
+        )
+        with patch("cotizacion_colectivos.services.individual_attachment_publisher._get_zoho") as get_zoho:
+            with self.assertRaises(IndividualAttachmentUncertain):
+                publish_attachment(attachment=attachment, module="Contacts", record_id="4991513000000000001")
+        get_zoho.assert_not_called()
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):

@@ -45,11 +45,13 @@ GENDER_CHOICES = ("Femenino", "Masculino", "Otro", "Prefiero no indicar")
 ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro familiar")
 VEHICLE_CLASS_CHOICES = (
     "Automovil",
+    "Camioneta",
     "Motocicleta",
     "Camiones y transporte de carga",
     "Transporte publico pasajeros",
     "Vehiculos especiales",
 )
+VEHICLE_USE_CHOICES = ("Familiar", "Comercial")
 
 REQUESTER_FIELDS = (
     # Los registros nuevos capturan la identidad estructurada.  requester_name
@@ -61,7 +63,7 @@ REQUESTER_FIELDS = (
     FieldSchema("requester_birth_date", "Fecha de nacimiento", "date"),
     FieldSchema("requester_email", "Correo electrónico", "email"),
     FieldSchema("requester_phone", "Teléfono", "tel"),
-    FieldSchema("collective_context", "Colectiva o tomador", required=False, help_text="Se precarga cuando el enlace se genera desde un cliente."),
+    FieldSchema("collective_context", "Colectiva o tomador", required=False),
 )
 
 PERSON_FIELDS = (
@@ -105,7 +107,7 @@ VEHICLE_FIELDS = (
     FieldSchema("model", "Modelo"),
     FieldSchema("class", "Clase", "choice", choices=VEHICLE_CLASS_CHOICES),
     FieldSchema("city", "Ciudad", required=False),
-    FieldSchema("use", "Uso", required=False),
+    FieldSchema("use", "Uso", "choice", required=False, choices=VEHICLE_USE_CHOICES),
     FieldSchema("armored", "¿Vehículo blindado?", "choice", required=False, choices=("Sí", "No")),
     FieldSchema("currently_insured", "¿Actualmente asegurado?", "choice", required=False, choices=("Sí", "No")),
     # insured_name/insured_is_different se conservan para leer snapshots

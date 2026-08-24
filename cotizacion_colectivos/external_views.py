@@ -121,8 +121,11 @@ def individual_quotation(request, token):
     except (ColectivosServiceError, signing.BadSignature, Http404, KeyError, ValueError):
         return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
 
+    # Repeatable entities are intentionally opt-in.  In particular, Mobility
+    # must not present an empty "Vehículo 1" before the client adds one.
     initial_items = {
-        group.key: [{} for _ in range(group.minimum)] for group in schema.repeatables
+        group.key: ([] if group.key == "vehicles" else [{} for _ in range(group.minimum)])
+        for group in schema.repeatables
     }
     form = IndividualQuotationForm(
         request.POST or None,

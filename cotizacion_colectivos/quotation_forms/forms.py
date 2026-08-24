@@ -13,6 +13,17 @@ from .catalog import BranchSchema, FieldSchema
 DOCUMENT = re.compile(r"^[A-Za-z0-9.-]{3,30}$")
 PHONE = re.compile(r"^[+0-9() .-]{7,24}$")
 
+PLACEHOLDERS = {
+    "first_name": "Ej. Juan Carlos", "last_name": "Ej. Pérez Gómez",
+    "name": "Ej. Juan Carlos Pérez", "requester_document": "Ej. 1030123456",
+    "document": "Ej. 1030123456", "requester_email": "Ej. usuario@correo.com",
+    "email": "Ej. usuario@correo.com", "requester_phone": "Ej. 3001234567",
+    "phone": "Ej. 3001234567", "insured_phone": "Ej. 3001234567",
+    "brand": "Ej. Renault", "line": "Ej. Duster", "model": "Ej. 2026",
+    "displacement": "Ej. 1600", "plate": "Ej. ABC123", "city": "Ej. Medellín",
+    "collective_context": "Ej. Empresa o tomador", "declared_company": "Ej. Empresa S.A.S.",
+}
+
 
 class MultipleFileInput(forms.ClearableFileInput):
     allow_multiple_selected = True
@@ -64,6 +75,9 @@ class IndividualQuotationForm(forms.Form):
                     initial=self.context.get(definition.key, ""),
                     disabled=definition.key in locked_fields,
                 )
+            placeholder = PLACEHOLDERS.get(definition.key)
+            if placeholder and definition.kind != "choice":
+                self.fields[definition.key].widget.attrs["placeholder"] = placeholder
         if self.context.get("requires_declared_company"):
             self.fields["declared_company"] = forms.CharField(
                 label="Empresa a la cual pertenece",
@@ -71,6 +85,7 @@ class IndividualQuotationForm(forms.Form):
                 max_length=180,
                 help_text="Escriba la empresa declarada por la persona. No se valida contra una lista Zoho no demostrada.",
             )
+            self.fields["declared_company"].widget.attrs["placeholder"] = PLACEHOLDERS["declared_company"]
 
     @staticmethod
     def _clean_value(definition: FieldSchema, raw, *, required=None):

@@ -6,6 +6,7 @@ import time
 import unicodedata
 import uuid
 import base64
+import re
 from urllib.parse import quote
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -58,7 +59,7 @@ from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
 from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
 from .service_catalog import branch_workspaces
-from .quotation_forms.catalog import get_branch_schema
+from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema
 from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
     affiliate_options,
@@ -85,6 +86,23 @@ from .quotation_forms.catalog import get_policy_branch_schema
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _attachment_document_status(attachment):
+    metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+    nested = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
+    status = str(nested.get("status") or metadata.get("zoho_status") or "").strip().lower()
+    if status == "uploaded":
+        return "uploaded"
+    if status in {"reconcile_required", "uncertain"}:
+        return "reconcile_required"
+    if status == "failed":
+        return "failed"
+    return "pending"
+
+
+def _attachment_can_publish(attachment, remote_id):
+    return _attachment_document_status(attachment) not in {"uploaded", "reconcile_required"} and bool(str(remote_id or "").strip())
 
 
 def _transition_permission(target):
@@ -2644,7 +2662,15 @@ def individual_create_person(request, token):
             metadata["zoho_entities"] = entities
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
-        messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
+        entity_label = "Asegurado" if str(selected.get("role") or "").lower().startswith("asegur") else "Afiliado"
+        try:
+            publish_pending_for_person(
+                quotation=quotation, document=selected_document, record_id=contact_id,
+                owner_key=str(selected.get("owner_key") or ""),
+            )
+            messages.success(request, f"{entity_label} creado y documento procesado en Zoho Sandbox.")
+        except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
+            messages.warning(request, f"{entity_label} creado. El documento requiere atención: {exc}")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
     except ContactPublicationUncertain:
@@ -2728,6 +2754,18 @@ def individual_update_entity(request, token, entity, vehicle_index):
         if vehicle_index < 0 or vehicle_index >= len(bucket):
             raise ValidationError("Vehículo no encontrado.")
         allowed = {"Name", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas", "Modelo", "Clase", "Ciudad", "Tipo_de_uso"} if entity == "risk" else {"Name", "Ramo", "Parentesco", "Fecha_ingreso_riesgo", "Estado", "Plan"}
+        if entity == "risk":
+            proposed_class = str(request.POST.get("Clase") or "").strip()
+            proposed_use = str(request.POST.get("Tipo_de_uso") or "").strip()
+            if proposed_class and proposed_class not in VEHICLE_CLASS_CHOICES:
+                raise ValidationError("Seleccione una Clase válida.")
+            if proposed_use and proposed_use not in VEHICLE_USE_CHOICES:
+                raise ValidationError("Seleccione un Uso válido.")
+            payload = json.loads(decrypt(quotation.encrypted_payload))
+            rows = (payload.get("groups") or {}).get("vehicles") or []
+            source_row = rows[vehicle_index] if 0 <= vehicle_index < len(rows) and isinstance(rows[vehicle_index], dict) else {}
+            if str(source_row.get("zero_km") or "").strip() == "No" and not str(request.POST.get("Placa_del_vehiculo") or "").strip():
+                raise ValidationError("La placa es obligatoria cuando el vehículo no es 0 km.")
         corrections = dict(metadata.get("zoho_entity_corrections") or {})
         corrections[f"{entity}:{vehicle_index}"] = {
             key: str(request.POST.get(key) or "").strip() for key in allowed if key in request.POST
@@ -2763,9 +2801,10 @@ def individual_create_risk(request, token, vehicle_index):
         active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
         result = create_sandbox_risk(
             item.get("candidate") or {}, profile=active_profile,
+            operational=True,
             confirmation=configured_confirmation(
                 "risk", active_profile,
-                legacy_setting="COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION",
+                legacy_setting="COLECTIVOS_RISK_WRITE_CONFIRMATION",
             ),
         )
         created_at = timezone.now().isoformat()
@@ -2774,11 +2813,19 @@ def individual_create_risk(request, token, vehicle_index):
             item.pop(key, None)
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["risks"] = risks
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
-        messages.success(request, "Riesgo creado en Zoho Sandbox.")
+        try:
+            publish_pending_for_risk(quotation=quotation, vehicle_index=vehicle_index, record_id=result["record_id"])
+            messages.success(request, "Riesgo creado y documento procesado en Zoho Sandbox.")
+        except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
+            messages.warning(request, f"Riesgo creado. El documento requiere atención: {exc}")
     except (RiskPublishingDisabled, RiskPublicationRejected, ValidationError) as exc:
         code = "BLOCKED" if isinstance(exc, RiskPublishingDisabled) else "REJECTED" if isinstance(exc, RiskPublicationRejected) else "VALIDATION"
         if 'item' in locals():
-            item.update({"error_code": code, "error": str(exc)})
+            error_message = (
+                "La creación del Riesgo está bloqueada por la configuración de escritura de Sandbox."
+                if code == "BLOCKED" else str(exc)
+            )
+            item.update({"error_code": code, "error": error_message})
             metadata = dict(quotation.safe_metadata or {})
             entities = dict(metadata.get("zoho_entities") or {})
             current_risks = list(entities.get("risks") or [])
@@ -2789,7 +2836,7 @@ def individual_create_risk(request, token, vehicle_index):
                 quotation.safe_metadata = metadata
                 quotation.save(update_fields=("safe_metadata",))
             logger.warning("individual_create_risk result=%s module=Riesgos vehicle_index=%s", code, vehicle_index)
-        messages.warning(request, str(exc))
+        messages.warning(request, item.get("error") if 'item' in locals() else str(exc))
     except RiskPublicationUncertain:
         if 'item' in locals():
             item.update({"error_code": "RECONCILE_REQUIRED", "error": "Resultado incierto; requiere conciliación manual."})
@@ -2968,6 +3015,18 @@ def individual_publish_task(request, token):
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
+_HIDDEN_RESPONSE_KEYS = frozenset({"entity_key"})
+
+
+def _human_response_value(key, value):
+    """Format client answers without exposing stable technical identifiers."""
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
+    if value is None or value == "":
+        return "Sin información"
+    return value
+
+
 @never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
@@ -2989,8 +3048,9 @@ def individual_expedient(request, token):
     field_labels["declared_company"] = "Empresa a la cual pertenece"
     group_schemas = {item.key: item for item in schema.repeatables}
     display_fields = tuple(
-        (field_labels.get(key, "Información"), value)
+        (field_labels.get(key, "Información"), _human_response_value(key, value))
         for key, value in payload.get("fields", {}).items()
+        if key not in _HIDDEN_RESPONSE_KEYS
     )
     display_groups = []
     for group_key, rows in payload.get("groups", {}).items():
@@ -3002,7 +3062,11 @@ def individual_expedient(request, token):
         display_groups.append({
             "label": group_schema.plural if group_schema else "Información relacionada",
             "rows": tuple(
-                tuple((labels.get(key, "Información"), value) for key, value in row.items())
+                tuple(
+                    (labels.get(key, "Información"), _human_response_value(key, value))
+                    for key, value in row.items()
+                    if key not in _HIDDEN_RESPONSE_KEYS
+                )
                 for row in rows
             ),
         })
@@ -3020,6 +3084,11 @@ def individual_expedient(request, token):
     for attachment in individual_attachments:
         metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
         attachment.owner_label = {"affiliate": "Afiliado", "insured": "Asegurado", "risk": "Vehículo"}.get(str(metadata.get("owner_role") or ""), "Documento histórico")
+        attachment.document_status = _attachment_document_status(attachment)
+        attachment.structured_owner = (
+            str(metadata.get("owner_type") or "") in {"contact", "risk"}
+            and bool(str(metadata.get("owner_key") or "").strip())
+        )
         documents_by_owner.setdefault(str(metadata.get("owner_key") or "legacy"), []).append(attachment)
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
     decision_status = _individual_acceptance_status(quotation)
@@ -3092,55 +3161,40 @@ def individual_expedient(request, token):
             for key in dict.fromkeys(owner_keys)
             for document in documents_by_owner.get(key, ())
         )
+        person_remote_id = str(person.get("remote_id") or person.get("contact_id") or "").strip()
+        for document in person["documents"]:
+            document.can_publish = _attachment_can_publish(document, person_remote_id)
     if isinstance(vehicle_rows, list):
         for index, risk in enumerate(zoho_entities.get("risks") or ()):
             if not isinstance(risk, dict):
                 continue
             row = vehicle_rows[index] if index < len(vehicle_rows) and isinstance(vehicle_rows[index], dict) else {}
-            owner_key = str(row.get("entity_key") or f"vehicles-{index}")
+            owner_key = str(risk.get("owner_key") or risk.get("risk_key") or row.get("entity_key") or f"vehicles-{index}")
+            risk["owner_key"] = owner_key
+            risk["risk_key"] = owner_key
+            risk["zero_km"] = str(row.get("zero_km") or "").strip()
             risk["documents"] = tuple(documents_by_owner.get(owner_key, ()))
+            risk_remote_id = str(risk.get("remote_id") or risk.get("risk_id") or "").strip()
+            for document in risk["documents"]:
+                document.can_publish = _attachment_can_publish(document, risk_remote_id)
             insured = risk.get("insured") if isinstance(risk.get("insured"), dict) else None
             if insured is not None:
                 insured["documents"] = tuple(documents_by_owner.get(f"{owner_key}-insured", ()))
-    # Publish is available only when the server has resolved the owning
-    # Contact/Risk. Remote IDs are never trusted from the browser.
-    resolved_contact_ids = {}
-    for person in zoho_entities.get("people") or ():
-        if not isinstance(person, dict):
-            continue
-        remote_id = str(person.get("remote_id") or person.get("contact_id") or "").strip()
-        if not remote_id:
-            continue
-        keys = [person.get("owner_key"), *(person.get("owner_keys") or ())]
-        if person.get("role") == "Afiliado":
-            keys.append("affiliate")
-        for key in keys:
-            if key:
-                resolved_contact_ids[str(key)] = remote_id
-    resolved_risk_ids = {}
-    for index, risk in enumerate(zoho_entities.get("risks") or ()):
-        if not isinstance(risk, dict):
-            continue
-        remote_id = str(risk.get("remote_id") or risk.get("risk_id") or "").strip()
-        if not remote_id:
-            continue
-        row = vehicle_rows[index] if isinstance(vehicle_rows, list) and index < len(vehicle_rows) and isinstance(vehicle_rows[index], dict) else {}
-        key = str(row.get("entity_key") or risk.get("owner_key") or f"vehicles-{index}")
-        resolved_risk_ids[key] = remote_id
+                insured_remote_id = str(insured.get("remote_id") or insured.get("contact_id") or "").strip()
+                for document in insured["documents"]:
+                    document.can_publish = _attachment_can_publish(document, insured_remote_id)
+    # Legacy/unowned documents remain visible but cannot be published. The
+    # structured owner loops above set this from the final server-side entity
+    # snapshot and its remote ID.
     for attachment in individual_attachments:
         metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
         owner_key = str(metadata.get("owner_key") or "")
         owner_type = str(metadata.get("owner_type") or "")
-        attachment.can_publish = (
-            str(metadata.get("zoho_status") or "").lower() != "uploaded"
-            and bool(
-                resolved_contact_ids.get(owner_key)
-                if owner_type == "contact"
-                else resolved_risk_ids.get(owner_key)
-                if owner_type == "risk"
-                else False
-            )
-        )
+        # Keep an explicit false default for legacy/unowned documents. For
+        # structured documents, the owner loops above already calculated the
+        # value from the final entity snapshot and its remote ID.
+        if not hasattr(attachment, "can_publish"):
+            attachment.can_publish = False
     created_people = tuple(
         person for person in people_lookup
         if person.get("created") or (person.get("status") == "found" and person.get("contact_id"))
@@ -3176,6 +3230,12 @@ def individual_expedient(request, token):
             "at": latest_outbox.updated_at,
         })
     history.sort(key=lambda row: row["at"], reverse=True)
+    # The human response section is legacy-only; structured documents are
+    # rendered beside their owner cards and must not appear twice.
+    quotation._prefetched_objects_cache["attachments"] = list(
+        attachment for attachment in individual_attachments
+        if not getattr(attachment, "structured_owner", False)
+    )
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
@@ -3201,6 +3261,8 @@ def individual_expedient(request, token):
         "people_lookup": tuple(people_lookup),
         "created_people": created_people,
         "zoho_entities": zoho_entities,
+        "vehicle_class_choices": VEHICLE_CLASS_CHOICES,
+        "vehicle_use_choices": VEHICLE_USE_CHOICES,
         "individual_attachments": individual_attachments,
         "task_responsibles": task_responsibles,
         "individual_token": token,
@@ -3236,10 +3298,16 @@ def individual_attachment_download(request, token, attachment_id):
         content = base64.b64decode(encoded.encode())
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, AdjuntoCotizacionIndividual.DoesNotExist, ValueError, TypeError) as exc:
         raise Http404("Adjunto no disponible") from exc
-    response = HttpResponse(content, content_type=attachment.detected_mime)
-    safe_name = Path(attachment.safe_original_name or f"documento{attachment.extension}").name.replace('"', "")
+    allowed_preview_types = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    content_type = str(attachment.detected_mime or "").lower()
+    if content_type not in allowed_preview_types:
+        return HttpResponse("Este archivo no puede previsualizarse.", status=415, content_type="text/plain")
+    response = HttpResponse(content, content_type=content_type)
+    safe_name = re.sub(r'["\r\n]', "", Path(attachment.safe_original_name or f"documento{attachment.extension}").name)
     response["Content-Disposition"] = f'inline; filename="{safe_name}"'
     response["Cache-Control"] = "no-store, private"
+    response["Pragma"] = "no-cache"
+    response["X-Content-Type-Options"] = "nosniff"
     return response
 
 

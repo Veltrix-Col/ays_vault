@@ -16,6 +16,7 @@ from .write_guards import require_write_guard
 
 RISK_MODULE = "Riesgos"
 RISK_CONFIRMATION = "SANDBOX_MOBILITY_RISK_SEED"
+OPERATIONAL_RISK_CONFIRMATION = "SANDBOX_RISK_WRITE"
 RISK_FIELDS = frozenset({
     "Name", "Tipo_de_riesgo", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas",
     "Modelo", "Clase", "Ciudad", "Tipo_de_uso",
@@ -115,12 +116,14 @@ def resolve_risk_by_plate(*, plate: str, zoho=None, profile: str = "sandbox") ->
 
 
 def create_sandbox_risk(payload: Mapping[str, object], *, confirmation: str,
-                        zoho=None, profile: str | None = None) -> dict[str, object]:
+                        zoho=None, profile: str | None = None,
+                        operational: bool = False) -> dict[str, object]:
     profile = str(profile or getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
     require_write_guard(
         entity="risk", profile=profile, confirmation=confirmation,
-        feature_flag="COLECTIVOS_MOBILITY_RISK_SEED_ENABLED",
-        legacy_setting="COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION",
+        feature_flag=("COLECTIVOS_RISK_PUBLISH_ENABLED" if operational else "COLECTIVOS_MOBILITY_RISK_SEED_ENABLED"),
+        legacy_setting=("COLECTIVOS_RISK_WRITE_CONFIRMATION" if operational else "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION"),
+        expected_override=("" if operational else RISK_CONFIRMATION),
         disabled_error=RiskPublishingDisabled,
     )
     if set(payload) - RISK_FIELDS or not RISK_REQUIRED.issubset(payload):
