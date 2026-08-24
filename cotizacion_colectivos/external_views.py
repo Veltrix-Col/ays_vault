@@ -130,10 +130,10 @@ def individual_quotation(request, token):
 
     # Repeatable entities are intentionally opt-in.  In particular, Mobility
     # must not present an empty "Vehículo 1" before the client adds one.
-    initial_items = {
-        group.key: ([] if group.key == "vehicles" else [{} for _ in range(group.minimum)])
-        for group in schema.repeatables
-    }
+    # Repeatable people are explicitly opt-in.  The Salud primary insured is
+    # derived from the canonical affiliate fields by the client UI and is
+    # serialized on submit; it must not appear as an empty placeholder card.
+    initial_items = {group.key: [] for group in schema.repeatables}
     form = IndividualQuotationForm(
         request.POST or None,
         request.FILES or None,

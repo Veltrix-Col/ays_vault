@@ -348,6 +348,17 @@ class IndividualQuotationTests(TestCase):
         self.assertNotContains(response, "Vehículo 1")
         self.assertNotContains(response, "Se precarga cuando el enlace se genera desde un cliente.")
 
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_health_form_does_not_render_empty_primary_person_card(self, workspace):
+        workspace.return_value = self.workspace("salud")
+        response = self.client.get(reverse("colectivos_external:individual_quotation", args=[self.access_token()]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Persona 1")
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn('schema.slug === "salud"', javascript)
+        self.assertIn('Asegurado principal', javascript)
+        self.assertIn('serialized.people = [requester, ...serialized.people.filter(row => !row.is_requester)]', javascript)
+
     def test_entity_multipart_file_is_parsed_with_its_stable_owner_key(self):
         schema = get_branch_schema("movilidad")
         context = unsign_policy_context(self.context_token(schema_slug="movilidad"))

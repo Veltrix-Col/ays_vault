@@ -48,8 +48,25 @@
     return `${group}-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 8)}`;
   };
   const sync = () => {
-    payload.value = JSON.stringify(groups);
-    const count = Object.values(groups).reduce((total, rows) => total + rows.length, 0);
+    const serialized = Object.fromEntries(Object.entries(groups).map(([key, rows]) => [key, rows]));
+    if (schema.slug === "salud" && Array.isArray(serialized.people)) {
+      const requester = {
+        is_requester: true,
+        first_name: form.querySelector('[name="first_name"]')?.value.trim() || "",
+        last_name: form.querySelector('[name="last_name"]')?.value.trim() || "",
+        id_type: form.querySelector('[name="requester_id_type"]')?.value.trim() || "",
+        document: form.querySelector('[name="requester_document"]')?.value.trim() || "",
+        birth_date: form.querySelector('[name="requester_birth_date"]')?.value.trim() || "",
+        email: form.querySelector('[name="requester_email"]')?.value.trim() || "",
+        phone: form.querySelector('[name="requester_phone"]')?.value.trim() || "",
+        employment_relationship: "Empleado",
+        relationship: "Titular",
+        currently_health_insured: "No",
+      };
+      serialized.people = [requester, ...serialized.people.filter(row => !row.is_requester)];
+    }
+    payload.value = JSON.stringify(serialized);
+    const count = Object.values(serialized).reduce((total, rows) => total + rows.length, 0);
     form.querySelector("[data-review-summary]").textContent = `${count} elemento${count === 1 ? "" : "s"} listo${count === 1 ? "" : "s"} para enviar.`;
   };
   const affiliateInput = form.querySelector('input[name="affiliate_document"]');
@@ -63,7 +80,31 @@
     const definition = groupSchema(key);
     const host = form.querySelector(`[data-item-list="${key}"]`);
     host.replaceChildren();
-    (groups[key] || []).forEach((row, index) => {
+    const rows = (groups[key] || []).map((row, index) => ({row, index})).filter(({row}) => !(schema.slug === "salud" && key === "people" && row.is_requester));
+    if (schema.slug === "salud" && key === "people") {
+      const primary = {
+        first_name: form.querySelector('[name="first_name"]')?.value.trim() || "",
+        last_name: form.querySelector('[name="last_name"]')?.value.trim() || "",
+        id_type: form.querySelector('[name="requester_id_type"]')?.value.trim() || "",
+        document: form.querySelector('[name="requester_document"]')?.value.trim() || "",
+        birth_date: form.querySelector('[name="requester_birth_date"]')?.value.trim() || "",
+        email: form.querySelector('[name="requester_email"]')?.value.trim() || "",
+        phone: form.querySelector('[name="requester_phone"]')?.value.trim() || "",
+      };
+      const hasPrimary = Object.values(primary).some(value => value);
+      if (hasPrimary) {
+        const card = document.createElement("article"); card.className = "repeatable-card repeatable-card--primary";
+        const title = document.createElement("div"); title.className = "repeatable-card__heading";
+        title.innerHTML = "<strong>Asegurado principal</strong><span>Mismo afiliado</span>";
+        const summary = document.createElement("dl"); summary.className = "repeatable-summary";
+        [["Nombres", primary.first_name], ["Apellidos", primary.last_name], ["Identificación", `${primary.id_type} ${primary.document}`.trim()], ["Fecha de nacimiento", primary.birth_date], ["Correo", primary.email], ["Teléfono", primary.phone]].forEach(([labelText, value]) => {
+          const item = document.createElement("div"); const label = document.createElement("dt"); label.textContent = labelText;
+          const content = document.createElement("dd"); content.textContent = value || "Sin información"; item.append(label, content); summary.appendChild(item);
+        });
+        card.append(title, summary); host.append(card);
+      }
+    }
+    rows.forEach(({row, index}) => {
       row.entity_key ||= newEntityKey(key, index);
       const card = document.createElement("article"); card.className = "repeatable-card";
       const title = document.createElement("div");
@@ -267,5 +308,11 @@
     render(activeGroup); dialog.close();
   });
   schema.repeatables.forEach(definition => { groups[definition.key] ||= []; render(definition.key); });
+  if (schema.slug === "salud") {
+    ["first_name", "last_name", "requester_id_type", "requester_document", "requester_birth_date", "requester_email", "requester_phone"].forEach(name => {
+      const input = form.querySelector(`[name="${name}"]`);
+      if (input) input.addEventListener("input", () => render("people"));
+    });
+  }
   form.addEventListener("submit", sync);
 })();
