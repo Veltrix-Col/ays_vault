@@ -31,6 +31,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let objectUrl = null;
   let outputName = "Reporte_Conciliacion.xlsx";
+  let lastSummary = {};
 
   // --- Slots dinámicos por ramo -------------------------------------------
   function updateSlots(ramo) {
@@ -176,6 +177,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // backend ordenadas por vigencia mas reciente primero, asi que ese es el
   // seleccionado por defecto; quien concilia puede elegir otra en el dropdown.
   function renderCobros(summary) {
+    lastSummary = summary || {};
     if (!cobrosSection) return;
     const cobros = Array.isArray(summary.cobros) ? summary.cobros : null;
     if (cobros === null) {
@@ -200,6 +202,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function cobroOption(cobro) {
     const option = document.createElement("option");
     option.value = cobro.url;
+    option.dataset.id = cobro.id;
     const cuota = cobro.numero_cuota ? `Cuota ${cobro.numero_cuota}` : "";
     const vigencia = (cobro.vigencia_inicio || cobro.vigencia_fin)
       ? `${cobro.vigencia_inicio || "s/f"} – ${cobro.vigencia_fin || "s/f"}`
@@ -211,6 +214,51 @@ document.addEventListener("DOMContentLoaded", () => {
   cobrosSelect?.addEventListener("change", () => {
     if (btnFacturar && cobrosSelect.value) btnFacturar.href = cobrosSelect.value;
   });
+
+  // --- Prellenado del Cobro antes de facturar -------------------------------
+  // Si el recibo (PDF) se extrajo con éxito, prellena Certificado/Fecha
+  // expedición/Pago total cuota en Zoho Producción justo al hacer clic, antes
+  // de abrir el enlace: la escritura corre primero, luego se navega a Zoho ya
+  // con los campos listos. Si el prellenado falla o está deshabilitado, el
+  // enlace se comporta como antes (navega directo, sin prellenar nada) -- es
+  // una conveniencia no bloqueante, nunca un requisito para facturar.
+  btnFacturar?.addEventListener("click", (event) => {
+    const recibo = lastSummary.recibo_cobro;
+    const poliza = lastSummary.poliza;
+    const cobroId = cobrosSelect?.selectedOptions?.[0]?.dataset?.id;
+    const prellenarUrl = btnFacturar.dataset.prellenarUrl;
+    if (!lastSummary.cobro_prefill_enabled || !recibo || !poliza || !cobroId || !prellenarUrl) {
+      return; // deja el enlace normal (target="_blank") seguir su curso
+    }
+
+    // La pestaña se abre en blanco de forma sincrona (dentro del gesto del
+    // clic) para no chocar con el bloqueador de pop-ups del navegador; si el
+    // navegador la bloquea igual, se deja el enlace normal seguir su curso.
+    const ventana = window.open("", "_blank");
+    if (!ventana) return;
+    event.preventDefault();
+    const destino = btnFacturar.href;
+
+    fetch(prellenarUrl, {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
+      body: JSON.stringify({
+        poliza, cobro_id: cobroId,
+        certificado: recibo.certificado,
+        fecha_expedicion: recibo.fecha_expedicion,
+        pago_total_cuota: recibo.pago_total_cuota,
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) console.warn("No fue posible prellenar el cobro en Zoho.");
+      })
+      .catch(() => { console.warn("No fue posible prellenar el cobro en Zoho."); })
+      .finally(() => { ventana.location = destino; });
+  });
+
+  function csrfToken() {
+    return form.querySelector('[name="csrfmiddlewaretoken"]')?.value || "";
+  }
 
   btnDownload?.addEventListener("click", () => {
     if (!objectUrl) return;

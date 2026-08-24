@@ -7,7 +7,7 @@ distinto por servicio -- salud/vida/movilidad). Ahora hay UN solo modelo
 compartido para los 3 servicios: se le manda el texto del PDF (extraido con
 PyMuPDF, no el binario, para ahorrar tokens) junto con un prompt fijo que ya
 sabe reconocer las variantes de layout de SURA, y responde JSON estructurado
-(Structured Outputs) con 5 campos fijos.
+(Structured Outputs) con 6 campos fijos.
 
 Es el UNICO modulo que habla con Foundry. El SDK (`openai`) y `pymupdf` se
 importan de forma perezosa dentro de `extraer_recibo`, para que instalar el
@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 
 # Endpoint / modelo por defecto (NO secretos): el recurso/deployment de
 # desarrollo. En produccion se puede sobreescribir por env si cambia.
@@ -59,20 +60,23 @@ Reconoce estas variaciones como el MISMO campo, sin importar mayúsculas, tildes
 - `valor_sin_iva` ← "Valor sin IVA", "Valor sin Iva"
 - `valor_iva` ← "Valor IVA", "Valor Iva"
 - `valor_total_a_pagar` ← "Total a pagar", "Valor total del Seguro", "Valor total a pagar" (el total consolidado del recibo, nunca el valor de una cobertura individual ni de un riesgo/placa individual)
+- `fecha_expedicion` ← "Fecha de expedición", "Fecha de expedición del recibo", "Fecha de emisión", "Fecha de generación del documento". Es la fecha en que la aseguradora expidió/generó ESTE recibo o documento de cobro, nunca la fecha de inicio/fin de vigencia de la póliza ni la fecha de pago.
 
 # TAREA
-Extrae ÚNICAMENTE estos 5 campos:
+Extrae ÚNICAMENTE estos 6 campos:
 1. `numero_poliza`
 2. `numero_recibo`
 3. `valor_sin_iva`
 4. `valor_iva`
 5. `valor_total_a_pagar`
+6. `fecha_expedicion`
 
 Reglas:
 - Antes de marcar un campo como `null`, revisa TODAS sus variantes de nombre listadas arriba. No asumas ausencia solo porque falta el nombre de sección "esperado".
 - Los valores monetarios se devuelven como número (sin `$`, sin puntos ni comas de miles), usando punto solo si hay decimales.
+- `fecha_expedicion` se devuelve siempre en formato `YYYY-MM-DD`. Si el documento la trae en otro formato (p. ej. "15/03/2026" o "15 de marzo de 2026"), conviértela a `YYYY-MM-DD`.
 - No extraigas nada más: ni tomador, ni vigencia, ni coberturas, ni periodo de cobro, ni tablas de asegurados/riesgos.
-- Si el documento tiene varias páginas, los 5 valores casi siempre están en la primera página (encabezado del recibo); no busques en el detalle de asegurados/riesgos.
+- Si el documento tiene varias páginas, los 6 valores casi siempre están en la primera página (encabezado del recibo); no busques en el detalle de asegurados/riesgos.
 - Si un campo genuinamente no aparece bajo ninguna variante, usa `null`.
 
 # FORMATO DE SALIDA
@@ -84,7 +88,8 @@ Responde ÚNICAMENTE con un JSON válido, sin texto adicional ni explicaciones, 
   "numero_recibo": "string | null",
   "valor_sin_iva": number | null,
   "valor_iva": number | null,
-  "valor_total_a_pagar": number | null
+  "valor_total_a_pagar": number | null,
+  "fecha_expedicion": "string (YYYY-MM-DD) | null"
 }
 ```"""
 
@@ -96,8 +101,12 @@ _RESPUESTA_SCHEMA = {
         "valor_sin_iva": {"type": ["number", "null"]},
         "valor_iva": {"type": ["number", "null"]},
         "valor_total_a_pagar": {"type": ["number", "null"]},
+        "fecha_expedicion": {"type": ["string", "null"]},
     },
-    "required": ["numero_poliza", "numero_recibo", "valor_sin_iva", "valor_iva", "valor_total_a_pagar"],
+    "required": [
+        "numero_poliza", "numero_recibo", "valor_sin_iva", "valor_iva",
+        "valor_total_a_pagar", "fecha_expedicion",
+    ],
     "additionalProperties": False,
 }
 
@@ -129,15 +138,32 @@ def _a_float(valor) -> float | None:
         return None
 
 
+def _a_fecha_iso(valor) -> str | None:
+    """Valida que el modelo haya devuelto una fecha real en `YYYY-MM-DD`
+    (el formato que ya usan las escrituras a campos `date` de Zoho, ver
+    `SYNTHETIC_TEST_TASK` en `cotizacion_colectivos.services.task_publisher`).
+    Cualquier otro formato se descarta a `None` en vez de reenviarse tal cual
+    a Zoho: un valor de fecha invalido rechaza la escritura del campo completo."""
+    if not valor:
+        return None
+    texto = str(valor).strip()
+    try:
+        datetime.strptime(texto, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return texto
+
+
 @dataclass(frozen=True)
 class ReciboExtraido:
-    """Los 5 campos que extrae el modelo de un recibo/cobro de SURA."""
+    """Los 6 campos que extrae el modelo de un recibo/cobro de SURA."""
 
     numero_poliza: str | None
     numero_recibo: str | None
     valor_sin_iva: float | None
     valor_iva: float | None
     valor_total_a_pagar: float | None
+    fecha_expedicion: str | None  # YYYY-MM-DD
 
     @classmethod
     def desde_json(cls, campos: dict) -> "ReciboExtraido":
@@ -150,6 +176,7 @@ class ReciboExtraido:
             valor_sin_iva=_a_float(campos.get("valor_sin_iva")),
             valor_iva=_a_float(campos.get("valor_iva")),
             valor_total_a_pagar=_a_float(campos.get("valor_total_a_pagar")),
+            fecha_expedicion=_a_fecha_iso(campos.get("fecha_expedicion")),
         )
 
 

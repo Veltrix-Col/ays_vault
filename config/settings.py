@@ -120,6 +120,12 @@ CONCILIACION_MAX_UPLOAD_BYTES=int(os.getenv('CONCILIACION_MAX_UPLOAD_BYTES',str(
 # Diferencia en pesos por debajo de la cual NO se reporta incidente al comparar
 # el valor cobrado contra el valor en Zoho (ComparacionExactaRule).
 CONCILIACION_UMBRAL_VALOR_EXACTO=float(os.getenv('CONCILIACION_UMBRAL_VALOR_EXACTO','10'))
+# Escritura (no solo lectura) del boton "Facturar cobro": si el recibo (PDF)
+# se extrajo con exito, prellena Certificado/Fecha expedicion/Pago total
+# cuota del Cobro (modulo Opeeraciones) en Zoho Produccion antes de
+# redirigir. Interruptor propio, independiente de ZOHO_PRODUCTION_WRITE_ENABLED
+# (que sigue siendo el gate real de la escritura en el SDK).
+CONCILIACION_COBRO_PREFILL_ENABLED=env_bool('CONCILIACION_COBRO_PREFILL_ENABLED',False)
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS',172800,300,604800)

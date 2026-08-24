@@ -99,7 +99,8 @@ class ReciboConciliacionRule:
         return (
             f"[numero_recibo={recibo.numero_recibo or 's/n'}, "
             f"valor_sin_iva={recibo.valor_sin_iva if recibo.valor_sin_iva is not None else 's/n'}, "
-            f"valor_iva={recibo.valor_iva if recibo.valor_iva is not None else 's/n'}]"
+            f"valor_iva={recibo.valor_iva if recibo.valor_iva is not None else 's/n'}, "
+            f"fecha_expedicion={recibo.fecha_expedicion or 's/n'}]"
         )
 
     # -- Recibo no disponible ------------------------------------------------
@@ -108,7 +109,9 @@ class ReciboConciliacionRule:
             fecha_reporte=ctx.hoy, ramo=ctx.ramo, periodo=ctx.periodo,
             tipo_incidente=_TIPO_ND,
             observacion=("No se pudo validar el recibo (PDF): archivo no disponible o "
-                         "servicio de extracción sin configurar para este ramo."),
+                         "servicio de extracción sin configurar para este ramo. Como "
+                         "resultado, los campos del cobro en Zoho (Certificado, Fecha "
+                         "expedición, Pago total cuota) no se prellenarán al facturar."),
             bloqueante=False,
         )
 

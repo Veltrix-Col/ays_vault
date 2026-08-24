@@ -7,7 +7,7 @@ python-dotenv==1.2.2
 httpx==0.28.1
 zohocrmsdk8-0==6.0.0
 # ays-zoho-sdk fue extraido de integrations/zoho/ a un repo propio (Veltrix-Col/ays_zoho_sdk).
-ays-zoho-sdk @ git+https://github.com/Veltrix-Col/ays_zoho_sdk.git@v1.3.0
+ays-zoho-sdk @ git+https://github.com/Veltrix-Col/ays_zoho_sdk.git@v1.3.1
 segno==1.6.6
 whitenoise==6.9.0
 psycopg[binary]==3.2.9
