@@ -68,7 +68,7 @@ from .services.individual_quotations import (
     resolve_accepted_person,
     update_quotation_responsible,
 )
-from .services.individual_access import generate_individual_access
+from .services.individual_access import generate_individual_access, individual_otp_required
 from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
 from .services.task_publisher import publish_task_outbox
 from .services.person_contract import (
@@ -1068,7 +1068,8 @@ def policy_individual_access(request, token):
         email_form = IndividualAccessPrepareForm(request.POST)
         email_form.fields["responsible"].choices = choices
         if not email_form.is_valid():
-            raise ValidationError("Seleccione un responsable y un correo válido para proteger el acceso con OTP.")
+            raise ValidationError("Revise el responsable y, si solicita verificación, el correo para el código.")
+        otp_required = bool(email_form.cleaned_data.get("otp_required"))
         responsible_value = str(email_form.cleaned_data.get("responsible") or "").strip()
         responsible = next(
             (item for item in responsible_options if item.actual_value == responsible_value),
@@ -1095,11 +1096,13 @@ def policy_individual_access(request, token):
             "task_responsible_display": responsible.display_value if responsible else "",
             "task_responsible_email": responsible_email,
             "task_area": "Negocios Bienestar y Beneficios",
+            "otp_required": otp_required,
         })
         generated = generate_individual_access(
             context=payload,
             actor=actor,
             recipient=email_form.cleaned_data["recipient"],
+            otp_required=otp_required,
         )
     except (ColectivosServiceError, ValidationError, Http404) as exc:
         if isinstance(exc, ColectivosServiceError) and exc.code in {"invalid_record", "not_found"}:
@@ -1116,6 +1119,7 @@ def policy_individual_access(request, token):
                     "individual_access_error": str(getattr(exc, "message", exc)),
                     "task_responsibles": locals().get("responsible_options", ()),
                     "responsible_warning": locals().get("responsible_error", ""),
+                    "individual_otp_required": bool(request.POST.get("otp_required")),
                 },
             )
         return render(request, "cotizacion_colectivos/detail_error.html", {
@@ -1148,6 +1152,7 @@ def policy_individual_access(request, token):
             ),
             "individual_generated_for_new_person": not affiliate_key,
             "responsible_warning": responsible_error,
+            "individual_otp_required": otp_required,
         },
     )
 
@@ -1822,6 +1827,7 @@ def request_list(request):
             access.inbox_access_summary = access.get_status_display()
             access.inbox_access_opened = bool(access.first_access_at)
             access.inbox_otp_verified = bool(access.otp_used_at)
+            access.inbox_otp_required = individual_otp_required(access)
             access.has_unread_response = bool(quotation and quotation.pk in unread_quotation_ids)
             access.inbox_detail_url = reverse(
                 "cotizacion_colectivos:individual_expedient",
@@ -3222,6 +3228,8 @@ def individual_expedient(request, token):
         {"label": "Enlace generado", "at": access.created_at},
         *([{"label": "Enlace abierto", "at": access.first_access_at}] if access.first_access_at else []),
         *([{"label": "OTP verificado", "at": access.otp_used_at}] if access.otp_used_at else []),
+        *([{"label": "Acceso directo mediante enlace firmado", "at": access.first_access_at}]
+          if access.first_access_at and not individual_otp_required(access) else []),
         {"label": "Respuesta recibida", "at": quotation.submitted_at},
     ]
     if latest_outbox:

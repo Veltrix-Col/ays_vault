@@ -30,7 +30,7 @@ from cotizacion_colectivos.models import (
 from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema
 from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
 from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
-from cotizacion_colectivos.services.individual_access import generate_individual_access, issue_individual_otp
+from cotizacion_colectivos.services.individual_access import IndividualAccessError, generate_individual_access, issue_individual_otp
 from cotizacion_colectivos.services.individual_quotations import (
     accept_individual_quotation,
     build_policy_context,
@@ -223,6 +223,33 @@ class IndividualQuotationTests(TestCase):
         self.assertNotEqual(generated.access.otp_hash, "654321")
         self.assertNotIn("654321", repr(generated.access.__dict__))
         self.assertNotIn("654321", repr(notification_logger.mock_calls))
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_individual_access_without_otp_opens_form_directly_and_persists_decision(self, workspace):
+        workspace.return_value = self.workspace("movilidad")
+        context = unsign_policy_context(self.context_token(schema_slug="movilidad"))
+        generated = generate_individual_access(
+            context=context, actor=self.actor, recipient="", otp_required=False,
+        )
+        self.assertIs(generated.access.safe_metadata["otp_required"], False)
+        response = self.client.get(reverse("colectivos_external:individual_quotation", args=[generated.token]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Código de verificación")
+        self.assertContains(response, "Información para cotizar")
+        generated.access.refresh_from_db()
+        self.assertFalse(generated.access.otp_hash)
+        self.assertGreaterEqual(generated.access.access_count, 1)
+
+    def test_invalid_individual_token_is_rejected_even_when_otp_is_disabled(self):
+        response = self.client.get(
+            reverse("colectivos_external:individual_quotation", args=["invalid.token-value"]),
+        )
+        self.assertEqual(response.status_code, 410)
+
+    def test_individual_access_with_otp_requires_a_valid_recipient(self):
+        context = unsign_policy_context(self.context_token())
+        with self.assertRaises(IndividualAccessError):
+            generate_individual_access(context=context, actor=self.actor, recipient="", otp_required=True)
 
     @override_settings(COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=172800)
     def test_individual_link_ttl_is_elapsed_48_hours(self):

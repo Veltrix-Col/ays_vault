@@ -59,9 +59,10 @@ def _context_checksum(context: dict) -> str:
 
 
 @transaction.atomic
-def generate_individual_access(*, context: dict, actor, recipient: str) -> GeneratedIndividualAccess:
+def generate_individual_access(*, context: dict, actor, recipient: str, otp_required: bool = True) -> GeneratedIndividualAccess:
     recipient = recipient.strip()
-    if not recipient:
+    otp_required = bool(otp_required)
+    if otp_required and not recipient:
         raise IndividualAccessError("Debe indicar un correo autorizado.")
     checksum = _context_checksum(context)
     AccesoCotizacionIndividual.objects.select_for_update().filter(
@@ -87,6 +88,7 @@ def generate_individual_access(*, context: dict, actor, recipient: str) -> Gener
             "branch": str(context.get("branch_slug") or "")[:24],
             "schema_version": int(context.get("schema_version") or 0),
             "task_responsible_display": str(context.get("task_responsible_display") or "")[:120],
+            "otp_required": otp_required,
         },
     )
     return GeneratedIndividualAccess(access=access, token=f"{selector}.{secret}")
@@ -121,7 +123,15 @@ def access_context(access: AccesoCotizacionIndividual) -> dict:
         raise IndividualAccessError("El contexto no está disponible.") from exc
 
 
+def individual_otp_required(access: AccesoCotizacionIndividual) -> bool:
+    """Read the persisted decision; legacy accesses remain OTP-protected."""
+    metadata = access.safe_metadata if isinstance(access.safe_metadata, dict) else {}
+    return metadata.get("otp_required", True) is not False
+
+
 def issue_individual_otp(access: AccesoCotizacionIndividual) -> bool:
+    if not individual_otp_required(access):
+        raise IndividualAccessError("Este enlace no requiere código de verificación.")
     access.refresh_from_db(fields=("otp_hash", "otp_expires_at", "encrypted_recipient", "expires_at"))
     now = timezone.now()
     if access.otp_hash and access.otp_expires_at and access.otp_expires_at > now:
@@ -193,9 +203,25 @@ def resolve_individual_session(cookie: str, access: AccesoCotizacionIndividual):
 
 
 @transaction.atomic
+def record_individual_direct_access(access: AccesoCotizacionIndividual) -> AccesoCotizacionIndividual:
+    locked = AccesoCotizacionIndividual.objects.select_for_update().get(pk=access.pk)
+    if individual_otp_required(locked):
+        raise IndividualAccessError("Este enlace requiere verificación.")
+    if locked.status != locked.Status.ACTIVE or locked.expires_at <= timezone.now():
+        raise IndividualAccessError("El enlace no está disponible.")
+    now = timezone.now()
+    locked.first_access_at = locked.first_access_at or now
+    locked.last_access_at = now
+    locked.access_count += 1
+    locked.save(update_fields=("first_access_at", "last_access_at", "access_count"))
+    return locked
+
+
+@transaction.atomic
 def consume_individual_access(access: AccesoCotizacionIndividual, quotation) -> None:
     locked = AccesoCotizacionIndividual.objects.select_for_update().get(pk=access.pk)
-    if locked.status != locked.Status.VERIFIED or locked.expires_at <= timezone.now():
+    allowed_status = locked.Status.VERIFIED if individual_otp_required(locked) else locked.Status.ACTIVE
+    if locked.status != allowed_status or locked.expires_at <= timezone.now():
         raise IndividualAccessError("El acceso no admite una respuesta.")
     locked.status = locked.Status.USED
     locked.used_at = timezone.now()

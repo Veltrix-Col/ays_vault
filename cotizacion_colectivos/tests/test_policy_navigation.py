@@ -191,6 +191,18 @@ class FakeEntityDetailService:
     COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=7200,
 )
 class PolicyNavigationTests(TestCase):
+    def test_individual_otp_toggle_is_opt_in_and_email_field_is_conditional(self):
+        template = (Path(__file__).resolve().parents[2] / "templates" / "cotizacion_colectivos" / "policy_detail.html").read_text(encoding="utf-8")
+        self.assertIn('name="otp_required"', template)
+        self.assertIn("Solicitar código de verificación por correo", template)
+        self.assertIn("data-individual-otp-fields", template)
+        self.assertIn("data-individual-otp-toggle", template)
+        self.assertIn("data-individual-otp-fields{% if not individual_otp_required %} hidden{% endif %}", template)
+        self.assertIn("recipient.required = enabled", (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-access.js").read_text(encoding="utf-8"))
+        self.assertIn(".individual-otp-toggle input[type=checkbox]", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
+        self.assertIn(".individual-access-field[hidden]{display:none!important}", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
+        self.assertIn('toggle.setAttribute("aria-expanded"', (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-access.js").read_text(encoding="utf-8"))
+
     def setUp(self):
         cache.clear()
         User = get_user_model()
