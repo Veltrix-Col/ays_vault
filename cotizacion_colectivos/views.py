@@ -5,6 +5,8 @@ import json
 import time
 import unicodedata
 import uuid
+import base64
+import re
 from urllib.parse import quote
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -57,7 +59,7 @@ from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
 from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
 from .service_catalog import branch_workspaces
-from .quotation_forms.catalog import get_branch_schema
+from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema
 from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
     affiliate_options,
@@ -66,22 +68,41 @@ from .services.individual_quotations import (
     resolve_accepted_person,
     update_quotation_responsible,
 )
-from .services.individual_access import generate_individual_access
+from .services.individual_access import generate_individual_access, individual_otp_required
 from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
 from .services.task_publisher import publish_task_outbox
 from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
     contact_missing_fields, get_contacts_publisher,
 )
-from .services.individual_entities import effective_candidate, promote_created_people, resolve_mobility_entities, synchronize_risk_insured
+from .services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
 from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
+from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
+from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
-from .models import AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
+from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
 from .quotation_forms.catalog import get_policy_branch_schema
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _attachment_document_status(attachment):
+    metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+    nested = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
+    status = str(nested.get("status") or metadata.get("zoho_status") or "").strip().lower()
+    if status == "uploaded":
+        return "uploaded"
+    if status in {"reconcile_required", "uncertain"}:
+        return "reconcile_required"
+    if status == "failed":
+        return "failed"
+    return "pending"
+
+
+def _attachment_can_publish(attachment, remote_id):
+    return _attachment_document_status(attachment) not in {"uploaded", "reconcile_required"} and bool(str(remote_id or "").strip())
 
 
 def _transition_permission(target):
@@ -1047,7 +1068,8 @@ def policy_individual_access(request, token):
         email_form = IndividualAccessPrepareForm(request.POST)
         email_form.fields["responsible"].choices = choices
         if not email_form.is_valid():
-            raise ValidationError("Seleccione un responsable y un correo válido para proteger el acceso con OTP.")
+            raise ValidationError("Revise el responsable y, si solicita verificación, el correo para el código.")
+        otp_required = bool(email_form.cleaned_data.get("otp_required"))
         responsible_value = str(email_form.cleaned_data.get("responsible") or "").strip()
         responsible = next(
             (item for item in responsible_options if item.actual_value == responsible_value),
@@ -1074,11 +1096,13 @@ def policy_individual_access(request, token):
             "task_responsible_display": responsible.display_value if responsible else "",
             "task_responsible_email": responsible_email,
             "task_area": "Negocios Bienestar y Beneficios",
+            "otp_required": otp_required,
         })
         generated = generate_individual_access(
             context=payload,
             actor=actor,
             recipient=email_form.cleaned_data["recipient"],
+            otp_required=otp_required,
         )
     except (ColectivosServiceError, ValidationError, Http404) as exc:
         if isinstance(exc, ColectivosServiceError) and exc.code in {"invalid_record", "not_found"}:
@@ -1095,6 +1119,7 @@ def policy_individual_access(request, token):
                     "individual_access_error": str(getattr(exc, "message", exc)),
                     "task_responsibles": locals().get("responsible_options", ()),
                     "responsible_warning": locals().get("responsible_error", ""),
+                    "individual_otp_required": bool(request.POST.get("otp_required")),
                 },
             )
         return render(request, "cotizacion_colectivos/detail_error.html", {
@@ -1127,6 +1152,7 @@ def policy_individual_access(request, token):
             ),
             "individual_generated_for_new_person": not affiliate_key,
             "responsible_warning": responsible_error,
+            "individual_otp_required": otp_required,
         },
     )
 
@@ -1801,6 +1827,7 @@ def request_list(request):
             access.inbox_access_summary = access.get_status_display()
             access.inbox_access_opened = bool(access.first_access_at)
             access.inbox_otp_verified = bool(access.otp_used_at)
+            access.inbox_otp_required = individual_otp_required(access)
             access.has_unread_response = bool(quotation and quotation.pk in unread_quotation_ids)
             access.inbox_detail_url = reverse(
                 "cotizacion_colectivos:individual_expedient",
@@ -2485,7 +2512,7 @@ def individual_accept(request, token):
     quotation = accept_individual_quotation(quotation=quotation, actor=actor)
     try:
         resolve_accepted_person(quotation=quotation)
-        entity_result = resolve_mobility_entities(quotation=quotation) if quotation.branch_slug == "movilidad" else None
+        entity_result = resolve_mobility_entities(quotation=quotation) if quotation.branch_slug == "movilidad" else resolve_common_people_entities(quotation=quotation)
         if entity_result and entity_result.get("status") == "error":
             messages.warning(request, "Cotización aceptada; no fue posible resolver las entidades de Movilidad.")
         else:
@@ -2584,6 +2611,8 @@ def individual_create_person(request, token):
         resolve_accepted_person(quotation=quotation)
         if quotation.branch_slug == "movilidad":
             resolve_mobility_entities(quotation=quotation)
+        else:
+            resolve_common_people_entities(quotation=quotation)
         quotation.refresh_from_db(fields=("safe_metadata",))
         people = quotation.safe_metadata.get("people_lookup") or ()
         entities = quotation.safe_metadata.get("zoho_entities") or {}
@@ -2598,7 +2627,10 @@ def individual_create_person(request, token):
             raise ValidationError("No se encontró un candidato Persona válido para crear.")
         result = get_contacts_publisher(
             profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
-            confirmation=str(getattr(settings, "COLECTIVOS_CONTACT_WRITE_CONFIRMATION", "")),
+            confirmation=configured_confirmation(
+                "contact", str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
+                legacy_setting="COLECTIVOS_CONTACT_WRITE_CONFIRMATION",
+            ),
         ).create(data, status="Cliente")
         metadata = dict(quotation.safe_metadata or {})
         contact_id = result["record_id"]
@@ -2636,7 +2668,15 @@ def individual_create_person(request, token):
             metadata["zoho_entities"] = entities
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
-        messages.success(request, "Persona creada correctamente en Zoho Sandbox.")
+        entity_label = "Asegurado" if str(selected.get("role") or "").lower().startswith("asegur") else "Afiliado"
+        try:
+            publish_pending_for_person(
+                quotation=quotation, document=selected_document, record_id=contact_id,
+                owner_key=str(selected.get("owner_key") or ""),
+            )
+            messages.success(request, f"{entity_label} creado y documento procesado en Zoho Sandbox.")
+        except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
+            messages.warning(request, f"{entity_label} creado. El documento requiere atención: {exc}")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
     except ContactPublicationUncertain:
@@ -2720,6 +2760,18 @@ def individual_update_entity(request, token, entity, vehicle_index):
         if vehicle_index < 0 or vehicle_index >= len(bucket):
             raise ValidationError("Vehículo no encontrado.")
         allowed = {"Name", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas", "Modelo", "Clase", "Ciudad", "Tipo_de_uso"} if entity == "risk" else {"Name", "Ramo", "Parentesco", "Fecha_ingreso_riesgo", "Estado", "Plan"}
+        if entity == "risk":
+            proposed_class = str(request.POST.get("Clase") or "").strip()
+            proposed_use = str(request.POST.get("Tipo_de_uso") or "").strip()
+            if proposed_class and proposed_class not in VEHICLE_CLASS_CHOICES:
+                raise ValidationError("Seleccione una Clase válida.")
+            if proposed_use and proposed_use not in VEHICLE_USE_CHOICES:
+                raise ValidationError("Seleccione un Uso válido.")
+            payload = json.loads(decrypt(quotation.encrypted_payload))
+            rows = (payload.get("groups") or {}).get("vehicles") or []
+            source_row = rows[vehicle_index] if 0 <= vehicle_index < len(rows) and isinstance(rows[vehicle_index], dict) else {}
+            if str(source_row.get("zero_km") or "").strip() == "No" and not str(request.POST.get("Placa_del_vehiculo") or "").strip():
+                raise ValidationError("La placa es obligatoria cuando el vehículo no es 0 km.")
         corrections = dict(metadata.get("zoho_entity_corrections") or {})
         corrections[f"{entity}:{vehicle_index}"] = {
             key: str(request.POST.get(key) or "").strip() for key in allowed if key in request.POST
@@ -2752,18 +2804,34 @@ def individual_create_risk(request, token, vehicle_index):
         item = risks[vehicle_index]
         if item.get("status") != "not_found":
             raise ValidationError("El Riesgo requiere resolución antes de crear.")
-        result = create_sandbox_risk(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_RISK_SEED_CONFIRMATION", "")))
+        active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        result = create_sandbox_risk(
+            item.get("candidate") or {}, profile=active_profile,
+            operational=True,
+            confirmation=configured_confirmation(
+                "risk", active_profile,
+                legacy_setting="COLECTIVOS_RISK_WRITE_CONFIRMATION",
+            ),
+        )
         created_at = timezone.now().isoformat()
         item.update({"status": "created", "created": True, "remote_id": result["record_id"], "risk_id": result["record_id"], "created_at": created_at})
         for key in ("error", "error_code"):
             item.pop(key, None)
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["risks"] = risks
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
-        messages.success(request, "Riesgo creado en Zoho Sandbox.")
+        try:
+            publish_pending_for_risk(quotation=quotation, vehicle_index=vehicle_index, record_id=result["record_id"])
+            messages.success(request, "Riesgo creado y documento procesado en Zoho Sandbox.")
+        except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
+            messages.warning(request, f"Riesgo creado. El documento requiere atención: {exc}")
     except (RiskPublishingDisabled, RiskPublicationRejected, ValidationError) as exc:
         code = "BLOCKED" if isinstance(exc, RiskPublishingDisabled) else "REJECTED" if isinstance(exc, RiskPublicationRejected) else "VALIDATION"
         if 'item' in locals():
-            item.update({"error_code": code, "error": str(exc)})
+            error_message = (
+                "La creación del Riesgo está bloqueada por la configuración de escritura de Sandbox."
+                if code == "BLOCKED" else str(exc)
+            )
+            item.update({"error_code": code, "error": error_message})
             metadata = dict(quotation.safe_metadata or {})
             entities = dict(metadata.get("zoho_entities") or {})
             current_risks = list(entities.get("risks") or [])
@@ -2774,7 +2842,7 @@ def individual_create_risk(request, token, vehicle_index):
                 quotation.safe_metadata = metadata
                 quotation.save(update_fields=("safe_metadata",))
             logger.warning("individual_create_risk result=%s module=Riesgos vehicle_index=%s", code, vehicle_index)
-        messages.warning(request, str(exc))
+        messages.warning(request, item.get("error") if 'item' in locals() else str(exc))
     except RiskPublicationUncertain:
         if 'item' in locals():
             item.update({"error_code": "RECONCILE_REQUIRED", "error": "Resultado incierto; requiere conciliación manual."})
@@ -2823,17 +2891,43 @@ def individual_create_subrisk(request, token, vehicle_index):
         item = subrisks[vehicle_index]
         if item.get("status") != "not_found" or item.get("created") or item.get("remote_id") or item.get("riesgos1_id"):
             raise ValidationError("La asociación requiere resolución antes de crear.")
-        result = create_mobility_subrisk_sandbox(item.get("candidate") or {}, confirmation=str(getattr(settings, "COLECTIVOS_MOBILITY_SUBRISK_SEED_CONFIRMATION", "")))
+        active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        result = create_mobility_subrisk_sandbox(
+            item.get("candidate") or {}, profile=active_profile,
+            confirmation=configured_confirmation(
+                "subrisk", active_profile,
+                legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION",
+            ),
+            operational=True,
+        )
         confirmed_id = str(result["record_id"])
         item.update({"status": "created", "created": True, "remote_id": confirmed_id, "riesgos1_id": confirmed_id, "created_at": timezone.now().isoformat()})
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["subrisks"] = subrisks
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
         messages.success(request, "Riesgo asociado a la póliza en Zoho Sandbox.")
     except (SubriskPublishingDisabled, SubriskPublicationRejected, ValidationError) as exc:
+        item["last_error"] = str(exc)[:180]
+        item["last_error_code"] = exc.__class__.__name__[:40]
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, str(exc))
     except SubriskPublicationUncertain:
+        item["last_error"] = "Resultado incierto; requiere conciliación en Zoho."
+        item["last_error_code"] = "UNCERTAIN"
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, "La asociación requiere conciliación en Zoho.")
     except ZohoError:
+        item["last_error"] = "Zoho no pudo asociar el riesgo."
+        item["last_error_code"] = "ZOHO_ERROR"
+        metadata = dict(quotation.safe_metadata or {})
+        metadata.setdefault("zoho_entities", {})["subrisks"] = subrisks
+        quotation.safe_metadata = metadata
+        quotation.save(update_fields=("safe_metadata",))
         messages.warning(request, "Zoho no pudo asociar el Riesgo. Revise los datos y el estado operativo.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
@@ -2927,6 +3021,18 @@ def individual_publish_task(request, token):
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
+_HIDDEN_RESPONSE_KEYS = frozenset({"entity_key"})
+
+
+def _human_response_value(key, value):
+    """Format client answers without exposing stable technical identifiers."""
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
+    if value is None or value == "":
+        return "Sin información"
+    return value
+
+
 @never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
@@ -2948,8 +3054,9 @@ def individual_expedient(request, token):
     field_labels["declared_company"] = "Empresa a la cual pertenece"
     group_schemas = {item.key: item for item in schema.repeatables}
     display_fields = tuple(
-        (field_labels.get(key, "Información"), value)
+        (field_labels.get(key, "Información"), _human_response_value(key, value))
         for key, value in payload.get("fields", {}).items()
+        if key not in _HIDDEN_RESPONSE_KEYS
     )
     display_groups = []
     for group_key, rows in payload.get("groups", {}).items():
@@ -2961,7 +3068,11 @@ def individual_expedient(request, token):
         display_groups.append({
             "label": group_schema.plural if group_schema else "Información relacionada",
             "rows": tuple(
-                tuple((labels.get(key, "Información"), value) for key, value in row.items())
+                tuple(
+                    (labels.get(key, "Información"), _human_response_value(key, value))
+                    for key, value in row.items()
+                    if key not in _HIDDEN_RESPONSE_KEYS
+                )
                 for row in rows
             ),
         })
@@ -2974,6 +3085,17 @@ def individual_expedient(request, token):
     ):
         context.setdefault(optional_key, "")
     safe_metadata = quotation.safe_metadata or {}
+    individual_attachments = tuple(quotation.attachments.all())
+    documents_by_owner = {}
+    for attachment in individual_attachments:
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        attachment.owner_label = {"affiliate": "Afiliado", "insured": "Asegurado", "risk": "Vehículo"}.get(str(metadata.get("owner_role") or ""), "Documento histórico")
+        attachment.document_status = _attachment_document_status(attachment)
+        attachment.structured_owner = (
+            str(metadata.get("owner_type") or "") in {"contact", "risk"}
+            and bool(str(metadata.get("owner_key") or "").strip())
+        )
+        documents_by_owner.setdefault(str(metadata.get("owner_key") or "legacy"), []).append(attachment)
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
     decision_status = _individual_acceptance_status(quotation)
     person_lookup = safe_metadata.get("person_lookup") if isinstance(safe_metadata.get("person_lookup"), dict) else {}
@@ -3010,6 +3132,12 @@ def individual_expedient(request, token):
             zoho_entities = resolve_mobility_entities(quotation=quotation)
         except Exception:
             logger.warning("individual_entities_resolution_failed quotation_id=%s", quotation.public_id)
+    elif acceptance.get("status") == "accepted" and quotation.branch_slug in {"salud", "vida", "exequial"}:
+        try:
+            zoho_entities = resolve_common_people_entities(quotation=quotation)
+            safe_metadata = quotation.safe_metadata or {}
+        except Exception:
+            logger.warning("individual_people_resolution_failed quotation_id=%s", quotation.public_id)
     if zoho_entities.get("people"):
         promoted_people, promoted = promote_created_people(
             zoho_entities.get("people"),
@@ -3029,6 +3157,50 @@ def individual_expedient(request, token):
         people_lookup = [dict(item) for item in zoho_entities.get("people", ()) if isinstance(item, dict)]
     if people_lookup:
         person_lookup = people_lookup[0]
+    for person in people_lookup:
+        owner_keys = [str(person.get("owner_key") or "")]
+        owner_keys.extend(str(key) for key in (person.get("owner_keys") or ()) if key)
+        if person.get("role") == "Afiliado":
+            owner_keys.append("affiliate")
+        person["documents"] = tuple(
+            document
+            for key in dict.fromkeys(owner_keys)
+            for document in documents_by_owner.get(key, ())
+        )
+        person_remote_id = str(person.get("remote_id") or person.get("contact_id") or "").strip()
+        for document in person["documents"]:
+            document.can_publish = _attachment_can_publish(document, person_remote_id)
+    if isinstance(vehicle_rows, list):
+        for index, risk in enumerate(zoho_entities.get("risks") or ()):
+            if not isinstance(risk, dict):
+                continue
+            row = vehicle_rows[index] if index < len(vehicle_rows) and isinstance(vehicle_rows[index], dict) else {}
+            owner_key = str(risk.get("owner_key") or risk.get("risk_key") or row.get("entity_key") or f"vehicles-{index}")
+            risk["owner_key"] = owner_key
+            risk["risk_key"] = owner_key
+            risk["zero_km"] = str(row.get("zero_km") or "").strip()
+            risk["documents"] = tuple(documents_by_owner.get(owner_key, ()))
+            risk_remote_id = str(risk.get("remote_id") or risk.get("risk_id") or "").strip()
+            for document in risk["documents"]:
+                document.can_publish = _attachment_can_publish(document, risk_remote_id)
+            insured = risk.get("insured") if isinstance(risk.get("insured"), dict) else None
+            if insured is not None:
+                insured["documents"] = tuple(documents_by_owner.get(f"{owner_key}-insured", ()))
+                insured_remote_id = str(insured.get("remote_id") or insured.get("contact_id") or "").strip()
+                for document in insured["documents"]:
+                    document.can_publish = _attachment_can_publish(document, insured_remote_id)
+    # Legacy/unowned documents remain visible but cannot be published. The
+    # structured owner loops above set this from the final server-side entity
+    # snapshot and its remote ID.
+    for attachment in individual_attachments:
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        owner_key = str(metadata.get("owner_key") or "")
+        owner_type = str(metadata.get("owner_type") or "")
+        # Keep an explicit false default for legacy/unowned documents. For
+        # structured documents, the owner loops above already calculated the
+        # value from the final entity snapshot and its remote ID.
+        if not hasattr(attachment, "can_publish"):
+            attachment.can_publish = False
     created_people = tuple(
         person for person in people_lookup
         if person.get("created") or (person.get("status") == "found" and person.get("contact_id"))
@@ -3056,6 +3228,8 @@ def individual_expedient(request, token):
         {"label": "Enlace generado", "at": access.created_at},
         *([{"label": "Enlace abierto", "at": access.first_access_at}] if access.first_access_at else []),
         *([{"label": "OTP verificado", "at": access.otp_used_at}] if access.otp_used_at else []),
+        *([{"label": "Acceso directo mediante enlace firmado", "at": access.first_access_at}]
+          if access.first_access_at and not individual_otp_required(access) else []),
         {"label": "Respuesta recibida", "at": quotation.submitted_at},
     ]
     if latest_outbox:
@@ -3064,6 +3238,12 @@ def individual_expedient(request, token):
             "at": latest_outbox.updated_at,
         })
     history.sort(key=lambda row: row["at"], reverse=True)
+    # The human response section is legacy-only; structured documents are
+    # rendered beside their owner cards and must not appear twice.
+    quotation._prefetched_objects_cache["attachments"] = list(
+        attachment for attachment in individual_attachments
+        if not getattr(attachment, "structured_owner", False)
+    )
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
@@ -3089,6 +3269,9 @@ def individual_expedient(request, token):
         "people_lookup": tuple(people_lookup),
         "created_people": created_people,
         "zoho_entities": zoho_entities,
+        "vehicle_class_choices": VEHICLE_CLASS_CHOICES,
+        "vehicle_use_choices": VEHICLE_USE_CHOICES,
+        "individual_attachments": individual_attachments,
         "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,
@@ -3102,6 +3285,133 @@ def individual_expedient(request, token):
 @require_http_methods(["GET"])
 def individual_quotation_detail(request, token):
     """Compatibility route; the operational expediente is the sole UI."""
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["GET"])
+def individual_attachment_download(request, token, attachment_id):
+    """Serve one encrypted individual quotation file after scoped permission checks."""
+    if not has_internal_permission(request, "download_attachments"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        attachment = AdjuntoCotizacionIndividual.objects.get(pk=attachment_id, quotation=quotation)
+        root = Path(settings.COLECTIVOS_PRIVATE_ROOT).resolve()
+        target = (root / "individual_quotations" / attachment.stored_path).resolve()
+        if root not in target.parents or not target.is_file():
+            raise Http404("Adjunto no disponible")
+        encoded = decrypt(target.read_bytes().decode())
+        content = base64.b64decode(encoded.encode())
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, AdjuntoCotizacionIndividual.DoesNotExist, ValueError, TypeError) as exc:
+        raise Http404("Adjunto no disponible") from exc
+    allowed_preview_types = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    content_type = str(attachment.detected_mime or "").lower()
+    if content_type not in allowed_preview_types:
+        return HttpResponse("Este archivo no puede previsualizarse.", status=415, content_type="text/plain")
+    response = HttpResponse(content, content_type=content_type)
+    safe_name = re.sub(r'["\r\n]', "", Path(attachment.safe_original_name or f"documento{attachment.extension}").name)
+    response["Content-Disposition"] = f'inline; filename="{safe_name}"'
+    response["Cache-Control"] = "no-store, private"
+    response["Pragma"] = "no-cache"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_attachment_remove(request, token, attachment_id):
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        public_id = unsign_receipt(token)
+        quotation = CotizacionIndividual.objects.get(public_id=public_id)
+        attachment = AdjuntoCotizacionIndividual.objects.get(pk=attachment_id, quotation=quotation)
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        if metadata.get("zoho_status") == "uploaded":
+            messages.warning(request, "El documento ya está publicado en Zoho y no puede eliminarse desde aquí.")
+        else:
+            root = (Path(settings.COLECTIVOS_PRIVATE_ROOT) / "individual_quotations").resolve()
+            target = (root / attachment.stored_path).resolve()
+            if root not in target.parents:
+                raise Http404("Adjunto no disponible")
+            target.unlink(missing_ok=True)
+            attachment.delete()
+            messages.success(request, "Documento retirado de la cotización.")
+    except (signing.BadSignature, CotizacionIndividual.DoesNotExist, AdjuntoCotizacionIndividual.DoesNotExist, ValueError):
+        raise Http404("Adjunto no disponible")
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_attachment_publish(request, token, attachment_id):
+    """Explicitly publish a pending document to its already-resolved owner."""
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = _individual_entity_quotation(token)
+        _ensure_individual_can_operate_zoho(quotation)
+        attachment = quotation.attachments.get(pk=attachment_id)
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        if metadata.get("zoho_status") == "uploaded":
+            raise ValidationError("El documento ya está publicado en Zoho.")
+        entities = (quotation.safe_metadata or {}).get("zoho_entities") or {}
+        owner_key = str(metadata.get("owner_key") or "")
+        module = "Contacts"
+        remote_id = ""
+        if owner_key == "affiliate":
+            person = next(iter(entities.get("people") or ()), {})
+            remote_id = str(person.get("remote_id") or person.get("contact_id") or "")
+        elif owner_key.startswith("people-"):
+            person = next((item for item in (entities.get("people") or ())
+                           if str(item.get("owner_key") or "") == owner_key
+                           or owner_key in (item.get("owner_keys") or ())), {})
+            remote_id = str(person.get("remote_id") or person.get("contact_id") or "")
+        elif owner_key.startswith("vehicles-") and owner_key.endswith("-insured"):
+            base_key = owner_key[:-8]
+            payload = json.loads(decrypt(quotation.encrypted_payload))
+            rows = (payload.get("groups") or {}).get("vehicles") or []
+            index = next((position for position, row in enumerate(rows) if str((row or {}).get("entity_key") or f"vehicles-{position}") == base_key), -1)
+            risk = (entities.get("risks") or [])[index] if index >= 0 and index < len(entities.get("risks") or []) else {}
+            insured = risk.get("insured") or {}
+            remote_id = str(insured.get("remote_id") or insured.get("contact_id") or "")
+        elif owner_key.startswith("vehicles-"):
+            payload = json.loads(decrypt(quotation.encrypted_payload))
+            rows = (payload.get("groups") or {}).get("vehicles") or []
+            index = next((position for position, row in enumerate(rows) if str((row or {}).get("entity_key") or f"vehicles-{position}") == owner_key), -1)
+            risk = (entities.get("risks") or [])[index] if index >= 0 and index < len(entities.get("risks") or []) else {}
+            module = "Riesgos"
+            remote_id = str(risk.get("remote_id") or risk.get("risk_id") or "")
+        if not remote_id:
+            raise ValidationError("Primero debe resolver la entidad en Zoho.")
+        publish_attachment(attachment=attachment, module=module, record_id=remote_id)
+        messages.success(request, "Documento publicado en Zoho.")
+    except (ValidationError, IndividualAttachmentUncertain, IndividualAttachmentBlocked, ZohoError) as exc:
+        messages.warning(request, str(exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_attachment_reconcile(request, token, attachment_id):
+    """Reconcile an uncertain attachment without retrying its upload."""
+    if not has_internal_permission(request, "approve_responses"):
+        return permission_denied_response()
+    try:
+        quotation = _individual_entity_quotation(token)
+        attachment = quotation.attachments.get(pk=attachment_id)
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        target = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
+        module = str(target.get("module") or metadata.get("zoho_module") or "")
+        record_id = str(target.get("record_id") or metadata.get("zoho_record_id") or "")
+        if module not in {"Contacts", "Riesgos"} or not record_id.isdigit():
+            raise ValidationError("No hay un destino válido para reconciliar.")
+        reconcile_attachment(attachment=attachment, module=module, record_id=record_id)
+        messages.success(request, "Documento conciliado con Zoho.")
+    except (ValidationError, IndividualAttachmentUncertain, IndividualAttachmentBlocked, ZohoError) as exc:
+        messages.warning(request, str(exc))
     return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 

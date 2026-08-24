@@ -148,7 +148,9 @@ class PackageBoundaryTests(SimpleTestCase):
         contact_source = (root / "services" / "person_contract.py").read_text("utf-8")
         subrisk_source = (root / "services" / "subrisk_sandbox.py").read_text("utf-8")
         risk_source = (root / "services" / "risk_sandbox.py").read_text("utf-8")
+        guard_source = (root / "services" / "write_guards.py").read_text("utf-8")
+        self.assertIn("write_enabled", guard_source)
+        self.assertIn("ZOHO_ACTIVE_PROFILE", guard_source)
         for source in (task_source, contact_source, subrisk_source, risk_source):
-            self.assertIn("sandbox", source)
-            self.assertIn("write_enabled", source)
+            self.assertIn("require_write_guard", source)
             self.assertIn("confirmation", source)

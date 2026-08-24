@@ -29,6 +29,7 @@ from conciliador.service import (
     ConciliacionService,
     ConciliacionServiceError,
 )
+from conciliador.sources.foundry_recibo import ReciboExtraido
 from conciliador.sources.zoho_api import resolver_cobros_poliza, resolver_id_poliza
 from integrations.zoho import get_zoho
 
@@ -43,6 +44,16 @@ logger = logging.getLogger("conciliacion")
 _ZOHO_CRM_WEB_ORG = "753703967"
 _ZOHO_CRM_POLIZAS_TAB = "CustomModule4"
 _ZOHO_CRM_COBROS_TAB = "CustomModule6"
+
+# Modulo API de Cobros (mismo modulo cuya tab web es CustomModule6) y los tres
+# campos de la interfaz que "Facturar cobro" prellena antes de redirigir, con
+# sus nombres API confirmados contra el snapshot de metadatos (docs/zoho/*/
+# latest/fields.json): "Certificado (recibo, documento, anexo)",
+# "Fecha expedición" y "Pago total cuota" respectivamente.
+_MODULO_COBROS = "Opeeraciones"
+_CAMPO_CERTIFICADO = "N_mero_de_certificado"
+_CAMPO_FECHA_EXPEDICION = "Fecha_de_expedici_n_de_p_liza"
+_CAMPO_PAGO_TOTAL_CUOTA = "Valor_de_cuota"
 
 
 def _url_poliza(poliza_id: str) -> str:
@@ -84,6 +95,90 @@ def _resolver_cobros(poliza: str) -> list[dict[str, object]] | None:
 
 class ConciliacionProcessingError(ValueError):
     """Error de negocio al conciliar; una vista puede mostrar el mensaje tal cual."""
+
+
+class CobroPrefillError(ValueError):
+    """Error de negocio al prellenar el Cobro; una vista puede mostrar el mensaje tal cual."""
+
+
+class CobroPrefillDisabled(CobroPrefillError):
+    """El interruptor `CONCILIACION_COBRO_PREFILL_ENABLED` está apagado."""
+
+
+class CobroNotFound(CobroPrefillError):
+    """El `cobro_id` recibido no está entre los Cobros resueltos para la póliza."""
+
+
+class CobroPrefillNoData(CobroPrefillError):
+    """Ninguno de los 3 campos trae valor (recibo no extraído o campos vacíos)."""
+
+
+def recibo_prefill_fields(recibo: object) -> dict[str, object] | None:
+    """Los 3 valores del recibo (PDF) que "Facturar cobro" puede prellenar en
+    Zoho, listos para el summary que ve el frontend. None si el recibo no se
+    extrajo (PDF ausente o extracción fallida): en ese caso `ReciboConciliacionRule`
+    ya deja la advertencia 'N/D' explicando que el cobro no se prellenará."""
+    if not isinstance(recibo, ReciboExtraido):
+        return None
+    return {
+        "certificado": recibo.numero_recibo,
+        "fecha_expedicion": recibo.fecha_expedicion,
+        "pago_total_cuota": recibo.valor_total_a_pagar,
+    }
+
+
+def prellenar_cobro(
+    *, poliza: str, cobro_id: str,
+    certificado: str | None, fecha_expedicion: str | None, pago_total_cuota: float | None,
+) -> dict[str, object]:
+    """Escribe Certificado / Fecha expedición / Pago total cuota en el Cobro
+    de Zoho Producción antes de que "Facturar cobro" redirija ahí -- solo los
+    campos con valor (prellenado parcial si el recibo no trajo alguno).
+
+    Siempre contra Producción, igual que `_resolver_cobros`/`_url_cobro`: no
+    tiene sentido prellenar un cobro de Sandbox si el enlace de facturación
+    real apunta a Producción. Antes de escribir, vuelve a resolver los cobros
+    de la póliza y exige que `cobro_id` esté entre ellos -- el mismo alcance
+    ya público vía `_resolver_cobros`, así el llamador nunca puede dirigir la
+    escritura a un id que no haya sido primero resuelto por la póliza dada."""
+    if not getattr(settings, "CONCILIACION_COBRO_PREFILL_ENABLED", False):
+        raise CobroPrefillDisabled("El prellenado del cobro está deshabilitado.")
+
+    campos: dict[str, object] = {}
+    if certificado:
+        campos[_CAMPO_CERTIFICADO] = certificado
+    if fecha_expedicion:
+        campos[_CAMPO_FECHA_EXPEDICION] = fecha_expedicion
+    if pago_total_cuota is not None:
+        campos[_CAMPO_PAGO_TOTAL_CUOTA] = pago_total_cuota
+    if not campos:
+        raise CobroPrefillNoData("No hay datos del recibo para prellenar.")
+
+    try:
+        zoho_produccion = get_zoho(profile="production")
+        candidatos = resolver_cobros_poliza(zoho_produccion, poliza=poliza)
+    except ZohoError as exc:
+        raise CobroPrefillError(f"No fue posible validar el cobro en Zoho ({exc.category}).") from exc
+    if not any(str(candidato["id"]) == str(cobro_id) for candidato in candidatos):
+        raise CobroNotFound("El cobro indicado no corresponde a la póliza consultada.")
+
+    try:
+        resultado = zoho_produccion.records.update(
+            module=_MODULO_COBROS,
+            records=({"id": cobro_id, **campos},),
+        )
+    except ZohoError as exc:
+        logger.warning(
+            "Fallo al prellenar el cobro %s de la póliza %s", cobro_id, poliza, exc_info=True
+        )
+        raise CobroPrefillError(f"Falló la escritura en Zoho ({exc.category}).") from exc
+
+    registros = tuple(getattr(resultado, "records", ()))
+    if len(registros) != 1 or not getattr(registros[0], "succeeded", False):
+        code = str(getattr(registros[0], "code", "") or "WRITE_REJECTED") if registros else "WRITE_REJECTED"
+        raise CobroPrefillError(f"Zoho rechazó la actualización del cobro ({code}).")
+
+    return {"cobro_id": str(cobro_id), "campos": sorted(campos)}
 
 
 @dataclass(frozen=True)
@@ -209,6 +304,8 @@ def procesar_conciliacion(*, ramo: str, poliza: str, archivos: dict) -> Concilia
             "duration_seconds": round(monotonic() - started, 2),
             "poliza_url": poliza_url,
             "cobros": cobros,
+            "recibo_cobro": recibo_prefill_fields(resultado.recibo),
+            "cobro_prefill_enabled": bool(getattr(settings, "CONCILIACION_COBRO_PREFILL_ENABLED", False)),
         }
         return ConciliacionOutput(
             content=contenido,

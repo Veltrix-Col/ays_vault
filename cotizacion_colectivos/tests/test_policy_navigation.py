@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from datetime import timedelta
 from html.parser import HTMLParser
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
@@ -190,6 +191,18 @@ class FakeEntityDetailService:
     COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS=7200,
 )
 class PolicyNavigationTests(TestCase):
+    def test_individual_otp_toggle_is_opt_in_and_email_field_is_conditional(self):
+        template = (Path(__file__).resolve().parents[2] / "templates" / "cotizacion_colectivos" / "policy_detail.html").read_text(encoding="utf-8")
+        self.assertIn('name="otp_required"', template)
+        self.assertIn("Solicitar código de verificación por correo", template)
+        self.assertIn("data-individual-otp-fields", template)
+        self.assertIn("data-individual-otp-toggle", template)
+        self.assertIn("data-individual-otp-fields{% if not individual_otp_required %} hidden{% endif %}", template)
+        self.assertIn("recipient.required = enabled", (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-access.js").read_text(encoding="utf-8"))
+        self.assertIn(".individual-otp-toggle input[type=checkbox]", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
+        self.assertIn(".individual-access-field[hidden]{display:none!important}", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
+        self.assertIn('toggle.setAttribute("aria-expanded"', (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-access.js").read_text(encoding="utf-8"))
+
     def setUp(self):
         cache.clear()
         User = get_user_model()
@@ -444,8 +457,39 @@ class PolicyNavigationTests(TestCase):
         # forma parte de la barra superior compartida.
         header = individual_page.content.decode(individual_page.charset or "utf-8").split("</header>", 1)[0]
         self.assertNotIn("Buscar cliente", header)
-        self.assertIn('class="notification-link"', header)
+        self.assertRegex(header, r'class="[^"]*\bnotification-link\b[^"]*"')
         self.assertIn("Buzón", header)
+        self.assertIn(f'href="{reverse("cotizacion_colectivos:request_list")}"', header)
+        self.assertRegex(header, r"Buzón\s*<span>\d+</span>")
+        self.assertIn("colectivos-tool-nav", header)
+
+    def test_colectivos_header_exposes_canonical_tool_navigation(self):
+        """The shared Colectivos shell links to existing tools only."""
+        with patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService()):
+            response = self.client.get(reverse("cotizacion_colectivos:individual_policy_detail", args=[TOKEN]))
+
+        header = response.content.decode(response.charset or "utf-8").split("</header>", 1)[0]
+        for route_name in (
+            "cotizacion_colectivos:novelties_index",
+            "cotizacion_colectivos:individual_index",
+            "cotizacion_colectivos:invitations_index",
+            "conciliacion:index",
+            "cotizacion_colectivos:request_list",
+        ):
+            self.assertIn(f'href="{reverse(route_name)}"', header)
+        self.assertIn("Novedades", header)
+        self.assertIn("Cotización Individual", header)
+        self.assertIn("Invitaciones", header)
+        self.assertIn("Conciliador", header)
+        self.assertIn("Buzón", header)
+        self.assertIn('class="is-active" aria-current="page"', header)
+        self.assertIn("colectivos-tool-nav", header)
+
+    def test_colectivos_quick_navigation_has_responsive_styles(self):
+        css = (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8")
+        self.assertIn(".colectivos-tool-nav", css)
+        self.assertIn(".colectivos-tool-nav__links", css)
+        self.assertIn("@media (max-width: 760px)", css)
 
     @patch("cotizacion_colectivos.views.resolve_task_responsible_email", return_value="responsable@example.test")
     @patch("cotizacion_colectivos.views.task_responsible_options", return_value=(Mock(actual_value="RESP-1", display_value="Responsable Demo"),))

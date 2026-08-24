@@ -20,6 +20,7 @@ from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
 
 from .common import colectivos_zoho, escape_criteria_value, sign_record_id, translate_zoho_error
+from .write_guards import require_write_guard
 
 
 CONTACT_FIELDS = frozenset({
@@ -192,37 +193,21 @@ _CONTACT_WRITE_LOCK = threading.Lock()
 
 _WRITABLE_PROFILES = ("sandbox", "production")
 
-
-def _expected_contact_confirmation(profile: str) -> str:
-    return f"{profile.upper()}_CONTACT_WRITE"
-
-
 class GuardedContactPublisher:
-    """Single guarded Contacts.CREATE entry point; never retries uncertain writes.
+    """Single guarded Contacts.CREATE entry point; never retries uncertain writes."""
 
-    Admite sandbox y production. Cada perfil exige coincidencia exacta con
-    ZOHO_ACTIVE_PROFILE, su propio write_enabled y su propia confirmacion
-    explicita -- ninguna de las barreras se comparte entre perfiles.
-    """
-
-    def __init__(self, *, profile: str, confirmation: str,
+    def __init__(self, *, profile: str = "sandbox", confirmation: str,
                  feature_flag: str = "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
-                 confirmation_setting: str = "COLECTIVOS_CONTACT_WRITE_CONFIRMATION"):
-        if profile not in _WRITABLE_PROFILES:
-            raise ContactPublishingDisabled("Contacts sólo admite los perfiles habilitados (sandbox, production).")
-        if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != profile:
-            raise ContactPublishingDisabled("El perfil Zoho activo no coincide con el solicitado.")
-        if not getattr(settings, feature_flag, False):
-            raise ContactPublishingDisabled("Contacts CREATE está deshabilitado.")
-        self.expected_confirmation = _expected_contact_confirmation(profile)
-        if str(getattr(settings, confirmation_setting, "")).strip() != self.expected_confirmation:
-            raise ContactPublishingDisabled(f"Falta la confirmación configurada de Contacts para {profile}.")
-        if str(confirmation or "").strip() != self.expected_confirmation:
-            raise ContactPublishingDisabled(f"Falta la confirmación explícita de Contacts para {profile}.")
-        config = ZohoSettings.from_django(profile)
-        if not config.write_enabled:
-            raise ContactPublishingDisabled(f"La escritura del perfil {profile} está deshabilitada.")
-        self.profile = profile
+                 confirmation_setting: str = "COLECTIVOS_CONTACT_WRITE_CONFIRMATION",
+                 expected_confirmation: str | None = None):
+        self.profile = str(profile or "").strip().lower()
+        self.expected_confirmation = expected_confirmation or ""
+        require_write_guard(
+            entity="contact", profile=self.profile, confirmation=confirmation,
+            feature_flag=feature_flag, legacy_setting=confirmation_setting,
+            expected_override=expected_confirmation or "",
+            disabled_error=ContactPublishingDisabled,
+        )
 
     def create(self, data: Mapping[str, object], *, zoho=None, status: str = "Prospecto") -> dict[str, object]:
         payload = build_contact_payload(data, status=status)
@@ -257,7 +242,12 @@ class GuardedContactPublisher:
 
 
 def get_contacts_publisher(*, profile: str = "sandbox", confirmation: str = ""):
-    """Factory for the guarded publisher; unknown/mismatched profiles are rejected before facade access."""
+    """Factory for the guarded publisher; profile and global write gate are enforced."""
     if profile not in _WRITABLE_PROFILES or str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).lower() != profile:
         raise ValidationError("Contacts WRITE está bloqueado para este perfil.")
     return GuardedContactPublisher(profile=profile, confirmation=confirmation)
+
+
+# Backwards-compatible name used only by the Sandbox seed command.  There is
+# one implementation and one guard; this is not a second publisher.
+GuardedSandboxContactPublisher = GuardedContactPublisher

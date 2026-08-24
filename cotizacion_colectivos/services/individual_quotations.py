@@ -214,15 +214,94 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
         declared = str(getattr(uploaded, "content_type", ""))
         if not detected or (declared and declared not in {detected, "application/octet-stream"}):
             raise ValidationError("El contenido de uno de los archivos no coincide con su tipo.")
-        validated.append({"uploaded": uploaded, "extension": extension, "mime": detected, "size": size})
+        validated.append({"uploaded": uploaded, "extension": extension, "mime": detected, "size": size, "name": name[:80]})
     if total > settings.COLECTIVOS_ATTACHMENT_TOTAL_BYTES:
         raise ValidationError("Los archivos superan el límite total permitido.")
     return tuple(validated)
 
 
+def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key=""):
+    """Encrypt and persist one file with an explicit local functional owner."""
+    uploaded = item["uploaded"]
+    content = uploaded.read()
+    uploaded.seek(0)
+    encrypted = encrypt(base64.b64encode(content).decode()).encode()
+    internal_name = f"{secrets.token_hex(32)}.enc"
+    root = (Path(settings.COLECTIVOS_PRIVATE_ROOT) / "individual_quotations").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    target = (root / internal_name).resolve()
+    if root not in target.parents:
+        raise ValidationError("La ruta de almacenamiento no es válida.")
+    temporary = target.with_suffix(".tmp")
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(encrypted)
+        os.replace(temporary, target)
+        return AdjuntoCotizacionIndividual.objects.create(
+            quotation=quotation,
+            safe_original_name=str(item.get("name") or f"soporte{item['extension']}")[:80],
+            internal_name=internal_name,
+            extension=item["extension"],
+            detected_mime=item["mime"],
+            size=item["size"],
+            checksum=hashlib.sha256(content).hexdigest(),
+            stored_path=internal_name,
+            category=document_type[:32].upper(),
+            safe_metadata={
+                "encrypted": True,
+                "antivirus": "not_configured",
+                "owner_type": "risk" if owner_role == "risk" else "contact" if owner_role in {"affiliate", "insured"} else "legacy",
+                "owner_role": str(owner_role)[:24],
+                "owner_key": str(owner_key)[:80],
+                "document_type": str(document_type)[:32],
+                "field_key": str(field_key or document_type)[:64],
+                **({"risk_key": str(risk_key)[:80]} if risk_key else {}),
+            },
+        ), target
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        raise
+
+
 @transaction.atomic
 def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     files = validate_attachments(cleaned_data.get("attachments") or [])
+    entity_files = dict(cleaned_data.get("entity_attachments") or {})
+    normalized_items = cleaned_data["normalized_items"]
+    allowed_owners = {"affiliate"}
+    row_owners = {}
+    for group_key, rows in normalized_items.items():
+        for index, row in enumerate(rows or ()):
+            if not isinstance(row, dict):
+                continue
+            explicit_entity_key = str(row.get("entity_key") or "").strip()
+            entity_key = explicit_entity_key or f"{group_key}-{index}"
+            if not explicit_entity_key:
+                fallback_keys = {entity_key}
+                if group_key == "vehicles" and not row.get("insured_same_as_requester"):
+                    fallback_keys.add(f"{entity_key}-insured")
+                if fallback_keys.intersection(entity_files):
+                    raise ValidationError("El documento requiere una clave estable de entidad.")
+            same_person = bool(row.get("is_requester")) if group_key == "people" else False
+            row_owners[entity_key] = (
+                "risk" if group_key == "vehicles" else "insured",
+                # Canonical contract for new Mobility vehicle documents.  The
+                # publisher accepts the legacy value explicitly for historical
+                # rows, but new captures must use the Zoho-facing name.
+                "vehicle_registration" if group_key == "vehicles" else "identity_document",
+                same_person,
+            )
+            if group_key == "vehicles" or not same_person:
+                allowed_owners.add(entity_key)
+            if group_key == "vehicles" and not row.get("insured_same_as_requester"):
+                row_owners[f"{entity_key}-insured"] = ("insured", "identity_document", False)
+                allowed_owners.add(f"{entity_key}-insured")
+    unknown = set(entity_files) - allowed_owners
+    if unknown:
+        raise ValidationError("El propietario del documento no corresponde a esta cotización.")
+    if "affiliate" in entity_files and (context or {}).get("affiliate_key"):
+        raise ValidationError("El afiliado precargado no requiere un documento adicional.")
     captured_fields = {field.key: cleaned_data.get(field.key, "") for field in schema.fields}
     # Mantener una copia de lectura para expedientes históricos; el formulario
     # nuevo ya no muestra este nombre redundante.
@@ -252,8 +331,8 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         encrypted_payload=protected,
         payload_checksum=hashlib.sha256(protected.encode()).hexdigest(),
         context_hash=context_hash,
-        item_count=sum(len(items) for items in cleaned_data["normalized_items"].values()),
-        attachment_count=len(files),
+        item_count=sum(len(items) for items in normalized_items.values()),
+        attachment_count=len(files) + len(entity_files),
         created_by=actor,
         safe_metadata={
             "task_responsible": str(task_context.get("task_responsible") or "")[:120],
@@ -268,30 +347,23 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     created_paths = []
     try:
         for item in files:
-            uploaded = item["uploaded"]
-            content = uploaded.read()
-            uploaded.seek(0)
-            encrypted = encrypt(base64.b64encode(content).decode()).encode()
-            internal_name = f"{secrets.token_hex(32)}.enc"
-            target = (root / internal_name).resolve()
-            if root not in target.parents:
-                raise ValidationError("La ruta de almacenamiento no es válida.")
-            temporary = target.with_suffix(".tmp")
-            with temporary.open("xb") as stream:
-                stream.write(encrypted)
-            os.replace(temporary, target)
+            _, target = _store_individual_file(quotation=quotation, item=item)
             created_paths.append(target)
-            AdjuntoCotizacionIndividual.objects.create(
+        for owner_key, uploaded in entity_files.items():
+            validated = validate_attachments((uploaded,))
+            role, document_type, duplicate = ("affiliate", "identity_document", False) if owner_key == "affiliate" else row_owners[owner_key]
+            if duplicate:
+                continue
+            _, target = _store_individual_file(
                 quotation=quotation,
-                safe_original_name=f"soporte{item['extension']}",
-                internal_name=internal_name,
-                extension=item["extension"],
-                detected_mime=item["mime"],
-                size=item["size"],
-                checksum=hashlib.sha256(content).hexdigest(),
-                stored_path=internal_name,
-                safe_metadata={"encrypted": True, "antivirus": "not_configured"},
+                item=validated[0],
+                owner_role=role,
+                owner_key=owner_key,
+                document_type=document_type,
+                field_key=document_type,
+                risk_key=owner_key if role == "risk" else "",
             )
+            created_paths.append(target)
         if actor is not None:
             NotificacionCotizacionIndividual.objects.get_or_create(
                 user=actor,
@@ -316,7 +388,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
             policy_context=str(task_context.get("policy_label") or ""),
             branch_code=str(schema.code),
             local_reference=str(quotation.public_id),
-            has_attachments=bool(files),
+            has_attachments=bool(files or entity_files),
             subject=" · ".join(filter(None, (
                 "Cotización", str(task_context.get("branch_name") or schema.name),
                 str(task_context.get("affiliate_label") or task_fields.get("nombre") or task_fields.get("name") or ""),

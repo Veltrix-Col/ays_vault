@@ -1,8 +1,7 @@
 (() => {
   "use strict";
   const loadingForms = [
-    ["form[action*='/persona/crear/']", "Creando afiliado en Zoho…"],
-    ["form[action*='/riesgo/'][action*='/crear/']", "Creando vehículo en Zoho…"],
+    ["form[action*='/riesgo/'][action*='/crear/']", "Creando riesgo en Zoho…"],
     ["form[action*='/subriesgo/'][action*='/crear/']", "Agregando a la póliza…"],
     ["form[action*='/task/publicar/']", "Publicando Tarea en Zoho…"],
     ["form[action*='/responsable/']", "Publicando Tarea en Zoho…"],
@@ -12,6 +11,13 @@
       form.dataset.remoteZoho = "true";
       form.dataset.loadingMessage = message;
     });
+  });
+  document.querySelectorAll("form[action*='/persona/crear/']").forEach((form) => {
+    const label = (form.querySelector("button[type='submit']")?.textContent || "").toLowerCase();
+    form.dataset.remoteZoho = "true";
+    form.dataset.loadingMessage = label.includes("asegurado")
+      ? "Creando asegurado en Zoho…"
+      : "Creando afiliado en Zoho…";
   });
   const closeDialog = (dialog) => {
     if (dialog && dialog.open) dialog.close();
@@ -32,6 +38,51 @@
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       closeDialog(dialog);
+    });
+  });
+
+  // Keep the vehicle correction dialog aligned with the public vehicle
+  // contract: Uso and Clase are allowlisted selects, while the plate is only
+  // optional for a vehicle explicitly marked as 0 km.
+  document.querySelectorAll("dialog[id^='risk-edit-']").forEach((dialog) => {
+    const form = dialog.querySelector("form");
+    if (!form) return;
+    const plate = form.querySelector("[name='Placa_del_vehiculo']");
+    const zeroKm = String(dialog.dataset.zeroKm || "").trim().toLowerCase();
+    const optionalPlate = zeroKm === "sí" || zeroKm === "si" || zeroKm === "yes";
+    if (plate) {
+      plate.required = !optionalPlate;
+      plate.placeholder = optionalPlate
+        ? "No obligatoria para vehículo 0 km"
+        : "Ej. ABC123";
+      const updatePlateMessage = () => {
+        let message = form.querySelector("[data-edit-plate-error]");
+        if (!message) {
+          message = document.createElement("small");
+          message.dataset.editPlateError = "true";
+          message.className = "field-error";
+          plate.closest("label")?.appendChild(message);
+        }
+        message.textContent = !optionalPlate && !plate.value.trim()
+          ? "La placa es obligatoria para vehículos que no son 0 km."
+          : "";
+      };
+      plate.addEventListener("input", updatePlateMessage);
+      updatePlateMessage();
+    }
+    form.querySelectorAll("input[name], select[name]").forEach((field) => {
+      if (field.name === "Placa_del_vehiculo" || field.tagName === "SELECT") return;
+      if (!field.placeholder) {
+        field.placeholder = {
+          first_name: "Nombres",
+          last_name: "Apellidos",
+          email: "correo@ejemplo.com",
+          phone: "Teléfono",
+          Marca_Tipo_Caracter_sticas: "Ej. Marca y referencia",
+          Modelo: "Ej. 2026",
+          Ciudad: "Ej. Medellín",
+        }[field.name] || "Ingrese un valor";
+      }
     });
   });
   // A 0 km vehicle may legitimately have no plate yet.  It is not a failed
@@ -121,4 +172,44 @@
     association.querySelectorAll("[data-dialog-open^='subrisk-edit-']").forEach((trigger) => trigger.remove());
   });
   document.querySelectorAll("dialog[id^='subrisk-edit-']").forEach((dialog) => dialog.remove());
+
+  // Attachments are rendered by the server with the same compact document
+  // component, then placed inside their functional owner card.  The browser
+  // never supplies a Zoho id; publication is a POST to the scoped endpoint.
+  const documentSection = document.querySelector('[aria-label="Documentos recibidos"]');
+  if (documentSection) {
+    const affiliateCards = Array.from(document.querySelectorAll('.zoho-semantic-workspace > .entity-card'));
+    const riskCards = Array.from(document.querySelectorAll('.vehicle-entity-card'));
+    const insuredCards = Array.from(document.querySelectorAll('.entity-card--nested'));
+    let riskIndex = 0;
+    let insuredIndex = 0;
+    const csrf = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value || "";
+    documentSection.querySelectorAll(':scope > div').forEach((entry) => {
+      const role = (entry.querySelector('strong')?.textContent || '').trim().toLowerCase();
+      const target = role === 'affiliate' ? affiliateCards[0]
+        : role === 'risk' ? riskCards[riskIndex++]
+        : role === 'insured' ? insuredCards[insuredIndex++] : null;
+      if (!target) return;
+      const actions = target.querySelector('.entity-actions');
+      target.insertBefore(entry, actions || target.lastElementChild);
+      entry.classList.add('entity-document-list__item');
+      const link = entry.querySelector('a[href*="/adjuntos/"]');
+      const status = entry.textContent || '';
+      if (link && !status.includes('Publicado en Zoho')) {
+        const match = link.getAttribute('href').match(/\/adjuntos\/(\d+)\//);
+        if (match) {
+          const form = document.createElement('form');
+          form.method = 'post';
+          form.action = `${window.location.pathname.replace(/\/$/, '')}/adjuntos/${match[1]}/publicar/`;
+          const token = document.createElement('input');
+          token.type = 'hidden'; token.name = 'csrfmiddlewaretoken'; token.value = csrf;
+          const button = document.createElement('button');
+          button.type = 'submit'; button.className = 'button-link button-link--primary';
+          button.textContent = 'Adjuntar documento en Zoho';
+          form.append(token, button); entry.appendChild(form);
+        }
+      }
+    });
+    documentSection.remove();
+  }
 })();

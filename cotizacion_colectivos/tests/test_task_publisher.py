@@ -242,6 +242,7 @@ class TaskPublisherTests(TestCase):
         ZOHO_PRODUCTION_WRITE_ENABLED=True,
         COLECTIVOS_TASK_PUBLISH_ENABLED=True,
         COLECTIVOS_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
+        COLECTIVOS_PRODUCTION_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
     )
     @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
     def test_production_write_succeeds_when_fully_configured(self, get_zoho):
@@ -260,6 +261,7 @@ class TaskPublisherTests(TestCase):
         ZOHO_PRODUCTION_WRITE_ENABLED=True,
         COLECTIVOS_TASK_PUBLISH_ENABLED=True,
         COLECTIVOS_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
+        COLECTIVOS_PRODUCTION_TASK_WRITE_CONFIRMATION=PRODUCTION_WRITE_CONFIRMATION,
     )
     @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
     def test_production_write_rejects_sandbox_confirmation(self, get_zoho):

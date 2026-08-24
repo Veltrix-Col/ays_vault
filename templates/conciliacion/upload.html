@@ -89,7 +89,8 @@
           <select id="conc-cobro-select" data-cobros-select aria-label="Cobro"></select>
         </div>
         <div class="conc-cobro-actions">
-          <a class="tool-button" data-action-facturar href="#" target="_blank" rel="noopener noreferrer" hidden>Facturar cobro</a>
+          <a class="tool-button" data-action-facturar href="#" target="_blank" rel="noopener noreferrer"
+             data-prellenar-url="{% url 'conciliacion:prellenar_cobro' %}" hidden>Facturar cobro</a>
           <a class="tool-button tool-button--secondary" data-poliza-link href="#" target="_blank" rel="noopener noreferrer" hidden>Ver póliza</a>
         </div>
       </div>
