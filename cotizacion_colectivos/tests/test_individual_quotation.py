@@ -545,6 +545,42 @@ class IndividualQuotationTests(TestCase):
         self.assertIn("last_name", form.fields)
         self.assertNotIn("requester_name", form.fields)
 
+    def test_vida_uses_minimal_people_contract_and_no_empty_primary_row(self):
+        schema = get_branch_schema("vida")
+        people = next(group for group in schema.repeatables if group.key == "people")
+        self.assertEqual(people.minimum, 0)
+        self.assertEqual(
+            {field.key for field in people.fields},
+            {"is_requester", "first_name", "last_name", "id_type", "document", "birth_date", "email", "phone"},
+        )
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Camilo", "last_name": "Vargas", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "camilo@example.test", "requester_phone": "3000000000",
+                "items_payload": json.dumps({"people": []}),
+            }, schema=schema, context={},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["normalized_items"]["people"], [])
+
+    def test_vida_different_primary_and_additional_people_keep_independent_keys(self):
+        schema = get_branch_schema("vida")
+        form = IndividualQuotationForm(
+            data={
+                "first_name": "Afiliado", "last_name": "Principal", "requester_id_type": "CC",
+                "requester_document": "444444444", "requester_birth_date": "1990-01-01",
+                "requester_email": "affiliate@example.test", "requester_phone": "3000000000",
+                "items_payload": json.dumps({"people": [
+                    {"entity_key": "people-primary", "is_requester": False, "first_name": "María", "last_name": "Uno", "id_type": "CC", "document": "555555555", "birth_date": "1991-01-01", "email": "maria@example.test", "phone": "3000000001"},
+                    {"entity_key": "people-additional", "is_requester": False, "first_name": "José", "last_name": "Dos", "id_type": "CC", "document": "666666666", "birth_date": "1992-01-01", "email": "jose@example.test", "phone": "3000000002"},
+                ]}),
+            }, schema=schema, context={},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        rows = form.cleaned_data["normalized_items"]["people"]
+        self.assertEqual([row["entity_key"] for row in rows], ["people-primary", "people-additional"])
+
     def test_mobility_same_requester_checkbox_copies_structured_identity_to_vehicle(self):
         schema = get_branch_schema("movilidad")
         vehicle_keys = {field.key for field in schema.repeatables[0].fields}

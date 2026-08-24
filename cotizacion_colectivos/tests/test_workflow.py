@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import OperationalError
-from django.test import Client, TestCase, SimpleTestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from openpyxl import load_workbook
@@ -18,6 +20,7 @@ from cotizacion_colectivos.branches import (
     BranchConfigurationError,
     classify_branch,
     validate_branch_config,
+    resolve_branch_family,
 )
 from cotizacion_colectivos.dto import GroupMember, PolicyDetail
 from cotizacion_colectivos.excel import build_current_policy_workbook
@@ -27,6 +30,8 @@ from cotizacion_colectivos.services.requests import create_or_reuse_request_from
 from cotizacion_colectivos.quotation_forms.security import sign_receipt
 from cotizacion_colectivos.services.individual_access import generate_individual_access
 from vault.crypto import encrypt
+from cotizacion_colectivos.quotation_forms.catalog import get_policy_branch_schema
+from cotizacion_colectivos.views import _render_policy_workspace
 
 
 POLICY_ID = "4234567890123456789"
@@ -102,6 +107,24 @@ class BranchAndTokenTests(SimpleTestCase):
         self.assertEqual(classify_branch("  SALUD   COLECTIVO  ").code, "91")
         self.assertIsNone(classify_branch("Hogar"))
 
+    def test_all_confirmed_vida_grupo_aliases_resolve_to_the_same_branch(self):
+        aliases = (
+            "VG deudores", "VG voluntario", "VG voluntaria", "VG flexibilización",
+            "VG legal", "VG mixto", "VG patronal", "Vida grupo deudores",
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                branch = classify_branch(alias)
+                self.assertIsNotNone(branch)
+                self.assertEqual(branch.code, "83")
+
+    def test_vida_group_name_resolves_even_when_code_is_not_catalogued(self):
+        for name in ("VG voluntario", "VG voluntaria", "VG legal", "VG mixto", "VG patronal", "VG flexibilización", "VG deudores"):
+            with self.subTest(name=name):
+                self.assertEqual(resolve_branch_family("999", name), "vida")
+                self.assertEqual(get_policy_branch_schema("999", name).slug, "vida")
+        self.assertIsNone(resolve_branch_family("999", "Producto desconocido"))
+
     def test_duplicate_branch_value_is_rejected(self):
         duplicate = dict(COLLECTIVE_BRANCH_CONFIG)
         duplicate["91"] = duplicate["86"]
@@ -123,6 +146,24 @@ class BranchAndTokenTests(SimpleTestCase):
         self.assertTrue(workbook["Información actual"]["E2"].value.startswith("'="))
         self.assertTrue(workbook["Información actual"]["Q2"].value.startswith("'="))
         self.assertIn("Rol relacionado", tuple(cell.value for cell in workbook["Información actual"][1]))
+
+
+class WorkspaceRenderTests(TestCase):
+    def test_individual_policy_workspace_renders_vida_schema_for_unknown_vg_code(self):
+        request = RequestFactory().get("/cotizacion-individual/polizas/test/")
+        request.user = AnonymousUser()
+        service = SimpleNamespace(
+            profile="sandbox", preparation_metadata={}, preparation_status="disabled", timings={}
+        )
+        detail = policy_detail(branch_code="999", branch_name="VG voluntario")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=False), \
+                patch("cotizacion_colectivos.views.resolve_tool_mode", return_value=SimpleNamespace(code="individual")):
+            response = _render_policy_workspace(
+                request, token=TOKEN, service=service, detail=detail, members=(), started=0,
+            )
+        html = response.content.decode()
+        self.assertIn("Vida se deriva de la póliza", html)
+        self.assertNotIn("Este ramo todavía no tiene formulario de cotización individual parametrizado.", html)
 
 
 @override_settings(ZOHO_ACTIVE_PROFILE="sandbox", COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False)
