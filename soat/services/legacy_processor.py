@@ -120,6 +120,8 @@ COLUMNAS_FUENTE = [
     "Correo electrónico (Asegurado)",
     "Correo electrónico afiliado",
     "Correo comercial",
+    "Celular de contacto",
+    "Correo de contacto",
     "Responsable SOAT",
     "ID de registro (Asegurado)",
 ]
@@ -150,6 +152,8 @@ COLUMNAS_SALIDA = [
     "Correo electrónico (Asegurado)",
     "Correo electrónico afiliado",
     "Correo comercial",
+    "Celular de contacto",
+    "Correo de contacto",
     "ID de registro (Asegurado) SOAT",
     "ID de registro (Asegurado) Movilidad",
     "ID de registro (Asegurado) CARGA",
@@ -761,6 +765,14 @@ def construir_formato(
             "Correo comercial": primer_no_vacio(
                 obtener(fila_soat, "Correo comercial"),
                 obtener(fila_mov, "Correo comercial"),
+            ),
+            "Celular de contacto": primer_no_vacio(
+                obtener(fila_soat, "Celular de contacto"),
+                obtener(fila_mov, "Celular de contacto"),
+            ),
+            "Correo de contacto": primer_no_vacio(
+                obtener(fila_soat, "Correo de contacto"),
+                obtener(fila_mov, "Correo de contacto"),
             ),
             "ID de registro (Asegurado) SOAT": id_soat,
             "ID de registro (Asegurado) Movilidad": id_movilidad,

@@ -47,7 +47,8 @@ HEADERS = [
     "Nombre completo", "Número ID", "Afiliado", "Ramo (Póliza)",
     "Aseguradora (Póliza)", "Correo electrónico",
     "Correo electrónico (Asegurado)", "Correo electrónico afiliado",
-    "Correo comercial", "Responsable SOAT", "ID de registro (Asegurado)",
+    "Correo comercial", "Celular de contacto", "Correo de contacto",
+    "Responsable SOAT", "ID de registro (Asegurado)",
 ]
 
 
@@ -56,8 +57,8 @@ class SoatPublicTests(TestCase):
         self.source = workbook_bytes([
             ["Reporte Zoho"],
             HEADERS,
-            ["ABC123", "Laura", "", "Fonconstruimos", "A&S", "", "", "2030-12-31", "Activo", "Vigente", "", "SOAT-1", "", "", "", "", "SOAT", "", "", "", "", "", "", "100"],
-            ["ABC123", "Angelina", "", "", "A&S", "", "", "2030-01-01", "Activo", "Vigente", "", "MOV-1", "", "", "", "", "Movilidad", "", "", "", "", "", "", "200"],
+            ["ABC123", "Laura", "", "Fonconstruimos", "A&S", "", "", "2030-12-31", "Activo", "Vigente", "", "SOAT-1", "", "", "", "", "SOAT", "", "", "", "", "", "3001234567", "contacto.soat@example.com", "", "100"],
+            ["ABC123", "Angelina", "", "", "A&S", "", "", "2030-01-01", "Activo", "Vigente", "", "MOV-1", "", "", "", "", "Movilidad", "", "", "", "", "", "", "", "", "200"],
         ])
 
     def upload(self, name="SOAT_prueba_4.xlsx", content=None):
@@ -104,7 +105,16 @@ class SoatPublicTests(TestCase):
         self.assertRegex(report_name, r"^Informe_SOAT_A&S_(\d{8}_\d{6})\.xlsx$")
         self.assertRegex(support_name, r"^Soporte_SOAT_A&S_(\d{8}_\d{6})\.xlsx$")
         self.assertEqual(report_name.split("_")[-2:], support_name.split("_")[-2:])
-        self.assertEqual(load_workbook(BytesIO(report_content)).sheetnames, ["Formato informe"])
+        report_workbook = load_workbook(BytesIO(report_content))
+        self.assertEqual(report_workbook.sheetnames, ["Formato informe"])
+        formato_informe = report_workbook["Formato informe"]
+        encabezados = [cell.value for cell in formato_informe[1]]
+        self.assertIn("Celular de contacto", encabezados)
+        self.assertIn("Correo de contacto", encabezados)
+        celular_col = encabezados.index("Celular de contacto") + 1
+        correo_col = encabezados.index("Correo de contacto") + 1
+        self.assertEqual(formato_informe.cell(row=2, column=celular_col).value, "3001234567")
+        self.assertEqual(formato_informe.cell(row=2, column=correo_col).value, "contacto.soat@example.com")
         self.assertEqual(load_workbook(BytesIO(support_content)).sheetnames, [
             "Trazabilidad", "SOAT seleccionados", "Movilidad seleccionada", "Fuente Zoho",
         ])
@@ -114,7 +124,7 @@ class SoatPublicTests(TestCase):
     def test_formula_values_are_neutralized(self):
         rows = [list(row) for row in [
             HEADERS,
-            ["ABC123", "Laura", "", "Fonconstruimos", "A&S", "", "", "2030-12-31", "Activo", "Vigente", "", "SOAT-1", "", "", "", "", "SOAT", "", "+CMD()", "", "", "", "", "", "100"],
+            ["ABC123", "Laura", "", "Fonconstruimos", "A&S", "", "", "2030-12-31", "Activo", "Vigente", "", "SOAT-1", "", "", "", "", "SOAT", "", "+CMD()", "", "", "", "", "", "", "", "100"],
         ]]
         result = process_soat(self.upload(content=workbook_bytes(rows)))
         workbook = load_workbook(BytesIO(result.support_content), data_only=False)
