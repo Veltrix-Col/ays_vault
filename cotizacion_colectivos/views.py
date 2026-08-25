@@ -57,7 +57,7 @@ from vault.notifications import mask_email
 from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
-from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, resolve_tool_mode
+from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, NOVELTIES_MODE, resolve_tool_mode
 from .service_catalog import branch_workspaces
 from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema
 from .quotation_forms.security import sign_receipt, unsign_receipt
@@ -81,8 +81,9 @@ from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPu
 from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
 from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
-from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual
+from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
 from .quotation_forms.catalog import get_policy_branch_schema
+from .services.renewals import sync_renewal_cycles, set_renewal_selection, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access
 
 
 logger = logging.getLogger("cotizacion_colectivos")
@@ -163,11 +164,75 @@ def _error_status(exc):
 @require_http_methods(["GET"])
 def index(request, mode=None):
     tool_mode = resolve_tool_mode(request, mode or HUB_MODE)
-    return render(request, "cotizacion_colectivos/index.html", {
+    context = {
         "form": ClientSearchForm(),
         "colectivos_mode": tool_mode,
         **_environment_context(),
+    }
+    if tool_mode.code == "novelties":
+        renewal_sync_error = ""
+        try:
+            cycles = sync_renewal_cycles()
+        except Exception as exc:
+            logger.exception("colectivos_renewals_read_failed error=%s", type(exc).__name__)
+            renewal_sync_error = "No fue posible actualizar las próximas renovaciones desde Zoho."
+            cycles = tuple(RenovacionColectiva.objects.filter(expiry_date__gte=timezone.localdate(), expiry_date__lte=timezone.localdate() + timedelta(days=getattr(settings, "COLECTIVOS_RENEWAL_WINDOW_DAYS", 30))).order_by("expiry_date", "pk"))
+        tab = request.GET.get("novedades_tab", "upcoming")
+        if tab not in {"upcoming", "tracking"}:
+            tab = "upcoming"
+        context.update({
+            "renewal_cycles": upcoming_cycles(query=request.GET.get("q"), filter_name=request.GET.get("filter", "all")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all")),
+            "renewal_tab": tab,
+            "renewal_query": request.GET.get("q", ""),
+            "renewal_filter": request.GET.get("filter", "all"),
+            "renewal_status": request.GET.get("status", "all"),
+            "renewal_dashboard": renewal_dashboard_counts(),
+            "renewal_window_days": getattr(settings, "COLECTIVOS_RENEWAL_WINDOW_DAYS", 30),
+            "renewal_sync_error": renewal_sync_error,
+        })
+    return render(request, "cotizacion_colectivos/index.html", context)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def renewal_toggle(request, cycle_id):
+    if not has_internal_permission(request, "create_requests"):
+        return permission_denied_response()
+    try:
+        cycle = RenovacionColectiva.objects.get(pk=cycle_id)
+        selected = str(request.POST.get("selected") or "").lower() in {"1", "true", "on", "yes"}
+        set_renewal_selection(cycle_id=cycle.pk, selected=selected, recipient=request.POST.get("recipient"))
+    except RenovacionColectiva.DoesNotExist:
+        raise Http404("Programación no encontrada")
+    return redirect("cotizacion_colectivos:novelties_index")
+
+
+@never_cache
+@require_http_methods(["GET"])
+def renewal_tracking(request):
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    rows = tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
+    return render(request, "cotizacion_colectivos/renewal_tracking.html", {
+        "renewal_cycles": rows,
+        "renewal_query": request.GET.get("q", ""),
+        "renewal_status": request.GET.get("status", "all"),
+        "colectivos_mode": resolve_tool_mode(request, NOVELTIES_MODE),
+        **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def renewal_resend(request, cycle_id):
+    if not has_internal_permission(request, "create_requests"):
+        return permission_denied_response()
+    try:
+        resend_renewal_access(cycle_id=cycle_id, recipient=request.POST.get("recipient", ""))
+        messages.success(request, "Se generó y envió un nuevo acceso de Novedades.")
+    except (RenovacionColectiva.DoesNotExist, ColectivosServiceError) as exc:
+        messages.error(request, getattr(exc, "message", "No fue posible reenviar el acceso."))
+    return redirect("cotizacion_colectivos:renewal_tracking")
 
 
 @never_cache

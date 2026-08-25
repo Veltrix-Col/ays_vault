@@ -32,6 +32,7 @@ from ..models import (
     NotificacionColectivos,
     RespuestaSolicitudColectivo,
     SolicitudColectivo,
+    RenovacionColectiva,
 )
 from .task_publisher import ColectivosTaskPayload, enqueue_task
 
@@ -571,6 +572,12 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     access.status = access.Status.USED
     access.used_for_submission_at = now
     access.save(update_fields=("status", "used_for_submission_at"))
+    RenovacionColectiva.objects.filter(access=access).update(
+        status=RenovacionColectiva.Status.RESPONDED,
+        responded_at=now,
+        last_activity_at=now,
+        updated_at=now,
+    )
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_RESPONSE_SUBMITTED", origin="EXTERNO", new_status=request.status, safe_metadata={"version": locked.version})
     _notify(
         request,

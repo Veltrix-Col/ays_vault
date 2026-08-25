@@ -21,7 +21,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertEqual(reverse("cotizacion_colectivos:individual_index"), "/cotizacion-colectivos/cotizacion-individual/")
         self.assertEqual(reverse("cotizacion_colectivos:invitations_index"), "/cotizacion-colectivos/invitaciones-aseguradoras/")
 
-    def test_active_templates_do_not_expose_renewals_or_effective_date(self):
+    def test_novelties_template_exposes_collective_renewal_workspace_without_changing_manual_flow(self):
         templates = (
             Path("templates/cotizacion_colectivos/index.html"),
             Path("templates/cotizacion_colectivos/policy_detail.html"),
@@ -29,8 +29,13 @@ class ProductToolsContractTests(SimpleTestCase):
             Path("templates/cotizacion_colectivos/external/_functional_entity.html"),
         )
         content = "\n".join(path.read_text(encoding="utf-8") for path in templates)
-        self.assertNotIn("Solicitudes y Renovaciones", content)
-        self.assertNotIn(">Renovación<", content)
+        self.assertIn("Renovaciones Colectivo", content)
+        self.assertIn("Próximas a vencer", content)
+        self.assertIn("Próximos a enviar", content)
+        self.assertIn("Seguimiento de links", content)
+        for label in ("Programadas", "Enviadas", "Respondidas", "En alerta", "Con error"):
+            self.assertIn(label, content)
+        self.assertNotIn("Ver código", content)
         self.assertNotIn("Fecha efectiva", content)
         self.assertIn("Fecha solicitada de ingreso", content)
         self.assertIn("Fecha solicitada de retiro", content)

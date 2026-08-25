@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from vault.crypto import decrypt
 
 
 class WorkspacePolizaColectivo(models.Model):
@@ -206,6 +207,71 @@ class NotificacionCotizacionIndividual(models.Model):
     @property
     def is_read(self) -> bool:
         return self.read_at is not None
+
+
+class RenovacionColectiva(models.Model):
+    """Local operational state for an automated collective renewal cycle.
+
+    Zoho remains the source of policy master data; this row only records the
+    scheduling, delivery and response state of the local workflow.
+    """
+
+    class Status(models.TextChoices):
+        PROGRAMMED = "PROGRAMMED", "Programado"
+        PROCESSING = "PROCESSING", "Procesando"
+        SENT = "SENT", "Enviado"
+        RESPONDED = "RESPONDED", "Respondido"
+        ALERT = "ALERT", "En alerta"
+        ERROR = "ERROR", "Error"
+        CANCELLED = "CANCELLED", "Cancelado"
+
+    cycle_key = models.CharField(max_length=120, unique=True, editable=False)
+    policy_remote_id = models.CharField(max_length=30, db_index=True, editable=False)
+    policy_token = models.TextField(editable=False)
+    masked_policy = models.CharField(max_length=120)
+    client_label = models.CharField(max_length=180)
+    branch_name = models.CharField(max_length=120)
+    line_of_business = models.CharField(max_length=80, default="Colectivo")
+    expiry_date = models.DateField(db_index=True)
+    encrypted_recipient = models.TextField(blank=True, editable=False)
+    recipient_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
+    selected = models.BooleanField(default=False, db_index=True)
+    scheduled_for = models.DateField(db_index=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PROGRAMMED, db_index=True)
+    request = models.ForeignKey("SolicitudColectivo", null=True, blank=True, on_delete=models.SET_NULL, related_name="renewal_cycles")
+    access = models.ForeignKey("AccesoExternoSolicitudColectivo", null=True, blank=True, on_delete=models.SET_NULL, related_name="renewal_cycles")
+    sent_at = models.DateTimeField(null=True, blank=True)
+    send_attempts = models.PositiveSmallIntegerField(default=0)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    last_activity_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=40, blank=True)
+    safe_error = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = (
+            models.Index(fields=("selected", "scheduled_for", "status"), name="colect_ren_due"),
+        )
+
+    @property
+    def policy_access_token(self):
+        try:
+            return decrypt(self.policy_token)
+        except Exception:
+            return ""
+
+    @property
+    def recipient_email(self):
+        try:
+            return decrypt(self.encrypted_recipient) if self.encrypted_recipient else ""
+        except Exception:
+            return ""
+
+    @property
+    def days_remaining(self):
+        return (self.expiry_date - timezone.localdate()).days
 
 
 class SolicitudColectivo(models.Model):

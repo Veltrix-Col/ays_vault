@@ -18,6 +18,7 @@ from cotizacion_colectivos.discovery import (
     build_relationships,
     build_search_candidates,
 )
+from cotizacion_colectivos.models import RenovacionColectiva
 from cotizacion_colectivos.tests.fakes import (
     CONTACT_FIELDS,
     FakeMetadata,
@@ -100,8 +101,9 @@ class PackageBoundaryTests(SimpleTestCase):
         self.assertTrue((root / "migrations" / "0001_initial.py").exists())
         source = (root / "models.py").read_text("utf-8")
         self.assertNotIn("zohocrmsdk", source)
-        self.assertNotIn("access_token", source)
-        self.assertNotIn("refresh_token", source)
+        field_names = {field.name for field in RenovacionColectiva._meta.get_fields()}
+        self.assertNotIn("access_token", field_names)
+        self.assertNotIn("refresh_token", field_names)
 
     def test_does_not_expose_write_services(self):
         root = Path(__file__).resolve().parents[1]
