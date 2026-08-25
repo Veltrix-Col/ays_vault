@@ -4,6 +4,8 @@ from django.contrib.auth.admin import UserAdmin
 from django import forms
 from django.utils import timezone
 
+from intranet_sso.provisioning import USERNAME_PREFIX as INTRANET_SSO_USERNAME_PREFIX
+
 from .models import AccessException, AlertTransition, AuditEvent, AuditVerificationRun, Holiday, NotificationRecipient, NotificationRecord, PolicyConfiguration, PolicyEvaluationRun, SecurityAlert, UserProfile
 from .security import audit
 from .identity import has_recent_reauth
@@ -36,6 +38,14 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class VaultUserAdmin(UserAdmin):
+    def get_queryset(self, request):
+        # Las cuentas provisionadas desde el SSO de intranet (soat,
+        # conciliacion, cotizacion_colectivos) no son usuarios de CardManager
+        # y no deben aparecer en esta administracion.
+        return super().get_queryset(request).exclude(
+            username__startswith=INTRANET_SSO_USERNAME_PREFIX,
+        )
+
     def user_change_password(self, request, id, form_url=""):
         # Django rota la clave de la sesión al completar el cambio de
         # contraseña. Conservamos la sesión segura del administrador que está
