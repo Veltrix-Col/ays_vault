@@ -13,6 +13,8 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST
 
+from intranet_sso.provisioning import USERNAME_PREFIX as INTRANET_SSO_USERNAME_PREFIX
+
 from .decorators import role_required
 from .forms import ReasonForm, ReauthenticationForm
 from .identity import create_alert, current_secure_session, generate_recovery_codes, grant_reauthentication, has_recent_reauth, invalidate_authorizations, reset_user_mfa, revoke_session, role_home_name, verify_totp
@@ -117,7 +119,9 @@ def session_revoke_all(request):
 
 @role_required(UserProfile.ADMIN)
 def identity_user_list(request):
-    users = get_user_model().objects.select_related("vault_profile").order_by("username")
+    users = get_user_model().objects.exclude(
+        username__startswith=INTRANET_SSO_USERNAME_PREFIX,
+    ).select_related("vault_profile").order_by("username")
     query = request.GET.get("q", "").strip()
     if query:
         users = users.filter(username__icontains=query)

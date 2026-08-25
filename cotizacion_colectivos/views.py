@@ -638,7 +638,7 @@ def _builder_policies(detail):
 def request_builder(request, source_kind, token):
     if source_kind not in {"company", "person"}:
         raise Http404("Origen no válido")
-    if not has_internal_permission(request, "create_requests") or not has_internal_permission(request, "generate_external_access"):
+    if not has_internal_permission(request, "generate_external_access"):
         return permission_denied_response()
     environment = get_colectivos_environment()
     backend = str(getattr(settings, "ZOHO_BACKEND", "sdk")).strip().lower()
@@ -929,7 +929,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "active_update": active_update,
         "active_renewal": active_renewal,
         "access_panel": _policy_access_panel(policy_requests),
-        "can_generate_access": can_create_requests and has_internal_permission(
+        "can_generate_access": has_internal_permission(
             request, "generate_external_access",
         ),
         "can_revoke_access": has_internal_permission(request, "revoke_external_access"),
@@ -1177,7 +1177,7 @@ def policy_refresh_preparation(request, token):
 @never_cache
 @require_http_methods(["POST"])
 def policy_generate_access(request, token, request_type=None):
-    if not has_internal_permission(request, "create_requests") or not has_internal_permission(request, "generate_external_access"):
+    if not has_internal_permission(request, "generate_external_access"):
         return permission_denied_response()
     request_type = request_type or request.POST.get("request_type", "")
     if request_type not in {SolicitudColectivo.RequestType.UPDATE, SolicitudColectivo.RequestType.RENEWAL}:
