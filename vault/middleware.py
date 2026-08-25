@@ -7,6 +7,8 @@ from django.shortcuts import redirect
 from django.utils import timezone
 from datetime import timedelta
 
+from intranet_sso.provisioning import USERNAME_PREFIX as INTRANET_SSO_USERNAME_PREFIX
+
 from .identity import current_secure_session, invalidate_authorizations, revoke_session
 from .models import SecureSession, UserDevice
 from .policies import get_policy
@@ -112,6 +114,13 @@ class SecureSessionMiddleware:
         if getattr(request, "inherited_tool_application", None):
             return self.get_response(request)
         if not request.user.is_authenticated:
+            return self.get_response(request)
+        if request.user.username.startswith(INTRANET_SSO_USERNAME_PREFIX):
+            # Identidad provisionada desde el SSO de intranet (soat,
+            # conciliacion, cotizacion_colectivos): nunca paso por el login
+            # de CardManager ni tiene MFA, asi que no debe quedar sujeta a la
+            # exigencia de sesion segura fuera de esas rutas heredadas
+            # (p.ej. las paginas de "zona" del portal en /areas/<slug>/).
             return self.get_response(request)
         if request.path.startswith("/static/"):
             return self.get_response(request)
