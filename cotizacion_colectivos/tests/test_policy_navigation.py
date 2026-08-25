@@ -779,9 +779,20 @@ class PolicyNavigationTests(TestCase):
         restricted.force_login(self.user)
         response = self.policy_page(client=restricted)
         self.assertNotContains(response, "Descargar Excel actual")
-        self.assertNotContains(response, "Generar enlace")
         self.assertNotContains(response, "Sin permiso")
         self.assertNotContains(response, "solicitudes asociadas")
+
+    def test_generating_external_access_link_does_not_require_django_permission(self):
+        # Colectivos no tiene login de Django propio (solo lo exige CardManager);
+        # su unico gate es el middleware de SSO de intranet. Generar/regenerar
+        # el enlace de Novedades no debe exigir ademas un permiso Django
+        # granular: basta con haber llegado a la vista. `force_login` aqui solo
+        # satisface el modo LOCAL_PUBLIC del middleware en pruebas, no
+        # representa un requisito real de la funcionalidad.
+        restricted = Client()
+        restricted.force_login(self.user)
+        response = self.policy_page(client=restricted)
+        self.assertContains(response, "Generar enlace")
 
     def test_unclassified_policy_disables_excel_and_request_creation(self):
         response = self.policy_page(FakePolicyService(_policy(classification="unknown", branch_code="")))

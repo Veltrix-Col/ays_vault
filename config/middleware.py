@@ -4,6 +4,7 @@ import logging
 import uuid
 
 from django.conf import settings
+from django.contrib.auth import login
 from django.http import HttpResponseForbidden, HttpResponseRedirect
 from django.utils.module_loading import import_string
 
@@ -65,6 +66,16 @@ class TrustedIntranetAccessMiddleware:
             result = self._validate_delegated_access(request, application)
             if result.allowed:
                 request.delegated_access = result
+                if result.subject and not request.user.is_authenticated:
+                    # Las apps heredadas por SSO no tienen login de Django
+                    # propio (a diferencia de CardManager): la validacion de
+                    # esta cookie delegada YA es el gate de acceso. Sin un
+                    # User real no hay a quien atribuir acciones, permisos o
+                    # notificaciones, asi que se provisiona (o reutiliza) una
+                    # identidad dedicada -- nunca una cuenta de CardManager.
+                    from intranet_sso.provisioning import get_or_create_intranet_user
+                    principal_user = get_or_create_intranet_user(result.subject)
+                    login(request, principal_user, backend="django.contrib.auth.backends.ModelBackend")
                 logger.info(
                     "tools_access result=accepted application=%s category=%s correlation=%s",
                     application,

@@ -6,6 +6,8 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out, user_lo
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
+from intranet_sso.provisioning import USERNAME_PREFIX as INTRANET_SSO_USERNAME_PREFIX
+
 from .models import UserProfile
 from .security import audit
 from .security import session_hash
@@ -15,22 +17,34 @@ from django.utils import timezone
 logger = logging.getLogger("vault.security")
 
 
+def _is_intranet_sso_account(user) -> bool:
+    return bool(user) and str(getattr(user, "username", "")).startswith(INTRANET_SSO_USERNAME_PREFIX)
+
+
 @receiver(post_save, sender=get_user_model())
 def ensure_profile(sender, instance, created, **kwargs):
-    if created:
+    # Las cuentas provisionadas desde el SSO de intranet (soat, conciliacion,
+    # cotizacion_colectivos) no son usuarios de CardManager: no deben tener
+    # perfil de vault ni aparecer en su administracion de usuarios.
+    if created and not _is_intranet_sso_account(instance):
         UserProfile.objects.get_or_create(user=instance)
 
 
 @receiver(user_logged_in)
 def record_login(sender, request, user, **kwargs):
     request.session.cycle_key()
-    audit(request, "LOGIN", user=user)
+    # El login SSO de las apps heredadas (soat, conciliacion,
+    # cotizacion_colectivos) no es un evento de CardManager: no debe entrar
+    # a su bitacora de auditoria con cadena de hashes.
+    if not _is_intranet_sso_account(user):
+        audit(request, "LOGIN", user=user)
 
 
 @receiver(user_logged_out)
 def record_logout(sender, request, user, **kwargs):
     if request is not None:
-        audit(request, "LOGOUT", user=user)
+        if not _is_intranet_sso_account(user):
+            audit(request, "LOGOUT", user=user)
         if user:
             identifier = session_hash(request)
             now = timezone.now()
