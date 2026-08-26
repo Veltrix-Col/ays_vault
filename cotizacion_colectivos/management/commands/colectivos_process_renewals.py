@@ -29,6 +29,6 @@ class Command(BaseCommand):
                     "vencimiento={expiry} cliente={client}".format(**example)
                 )
         result = process_renewal_cycles(limit=options["limit"], dry_run=options["dry_run"])
-        self.stdout.write(f"Renovaciones: procesadas={result['processed']} enviadas={result['sent']} errores={result['errors']}")
+        self.stdout.write(f"Renovaciones: procesadas={result['processed']} enviadas={result['sent']} recordatorios={result.get('reminders', 0)} sin_email={result.get('no_email', 0)} errores={result['errors']}")
         if options["dry_run"]:
             self.stdout.write("Dry-run: no se generaron links ni se enviaron correos.")

@@ -232,7 +232,11 @@ class RenovacionColectiva(models.Model):
     client_label = models.CharField(max_length=180)
     branch_name = models.CharField(max_length=120)
     line_of_business = models.CharField(max_length=80, default="Colectivo")
-    expiry_date = models.DateField(db_index=True)
+    # Kept for historical cycles; monthly eligibility no longer depends on it.
+    expiry_date = models.DateField(null=True, blank=True, db_index=True)
+    monthly_period = models.CharField(max_length=7, blank=True, db_index=True)
+    policy_status = models.CharField(max_length=40, blank=True)
+    payment_frequency = models.CharField(max_length=40, blank=True)
     encrypted_recipient = models.TextField(blank=True, editable=False)
     recipient_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     selected = models.BooleanField(default=False, db_index=True)
@@ -241,6 +245,10 @@ class RenovacionColectiva(models.Model):
     request = models.ForeignKey("SolicitudColectivo", null=True, blank=True, on_delete=models.SET_NULL, related_name="renewal_cycles")
     access = models.ForeignKey("AccesoExternoSolicitudColectivo", null=True, blank=True, on_delete=models.SET_NULL, related_name="renewal_cycles")
     sent_at = models.DateTimeField(null=True, blank=True)
+    link_expires_at = models.DateTimeField(null=True, blank=True)
+    reminder_due_at = models.DateTimeField(null=True, blank=True)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    encrypted_access_token = models.TextField(blank=True, editable=False)
     send_attempts = models.PositiveSmallIntegerField(default=0)
     last_sent_at = models.DateTimeField(null=True, blank=True)
     responded_at = models.DateTimeField(null=True, blank=True)
@@ -271,7 +279,7 @@ class RenovacionColectiva(models.Model):
 
     @property
     def days_remaining(self):
-        return (self.expiry_date - timezone.localdate()).days
+        return (self.expiry_date - timezone.localdate()).days if self.expiry_date else None
 
 
 class SolicitudColectivo(models.Model):

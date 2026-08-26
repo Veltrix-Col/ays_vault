@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from cotizacion_colectivos.services.risk_sandbox import (
     build_risk_payload, normalize_plate, resolve_risk_by_plate,
@@ -30,6 +30,7 @@ class RiskSandboxTests(SimpleTestCase):
         with self.assertRaises(ValidationError):
             normalize_plate("ABC")
 
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True)
     def test_default_command_is_five_record_dry_run(self):
         output = StringIO()
         call_command("colectivos_seed_mobility_risks", stdout=output)

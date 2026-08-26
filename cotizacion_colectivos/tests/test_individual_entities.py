@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.template import engines
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.urls import resolve
 
 from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
@@ -158,6 +158,7 @@ class IndividualEntityResolutionTests(SimpleTestCase):
         self.assertNotIn("Asegurado", reason)
         self.assertNotIn("Afiliado", reason)
 
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
     @patch("cotizacion_colectivos.services.individual_entities.resolve_policy_by_number")
     @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "PRODUCTION-ID", "type": "policy"})
     @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
@@ -170,6 +171,7 @@ class IndividualEntityResolutionTests(SimpleTestCase):
         resolve_policy.assert_called_once()
         self.assertEqual(resolve_policy.call_args.kwargs["policy_number"], "Póliza QA")
 
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
     @patch("cotizacion_colectivos.services.individual_entities.resolve_mobility_subrisk_relation", return_value={"status": "NOT_FOUND"})
     @patch("cotizacion_colectivos.services.individual_entities.resolve_policy_by_number", return_value={"status": "FOUND", "record_id": "4991513000270954040"})
     @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)

@@ -83,10 +83,23 @@ from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
 from .quotation_forms.catalog import get_policy_branch_schema
-from .services.renewals import sync_renewal_cycles, set_renewal_selection, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access
+from .services.renewals import sync_renewal_cycles, set_renewal_selection, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access, next_month_period
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+_MONTH_NAMES_ES = (
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+)
+
+
+def _monthly_period_label(period):
+    """Human presentation for YYYY-MM without relying on OS locale."""
+    match = re.fullmatch(r"(\d{4})-(0[1-9]|1[0-2])", str(period or "").strip())
+    if not match:
+        return "Sin periodo"
+    return f"{_MONTH_NAMES_ES[int(match.group(2)) - 1]} {match.group(1)}"
 
 
 def _attachment_document_status(attachment):
@@ -176,16 +189,22 @@ def index(request, mode=None):
         except Exception as exc:
             logger.exception("colectivos_renewals_read_failed error=%s", type(exc).__name__)
             renewal_sync_error = "No fue posible actualizar las próximas renovaciones desde Zoho."
-            cycles = tuple(RenovacionColectiva.objects.filter(expiry_date__gte=timezone.localdate(), expiry_date__lte=timezone.localdate() + timedelta(days=getattr(settings, "COLECTIVOS_RENEWAL_WINDOW_DAYS", 30))).order_by("expiry_date", "pk"))
+            cycles = tuple(RenovacionColectiva.objects.filter(monthly_period=next_month_period(timezone.localdate()), line_of_business="Colectivo").order_by("scheduled_for", "pk"))
         tab = request.GET.get("novedades_tab", "upcoming")
         if tab not in {"upcoming", "tracking"}:
             tab = "upcoming"
+        renewal_rows = upcoming_cycles(query=request.GET.get("q"), filter_name=request.GET.get("filter", "all")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
+        renewal_rows = tuple(renewal_rows)
+        for renewal_row in renewal_rows:
+            renewal_row.monthly_period_label = _monthly_period_label(renewal_row.monthly_period)
         context.update({
-            "renewal_cycles": upcoming_cycles(query=request.GET.get("q"), filter_name=request.GET.get("filter", "all")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all")),
+            "renewal_cycles": renewal_rows,
             "renewal_tab": tab,
             "renewal_query": request.GET.get("q", ""),
             "renewal_filter": request.GET.get("filter", "all"),
             "renewal_status": request.GET.get("status", "all"),
+            "renewal_target_period": next_month_period(timezone.localdate()),
+            "renewal_target_period_label": _monthly_period_label(next_month_period(timezone.localdate())),
             "renewal_dashboard": renewal_dashboard_counts(),
             "renewal_window_days": getattr(settings, "COLECTIVOS_RENEWAL_WINDOW_DAYS", 30),
             "renewal_sync_error": renewal_sync_error,

@@ -87,7 +87,7 @@ def _notify(request: SolicitudColectivo, kind: str, title: str, message: str, su
 
 
 @transaction.atomic
-def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False) -> GeneratedAccess:
+def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False, ttl_seconds: int | None = None) -> GeneratedAccess:
     locked = SolicitudColectivo.objects.select_for_update().get(pk=request.pk)
     if locked.status in {locked.Status.CLOSED, locked.Status.CANCELLED, locked.Status.EXPIRED}:
         raise ExternalAccessError("La solicitud no admite un nuevo acceso.")
@@ -113,7 +113,7 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     selector = secrets.token_urlsafe(18)[:24]
     secret = secrets.token_urlsafe(32)
     next_version = (locked.external_accesses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
-    configured_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
+    configured_expiry = now + timedelta(seconds=ttl_seconds if ttl_seconds is not None else settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
     maximum_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS)
     # The public link contract is elapsed time from generation.  The internal
     # request deadline is a workflow reminder and must not shorten a valid
