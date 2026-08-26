@@ -34,7 +34,8 @@ class ProductToolsContractTests(SimpleTestCase):
         )
         content = "\n".join(path.read_text(encoding="utf-8") for path in templates)
         self.assertIn("Renovaciones Colectivo", content)
-        self.assertIn("Próximas a vencer", content)
+        self.assertIn("Próximos envíos", content)
+        self.assertNotIn("Próximas a vencer", content)
         self.assertIn("Próximos a enviar", content)
         self.assertIn("Seguimiento de links", content)
         self.assertIn("novelties-workspace-layout", content)
@@ -42,7 +43,10 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("novelties_client_search", content)
         self.assertIn("Periodo: {{ renewal_target_period_label }}", content)
         for label in ("Programadas", "Enviadas", "Respondidas", "En alerta", "Con error"):
-            self.assertIn(label, content)
+            if label == "Programadas":
+                self.assertNotIn(label, content)
+            else:
+                self.assertIn(label, content)
         self.assertNotIn("Ver código", content)
         self.assertNotIn("Fecha efectiva", content)
         self.assertIn("Fecha solicitada de ingreso", content)

@@ -578,9 +578,17 @@ def submit(request):
         response = access.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).first()
         if not form.is_valid():
             raise ExternalAccessError("La respuesta no está lista para enviar.")
+        no_changes = bool(form.cleaned_data.get("no_changes"))
         if response is None:
-            raise ExternalAccessError("No hay cambios preparados para enviar.")
-        submit_response(access=access, response=response, declaration=form.cleaned_data["declaration"])
+            if not no_changes:
+                raise ExternalAccessError("Registre al menos una novedad o confirme que no tiene novedades para este periodo.")
+            response = save_response(access=access, rows=[], observations=request.POST.get("client_observations", ""))
+        submit_response(
+            access=access,
+            response=response,
+            declaration=form.cleaned_data["declaration"],
+            no_changes=no_changes,
+        )
     except ExternalAccessError as exc:
         message = str(exc.messages[0] if exc.messages else "La respuesta no está lista para enviar.")
         return HttpResponse(message, status=400)

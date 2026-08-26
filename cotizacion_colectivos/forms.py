@@ -351,6 +351,11 @@ class ExternalSubmitForm(forms.Form):
     declaration = forms.BooleanField(
         label="Confirmo que revisé la información y deseo enviar mi respuesta."
     )
+    no_changes = forms.BooleanField(
+        label="No tengo novedades para reportar en este periodo.",
+        required=False,
+        widget=forms.CheckboxInput(attrs={"aria-describedby": "no-changes-help"}),
+    )
 
 
 class AttachmentUploadForm(forms.Form):

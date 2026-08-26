@@ -157,6 +157,8 @@
       return;
     }
     if (event.target.closest("[data-drawer-done]")) {
+      const action = activeDrawer?.closest("[data-functional-entity]")?.querySelector("[data-row-action]");
+      if (action) action.value = "RETIRAR";
       closeDrawer();
       return;
     }

@@ -27,6 +27,7 @@ from cotizacion_colectivos.models import (
     SolicitudColectivo,
     SolicitudColectivoRegistro,
     NotificacionColectivos,
+    RenovacionColectiva,
 )
 from cotizacion_colectivos.services.attachments import store_attachment
 from cotizacion_colectivos.services.excel_roundtrip import (
@@ -184,12 +185,68 @@ class ExternalWorkflowTests(TestCase):
             {"declaration": "on", "client_observations": ""},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("No hay cambios preparados para enviar.", response.content.decode())
+        self.assertIn("Registre al menos una novedad o confirme que no tiene novedades para este periodo.", response.content.decode())
         self.assertFalse(self.request.responses.exists())
         self.assertFalse(ColectivosTaskOutbox.objects.exists())
         self.request.refresh_from_db()
         self.assertNotEqual(self.request.status, self.request.Status.ANSWERED)
         self.assertFalse(NotificacionColectivos.objects.filter(notification_type="CLIENT_RESPONSE").exists())
+
+    def test_explicit_no_changes_submits_empty_response_and_closes_access(self):
+        access = self.verified_access()
+        response = save_response(access=access, rows=[], observations="")
+        submitted = submit_response(access=access, response=response, declaration=True, no_changes=True)
+        self.assertEqual(submitted.status, RespuestaSolicitudColectivo.Status.SUBMITTED)
+        self.assertEqual(submitted.safe_metadata.get("response_type"), "NO_CHANGES")
+        self.request.refresh_from_db()
+        self.assertEqual(self.request.status, self.request.Status.ANSWERED)
+        access.refresh_from_db()
+        self.assertEqual(access.status, access.Status.USED)
+        self.assertFalse(ColectivosTaskOutbox.objects.exists())
+        notification = NotificacionColectivos.objects.get(notification_type="CLIENT_RESPONSE")
+        self.assertIn("sin novedades", notification.message.lower())
+
+    def test_no_changes_marks_linked_renewal_responded_and_stops_reminder(self):
+        access = self.verified_access()
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="renewal-test:2026-09",
+            policy_remote_id="4991513000270954040",
+            policy_token=encrypt("policy-token"),
+            masked_policy="1234",
+            client_label="Cliente de prueba",
+            branch_name="VG deudores",
+            monthly_period="2026-09",
+            policy_status="Vigente",
+            payment_frequency="Mensual",
+            encrypted_recipient=encrypt("cliente@example.test"),
+            recipient_hash="e" * 64,
+            scheduled_for=timezone.localdate(),
+            status=RenovacionColectiva.Status.SENT,
+            access=access,
+            reminder_due_at=timezone.now() - timedelta(days=1),
+        )
+        response = save_response(access=access, rows=[], observations="")
+        submit_response(access=access, response=response, declaration=True, no_changes=True)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.RESPONDED)
+        self.assertIsNotNone(cycle.responded_at)
+        self.assertIsNone(cycle.reminder_sent_at)
+
+    def test_empty_response_without_explicit_no_changes_is_rejected(self):
+        access = self.verified_access()
+        response = save_response(access=access, rows=[], observations="")
+        with self.assertRaisesMessage(ExternalAccessError, "Registre al menos una novedad o confirme que no tiene novedades para este periodo."):
+            submit_response(access=access, response=response, declaration=True)
+
+    def test_changes_cannot_be_submitted_as_no_changes(self):
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{"record": str(self.record.public_key), "action": "RETIRAR", "fecha_retiro": "2026-09-01"}],
+            observations="",
+        )
+        with self.assertRaisesMessage(ExternalAccessError, "Ha registrado novedades."):
+            submit_response(access=access, response=response, declaration=True, no_changes=True)
 
     @patch("cotizacion_colectivos.services.external._send_submission_receipt")
     def test_valid_novelty_submit_never_sends_automatic_response_receipt(self, receipt):

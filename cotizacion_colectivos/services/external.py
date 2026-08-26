@@ -416,6 +416,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
         raise ExternalAccessError("La solicitud no admite cambios.")
     normalized = []
     seen = set()
+    policy_count = request.policies.count()
+    scoped_policy_ids = None
+    if policy_count == 1:
+        scoped_policy_ids = set(request.policies.values_list("id", flat=True))
     for position, row in enumerate(rows, 1):
         action = str(row.get("action", "")).strip().upper()
         if action not in ALLOWED_ACTIONS:
@@ -429,7 +433,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 str(value).strip() for value in (row.get("records") or (record_key,)) if str(value).strip()
             ))
             source_records = list(
-                request.records.select_related("policy").filter(public_key__in=record_keys)
+                request.records.select_related("policy").filter(
+                    public_key__in=record_keys,
+                    **({"policy_id__in": scoped_policy_ids} if scoped_policy_ids is not None else {}),
+                )
             )
             found_keys = {str(item.public_key) for item in source_records}
             if not record_keys or found_keys != set(record_keys) or seen.intersection(found_keys):
@@ -444,7 +451,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             policy_key = str(row.get("policy", "")).strip()
             if not policy_key.isdigit():
                 raise ExternalAccessError("La inclusión no identifica una póliza válida.")
-            policy = request.policies.filter(pk=int(policy_key), active=True).first()
+            policy = request.policies.filter(
+                pk=int(policy_key), active=True,
+                **({"pk__in": scoped_policy_ids} if scoped_policy_ids is not None else {}),
+            ).first()
             if policy is None:
                 raise ExternalAccessError("La inclusión no identifica una póliza válida.")
         if policy is not None:
@@ -506,7 +516,7 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
 
 
 @transaction.atomic
-def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool) -> RespuestaSolicitudColectivo:
+def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool, no_changes: bool = False) -> RespuestaSolicitudColectivo:
     locked = RespuestaSolicitudColectivo.objects.select_for_update().select_related("request", "access").get(pk=response.pk)
     if locked.status == locked.Status.SUBMITTED:
         return locked
@@ -516,13 +526,19 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     )
     if locked.status != locked.Status.DRAFT or not declaration or locked.changes.filter(validation_status=CambioSolicitudColectivo.Validation.INVALID).exists():
         raise ExternalAccessError("La respuesta no está lista para enviar.")
-    if not valid_novelties.exists():
-        raise ExternalAccessError("No hay cambios preparados para enviar.")
+    has_changes = valid_novelties.exists()
+    if no_changes and has_changes:
+        raise ExternalAccessError("Ha registrado novedades. Desmarque 'No tengo novedades' para continuar.")
+    if not has_changes and not no_changes:
+        raise ExternalAccessError("Registre al menos una novedad o confirme que no tiene novedades para este periodo.")
     now = timezone.now()
     locked.status = locked.Status.SUBMITTED
     locked.declaration_confirmed = True
     locked.submitted_at = now
-    locked.save(update_fields=("status", "declaration_confirmed", "submitted_at", "updated_at"))
+    metadata = dict(locked.safe_metadata or {})
+    metadata["response_type"] = "NO_CHANGES" if no_changes else "CHANGES"
+    locked.safe_metadata = metadata
+    locked.save(update_fields=("status", "declaration_confirmed", "submitted_at", "safe_metadata", "updated_at"))
     request = locked.request
     request.transition_to(request.Status.ANSWERED)
     request.save(update_fields=("status", "updated_at"))
@@ -579,11 +595,12 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
         updated_at=now,
     )
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_RESPONSE_SUBMITTED", origin="EXTERNO", new_status=request.status, safe_metadata={"version": locked.version})
+    result_label = "Sin novedades" if no_changes else "Con novedades"
     _notify(
         request,
         "CLIENT_RESPONSE",
-        "Novedad recibida",
-        f"El cliente respondió una novedad de la póliza {request.masked_policy_reference}.",
+        "Sin novedades" if no_changes else "Novedad recibida",
+        f"El cliente respondió: {result_label.lower()} · póliza {request.masked_policy_reference}.",
         str(locked.version),
     )
     return locked

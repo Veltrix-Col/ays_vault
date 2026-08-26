@@ -31,7 +31,7 @@ from .services import CompanySearchService, EntityDetailService, PersonSearchSer
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
-from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
+from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
 from .dto import ClientSearchResult, RequestPolicyOption
 from .services.requests import create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
 from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation, update_access_recipient
@@ -100,6 +100,18 @@ def _monthly_period_label(period):
     if not match:
         return "Sin periodo"
     return f"{_MONTH_NAMES_ES[int(match.group(2)) - 1]} {match.group(1)}"
+
+
+def _renewal_response_label(cycle):
+    if cycle.status != RenovacionColectiva.Status.RESPONDED or not cycle.access_id:
+        return ""
+    response = RespuestaSolicitudColectivo.objects.filter(
+        access_id=cycle.access_id,
+        status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+    ).order_by("-version").first()
+    if not response:
+        return ""
+    return "Sin novedades" if (response.safe_metadata or {}).get("response_type") == "NO_CHANGES" else "Con novedades"
 
 
 def _attachment_document_status(attachment):
@@ -193,10 +205,14 @@ def index(request, mode=None):
         tab = request.GET.get("novedades_tab", "upcoming")
         if tab not in {"upcoming", "tracking"}:
             tab = "upcoming"
-        renewal_rows = upcoming_cycles(query=request.GET.get("q"), filter_name=request.GET.get("filter", "all")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
+        renewal_rows = upcoming_cycles(query=request.GET.get("q")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
         renewal_rows = tuple(renewal_rows)
         for renewal_row in renewal_rows:
             renewal_row.monthly_period_label = _monthly_period_label(renewal_row.monthly_period)
+            renewal_row.response_type_label = _renewal_response_label(renewal_row)
+            if renewal_row.response_type_label:
+                status_display = renewal_row.get_status_display()
+                renewal_row.get_status_display = lambda status_display=status_display, label=renewal_row.response_type_label: f"{status_display} · {label}"
         context.update({
             "renewal_cycles": renewal_rows,
             "renewal_tab": tab,
@@ -232,6 +248,13 @@ def renewal_tracking(request):
     if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     rows = tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
+    rows = tuple(rows)
+    for renewal_row in rows:
+        renewal_row.monthly_period_label = _monthly_period_label(renewal_row.monthly_period)
+        renewal_row.response_type_label = _renewal_response_label(renewal_row)
+        if renewal_row.response_type_label:
+            status_display = renewal_row.get_status_display()
+            renewal_row.get_status_display = lambda status_display=status_display, label=renewal_row.response_type_label: f"{status_display} · {label}"
     return render(request, "cotizacion_colectivos/renewal_tracking.html", {
         "renewal_cycles": rows,
         "renewal_query": request.GET.get("q", ""),

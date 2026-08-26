@@ -31,7 +31,6 @@
     {% endif %}
     <span role="cell" data-label="Acción" class="functional-table__action">
       <button type="button" class="functional-edit-toggle" data-edit-toggle data-drawer-open="editor-{{ entity.key }}" aria-controls="editor-{{ entity.key }}" aria-haspopup="dialog" aria-expanded="false">Solicitar retiro</button>
-      <span class="functional-change-state" data-change-state hidden>✓ Cambio preparado</span>
     </span>
   </div>
 
@@ -71,7 +70,7 @@
         <div class="functional-new-panel__heading"><p class="eyebrow">Novedad</p><h5 id="new-title-{{ entity.key }}">Solicitar retiro</h5></div>
         <p>A&amp;S validará posteriormente la fecha aplicable y las condiciones del negocio.</p>
         <div class="functional-action-grid">
-          <input type="hidden" name="action_entity_{{ entity.key }}" value="RETIRAR" data-row-action>
+          <input type="hidden" name="action_entity_{{ entity.key }}" value="SIN_CAMBIOS" data-row-action>
           <label>Fecha solicitada de retiro<input type="date" name="fecha_retiro_entity_{{ entity.key }}" required></label>
           <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3"></textarea></label>
         </div>
