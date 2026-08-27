@@ -81,6 +81,22 @@ services:
       # por omision en produccion.
       COLECTIVOS_INTERNAL_PUBLIC_ACCESS: ${COLECTIVOS_INTERNAL_PUBLIC_ACCESS:-false}
       COLECTIVOS_TECHNICAL_ACTOR_USERNAME: ${COLECTIVOS_TECHNICAL_ACTOR_USERNAME:-colectivos-technical}
+      # Renovaciones colectivas: sin este passthrough quedan en los defaults
+      # de settings.py dentro del contenedor aunque Dokploy las tenga
+      # configuradas, porque docker-compose solo inyecta a runtime las claves
+      # listadas explicitamente aqui.
+      COLECTIVOS_RENEWAL_WINDOW_DAYS: ${COLECTIVOS_RENEWAL_WINDOW_DAYS:-30}
+      COLECTIVOS_RENEWAL_ALERT_DAYS: ${COLECTIVOS_RENEWAL_ALERT_DAYS:-10}
+      COLECTIVOS_RENEWAL_BATCH_LIMIT: ${COLECTIVOS_RENEWAL_BATCH_LIMIT:-100}
+      COLECTIVOS_RENEWAL_READ_CACHE_SECONDS: ${COLECTIVOS_RENEWAL_READ_CACHE_SECONDS:-60}
+      COLECTIVOS_RENEWAL_LINK_TTL_DAYS: ${COLECTIVOS_RENEWAL_LINK_TTL_DAYS:-8}
+      COLECTIVOS_RENEWAL_REMINDER_DAYS: ${COLECTIVOS_RENEWAL_REMINDER_DAYS:-3}
+      COLECTIVOS_RENEWAL_EMAIL_HOST: ${COLECTIVOS_RENEWAL_EMAIL_HOST:-smtp.office365.com}
+      COLECTIVOS_RENEWAL_EMAIL_PORT: ${COLECTIVOS_RENEWAL_EMAIL_PORT:-587}
+      COLECTIVOS_RENEWAL_EMAIL_USE_TLS: ${COLECTIVOS_RENEWAL_EMAIL_USE_TLS:-true}
+      COLECTIVOS_RENEWAL_EMAIL_USER: ${COLECTIVOS_RENEWAL_EMAIL_USER:-gestionbeneficios@segurosays.com}
+      COLECTIVOS_RENEWAL_EMAIL_PASSWORD: ${COLECTIVOS_RENEWAL_EMAIL_PASSWORD}
+      COLECTIVOS_RENEWAL_EMAIL_FROM: ${COLECTIVOS_RENEWAL_EMAIL_FROM:-gestionbeneficios@segurosays.com}
       # El default real de settings.py es VAULT_BASE_URL cuando esta variable
       # no esta definida (no una cadena vacia): se replica aqui con
       # sustitucion anidada para no romper ese fallback si Dokploy no la trae.
