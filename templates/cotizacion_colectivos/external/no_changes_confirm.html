@@ -1,0 +1,11 @@
+{% extends "cotizacion_colectivos/external/base.html" %}
+{% block title %}Confirmar sin novedades{% endblock %}
+{% block content %}
+<main class="external-card external-confirmation" aria-labelledby="no-changes-title">
+  <p class="eyebrow">A&amp;S Gestión de Beneficios</p>
+  <h1 id="no-changes-title">Confirmar sin novedades</h1>
+  <dl><div><dt>Empresa</dt><dd>{{ cycle.client_label }}</dd></div><div><dt>Póliza</dt><dd>{{ cycle.masked_policy }}</dd></div><div><dt>Periodo</dt><dd>{{ monthly_period_label }}</dd></div></dl>
+  <p>Está confirmando que no tiene ingresos ni retiros para reportar en este periodo.</p>
+  <form method="post" action="{% url 'colectivos_external:no_changes_confirm' token %}">{% csrf_token %}<button type="submit">CONFIRMAR SIN NOVEDADES</button></form>
+</main>
+{% endblock %}

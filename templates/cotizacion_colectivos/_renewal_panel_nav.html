@@ -1,0 +1,26 @@
+<nav class="renewal-panel-nav" aria-label="Navegación de renovaciones">
+  <a class="{% if renewal_tab == 'upcoming' %}is-active{% endif %}" href="{% url 'cotizacion_colectivos:novelties_index' %}"{% if renewal_tab == 'upcoming' %} aria-current="page"{% endif %}>Próximos a enviar</a>
+  <a class="{% if renewal_tab == 'tracking' %}is-active{% endif %}" href="{% url 'cotizacion_colectivos:renewal_tracking' %}"{% if renewal_tab == 'tracking' %} aria-current="page"{% endif %}>Seguimiento de links</a>
+  {% if can_manage_notifications %}
+    {% if monthly_renewals_enabled %}
+      <form method="post" action="{% url 'cotizacion_colectivos:monthly_renewals_toggle' %}" class="renewal-switch-form">
+        {% csrf_token %}<input type="hidden" name="enabled" value="0">
+        <input type="hidden" name="next" value="{% if renewal_tab == 'tracking' %}{% url 'cotizacion_colectivos:renewal_tracking' %}{% else %}{% url 'cotizacion_colectivos:novelties_index' %}{% endif %}">
+        <button type="submit" class="renewal-switch" title="Desactivar la automatización mensual" aria-pressed="true">ON · Automatización activa</button>
+      </form>
+    {% else %}
+      <button type="button" class="renewal-switch" data-dialog-open="monthly-renewals-enable-dialog" title="Activar la automatización mensual" aria-pressed="false">OFF · Automatización desactivada</button>
+      <dialog id="monthly-renewals-enable-dialog" class="individual-dialog renewal-switch-dialog">
+        <div class="zoho-edit-dialog__shell">
+          <header><h2>Activar automatización mensual</h2><button type="button" aria-label="Cerrar" data-dialog-close>×</button></header>
+          <p>Al activar esta opción, las renovaciones programadas podrán generar y enviar automáticamente sus accesos y recordatorios según la programación configurada.</p>
+          <form method="post" action="{% url 'cotizacion_colectivos:monthly_renewals_toggle' %}">
+            {% csrf_token %}<input type="hidden" name="enabled" value="1">
+            <input type="hidden" name="next" value="{% if renewal_tab == 'tracking' %}{% url 'cotizacion_colectivos:renewal_tracking' %}{% else %}{% url 'cotizacion_colectivos:novelties_index' %}{% endif %}">
+            <footer><button type="button" class="button-link button-link--secondary" data-dialog-close>Cancelar</button><button type="submit" class="button-link button-link--primary">Activar automatización</button></footer>
+          </form>
+        </div>
+      </dialog>
+    {% endif %}
+  {% else %}<span class="renewal-switch-status" aria-label="Estado de automatización">Automatización: {% if monthly_renewals_enabled %}activa{% else %}desactivada{% endif %}</span>{% endif %}
+</nav>

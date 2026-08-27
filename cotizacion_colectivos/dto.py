@@ -168,6 +168,7 @@ class PolicyDetail:
     source_summary: ContactSummary | None = None
     payment_method: str = ""
     payment_periodicity: str = ""
+    commercial_email: str = ""
 
 
 @dataclass(frozen=True)

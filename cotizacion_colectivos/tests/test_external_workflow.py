@@ -27,6 +27,7 @@ from cotizacion_colectivos.models import (
     SolicitudColectivo,
     SolicitudColectivoRegistro,
     NotificacionColectivos,
+    RenovacionColectiva,
 )
 from cotizacion_colectivos.services.attachments import store_attachment
 from cotizacion_colectivos.services.excel_roundtrip import (
@@ -39,6 +40,7 @@ from cotizacion_colectivos.services.external import (
     ExternalAccessError,
     generate_access,
     issue_otp,
+    generate_no_changes_token,
     resolve_external_session,
     resolve_token,
     save_response,
@@ -184,12 +186,95 @@ class ExternalWorkflowTests(TestCase):
             {"declaration": "on", "client_observations": ""},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("No hay cambios preparados para enviar.", response.content.decode())
+        self.assertIn("Registre al menos una novedad o confirme que no tiene novedades para este periodo.", response.content.decode())
         self.assertFalse(self.request.responses.exists())
         self.assertFalse(ColectivosTaskOutbox.objects.exists())
         self.request.refresh_from_db()
         self.assertNotEqual(self.request.status, self.request.Status.ANSWERED)
         self.assertFalse(NotificacionColectivos.objects.filter(notification_type="CLIENT_RESPONSE").exists())
+
+    def test_explicit_no_changes_submits_empty_response_and_closes_access(self):
+        access = self.verified_access()
+        response = save_response(access=access, rows=[], observations="")
+        submitted = submit_response(access=access, response=response, declaration=True, no_changes=True)
+        self.assertEqual(submitted.status, RespuestaSolicitudColectivo.Status.SUBMITTED)
+        self.assertEqual(submitted.safe_metadata.get("response_type"), "NO_CHANGES")
+        self.request.refresh_from_db()
+        self.assertEqual(self.request.status, self.request.Status.ANSWERED)
+        access.refresh_from_db()
+        self.assertEqual(access.status, access.Status.USED)
+        self.assertFalse(ColectivosTaskOutbox.objects.exists())
+        notification = NotificacionColectivos.objects.get(notification_type="CLIENT_RESPONSE")
+        self.assertIn("sin novedades", notification.message.lower())
+
+    def test_renewal_no_changes_signed_link_get_is_read_only_and_post_needs_no_otp(self):
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="renewal-email-test:2026-09",
+            policy_remote_id="4991513000270954040", policy_token=encrypt("policy-token"),
+            masked_policy="1234", client_label="Cliente de prueba", branch_name="VG deudores",
+            monthly_period="2026-09", policy_status="Vigente", payment_frequency="Mensual",
+            encrypted_recipient=encrypt("cliente@example.test"), recipient_hash="e" * 64,
+            scheduled_for=timezone.localdate(), status=RenovacionColectiva.Status.SENT,
+            request=self.request, access=generated.access,
+            link_expires_at=timezone.now() + timedelta(days=3),
+        )
+        token = generate_no_changes_token(cycle=cycle)
+        entry = self.client.get(reverse("colectivos_external:no_changes_entry", args=[token]))
+        self.assertEqual(entry.status_code, 200)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.SENT)
+        submitted = self.client.post(reverse("colectivos_external:no_changes_confirm", args=[token]))
+        self.assertEqual(submitted.status_code, 200)
+        cycle.refresh_from_db()
+        self.request.refresh_from_db()
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.RESPONDED)
+        self.assertEqual(self.request.status, self.request.Status.ANSWERED)
+        self.assertEqual(self.request.responses.get(status=RespuestaSolicitudColectivo.Status.SUBMITTED).safe_metadata["response_type"], "NO_CHANGES")
+
+    def test_no_changes_marks_linked_renewal_responded_and_stops_reminder(self):
+        access = self.verified_access()
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="renewal-test:2026-09",
+            policy_remote_id="4991513000270954040",
+            policy_token=encrypt("policy-token"),
+            masked_policy="1234",
+            client_label="Cliente de prueba",
+            branch_name="VG deudores",
+            monthly_period="2026-09",
+            policy_status="Vigente",
+            payment_frequency="Mensual",
+            encrypted_recipient=encrypt("cliente@example.test"),
+            recipient_hash="e" * 64,
+            scheduled_for=timezone.localdate(),
+            status=RenovacionColectiva.Status.SENT,
+            access=access,
+            reminder_due_at=timezone.now() - timedelta(days=1),
+        )
+        response = save_response(access=access, rows=[], observations="")
+        submit_response(access=access, response=response, declaration=True, no_changes=True)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.RESPONDED)
+        self.assertIsNotNone(cycle.responded_at)
+        self.assertIsNone(cycle.reminder_sent_at)
+
+    def test_empty_response_without_explicit_no_changes_is_rejected(self):
+        access = self.verified_access()
+        response = save_response(access=access, rows=[], observations="")
+        with self.assertRaisesMessage(ExternalAccessError, "Registre al menos una novedad o confirme que no tiene novedades para este periodo."):
+            submit_response(access=access, response=response, declaration=True)
+
+    def test_changes_cannot_be_submitted_as_no_changes(self):
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{"record": str(self.record.public_key), "action": "RETIRAR", "fecha_retiro": "2026-09-01"}],
+            observations="",
+        )
+        with self.assertRaisesMessage(ExternalAccessError, "Ha registrado novedades."):
+            submit_response(access=access, response=response, declaration=True, no_changes=True)
 
     @patch("cotizacion_colectivos.services.external._send_submission_receipt")
     def test_valid_novelty_submit_never_sends_automatic_response_receipt(self, receipt):
@@ -339,11 +424,52 @@ class ExternalWorkflowTests(TestCase):
         change = response.changes.get(functional_field="fecha_retiro")
         self.assertEqual(decrypt(change.encrypted_new_value), "2026-09-01")
 
-    def test_external_table_keeps_final_save_and_local_pagination_controls(self):
+    def test_final_submit_persists_prepared_retirement_from_the_same_form(self):
+        functional_key = "people-kathe"
+        self.request.encrypted_snapshot = encrypt(json.dumps({
+            "version": 1, "policy": {}, "group": [{
+                "display_name": "Persona de prueba", "insured_key": functional_key,
+                "state": "Activo", "plan": "Plan vigente",
+            }], "warnings": [],
+        }))
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("encrypted_snapshot", "status"))
+        generated = self.access()
+        self.enter_with_otp(generated)
+
+        submitted = self.client.post(reverse("colectivos_external:submit"), {
+            f"source_records_{functional_key}": str(self.record.public_key),
+            f"action_entity_{functional_key}": "RETIRAR",
+            f"fecha_retiro_entity_{functional_key}": "2026-09-01",
+            f"observaciones_entity_{functional_key}": "Retiro solicitado por el cliente",
+            "declaration": "on",
+        })
+        self.assertEqual(submitted.status_code, 200)
+        response = self.request.responses.get(status=RespuestaSolicitudColectivo.Status.SUBMITTED)
+        self.assertEqual(response.safe_metadata.get("response_type"), "CHANGES")
+        retirement = response.changes.filter(
+            action=CambioSolicitudColectivo.Action.RETIRE,
+            functional_field="fecha_retiro",
+        ).get()
+        self.assertEqual(decrypt(retirement.encrypted_new_value), "2026-09-01")
+        observation = response.changes.filter(
+            action=CambioSolicitudColectivo.Action.RETIRE,
+            functional_field="observaciones",
+        ).get()
+        self.assertEqual(decrypt(observation.encrypted_new_value), "Retiro solicitado por el cliente")
+        self.assertEqual(decrypt(observation.encrypted_observation), "Retiro solicitado por el cliente")
+
+    def test_external_table_has_final_submit_and_local_pagination_controls(self):
         generated = self.access()
         self.enter_with_otp(generated)
         portal = self.client.get(reverse("colectivos_external:portal"))
-        self.assertContains(portal, "Guardar mis cambios")
+        self.assertContains(portal, "Confirmar y enviar")
+        self.assertNotContains(portal, "Guardar mis cambios")
+        self.assertNotContains(portal, "¿Hay algo más que debamos saber?")
+        self.assertContains(portal, 'data-external-response', html=False)
+        self.assertContains(portal, 'name="action_entity_', html=False)
+        self.assertContains(portal, 'name="fecha_retiro_entity_', html=False)
+        self.assertContains(portal, 'formnovalidate', html=False)
         self.assertContains(portal, "data-page-size", html=False)
         self.assertContains(portal, '<option value="25">25</option>', html=False)
         self.assertContains(portal, '<option value="50">50</option>', html=False)

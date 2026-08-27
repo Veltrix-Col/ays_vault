@@ -16,6 +16,8 @@ urlpatterns = [
     path("portal/excel/preview/<str:token>/", external_views.excel_preview, name="excel_preview"),
     path("portal/excel/preview/<str:token>/confirmar/", external_views.confirm_excel_preview, name="confirm_excel_preview"),
     path("portal/excel/preview/<str:token>/cancelar/", external_views.cancel_excel_preview, name="cancel_excel_preview"),
+    path("sin-novedades/<str:token>/", external_views.no_changes_entry, name="no_changes_entry"),
+    path("sin-novedades/<str:token>/confirmar/", external_views.no_changes_confirm, name="no_changes_confirm"),
     path("<str:token>/verificar/", external_views.verify, name="verify"),
     path("<str:token>/", external_views.entry, name="entry"),
 ]

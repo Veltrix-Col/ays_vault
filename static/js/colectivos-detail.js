@@ -41,6 +41,17 @@
     });
   });
 
+  document.querySelectorAll("[data-task-responsible-search]").forEach((search) => {
+    const select = search.closest("form")?.querySelector("[data-task-responsible-select]");
+    if (!select) return;
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      Array.from(select.options).forEach((option, index) => {
+        option.hidden = index > 0 && query && !option.textContent.toLocaleLowerCase().includes(query);
+      });
+    });
+  });
+
   // Keep the vehicle correction dialog aligned with the public vehicle
   // contract: Uso and Clase are allowlisted selects, while the plate is only
   // optional for a vehicle explicitly marked as 0 km.

@@ -32,11 +32,13 @@ from ..models import (
     NotificacionColectivos,
     RespuestaSolicitudColectivo,
     SolicitudColectivo,
+    RenovacionColectiva,
 )
 from .task_publisher import ColectivosTaskPayload, enqueue_task
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
+NO_CHANGES_SALT = "cotizacion_colectivos.no_changes.v1"
 ALLOWED_ACTIONS = set(CambioSolicitudColectivo.Action.values)
 ACTION_TO_ADJUSTMENT = {
     CambioSolicitudColectivo.Action.UNCHANGED: "SIN_CAMBIOS",
@@ -69,6 +71,50 @@ class GeneratedAccess:
     regenerated: bool = False
 
 
+def generate_no_changes_token(*, cycle, request_obj=None) -> str:
+    """Create a signed, policy-scoped confirmation token for renewal email CTA."""
+    request_obj = request_obj or cycle.request
+    payload = {
+        "action": "NO_CHANGES",
+        "cycle": int(cycle.pk),
+        "request": str(request_obj.public_id) if request_obj is not None else "",
+        "policy": str(cycle.policy_remote_id),
+        "period": str(cycle.monthly_period),
+    }
+    return signing.dumps(payload, salt=NO_CHANGES_SALT, compress=True)
+
+
+def resolve_no_changes_token(token: str, *, max_age: int | None = None):
+    """Resolve and validate the signed renewal/policy scope without mutating state."""
+    try:
+        payload = signing.loads(
+            token,
+            salt=NO_CHANGES_SALT,
+            max_age=max_age or int(getattr(settings, "COLECTIVOS_RENEWAL_LINK_TTL_DAYS", 8)) * 86400,
+        )
+        if payload.get("action") != "NO_CHANGES":
+            raise ValueError("invalid action")
+        cycle = RenovacionColectiva.objects.select_related("request", "access").get(pk=int(payload["cycle"]))
+    except (signing.BadSignature, KeyError, TypeError, ValueError, RenovacionColectiva.DoesNotExist) as exc:
+        raise ExternalAccessError("El enlace de confirmación no es válido o expiró.") from exc
+    if str(cycle.policy_remote_id) != str(payload.get("policy")) or str(cycle.monthly_period) != str(payload.get("period")):
+        raise ExternalAccessError("El enlace de confirmación no corresponde a este periodo.")
+    if cycle.request_id and str(cycle.request.public_id) != str(payload.get("request")):
+        raise ExternalAccessError("El enlace de confirmación no corresponde a esta solicitud.")
+    if cycle.status != RenovacionColectiva.Status.RESPONDED and (
+        not cycle.access_id
+        or cycle.access.status in {
+            AccesoExternoSolicitudColectivo.Status.REVOKED,
+            AccesoExternoSolicitudColectivo.Status.EXPIRED,
+            AccesoExternoSolicitudColectivo.Status.BLOCKED,
+            AccesoExternoSolicitudColectivo.Status.USED,
+        }
+        or cycle.access.expires_at <= timezone.now()
+    ):
+        raise ExternalAccessError("El enlace de confirmación ya no está disponible.")
+    return cycle
+
+
 def _token_hash(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
@@ -86,7 +132,7 @@ def _notify(request: SolicitudColectivo, kind: str, title: str, message: str, su
 
 
 @transaction.atomic
-def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False) -> GeneratedAccess:
+def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", contact_name: str = "", intro: str = "", instructions: str = "", regenerate: bool = False, ttl_seconds: int | None = None) -> GeneratedAccess:
     locked = SolicitudColectivo.objects.select_for_update().get(pk=request.pk)
     if locked.status in {locked.Status.CLOSED, locked.Status.CANCELLED, locked.Status.EXPIRED}:
         raise ExternalAccessError("La solicitud no admite un nuevo acceso.")
@@ -112,7 +158,7 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     selector = secrets.token_urlsafe(18)[:24]
     secret = secrets.token_urlsafe(32)
     next_version = (locked.external_accesses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
-    configured_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
+    configured_expiry = now + timedelta(seconds=ttl_seconds if ttl_seconds is not None else settings.COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS)
     maximum_expiry = now + timedelta(seconds=settings.COLECTIVOS_EXTERNAL_LINK_MAX_TTL_SECONDS)
     # The public link contract is elapsed time from generation.  The internal
     # request deadline is a workflow reminder and must not shorten a valid
@@ -415,6 +461,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
         raise ExternalAccessError("La solicitud no admite cambios.")
     normalized = []
     seen = set()
+    policy_count = request.policies.count()
+    scoped_policy_ids = None
+    if policy_count == 1:
+        scoped_policy_ids = set(request.policies.values_list("id", flat=True))
     for position, row in enumerate(rows, 1):
         action = str(row.get("action", "")).strip().upper()
         if action not in ALLOWED_ACTIONS:
@@ -428,7 +478,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 str(value).strip() for value in (row.get("records") or (record_key,)) if str(value).strip()
             ))
             source_records = list(
-                request.records.select_related("policy").filter(public_key__in=record_keys)
+                request.records.select_related("policy").filter(
+                    public_key__in=record_keys,
+                    **({"policy_id__in": scoped_policy_ids} if scoped_policy_ids is not None else {}),
+                )
             )
             found_keys = {str(item.public_key) for item in source_records}
             if not record_keys or found_keys != set(record_keys) or seen.intersection(found_keys):
@@ -443,7 +496,10 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             policy_key = str(row.get("policy", "")).strip()
             if not policy_key.isdigit():
                 raise ExternalAccessError("La inclusión no identifica una póliza válida.")
-            policy = request.policies.filter(pk=int(policy_key), active=True).first()
+            policy = request.policies.filter(
+                pk=int(policy_key), active=True,
+                **({"pk__in": scoped_policy_ids} if scoped_policy_ids is not None else {}),
+            ).first()
             if policy is None:
                 raise ExternalAccessError("La inclusión no identifica una póliza válida.")
         if policy is not None:
@@ -499,13 +555,19 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 attribute = {"plan": "plan", "fecha_ingreso": "entry_date", "fecha_retiro": "exit_date"}[field]
                 prior = str(getattr(item["record"], attribute, "") or "")
             digest = response_checksum([{"action": item["action"], "field": field, "position": item["position"], "policy_position": item["policy"].position if item["policy"] else 0, "value": value}])
-            CambioSolicitudColectivo.objects.create(response=response, policy=item["policy"], original_record=item["record"], action=item["action"], functional_field=field, encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value), encrypted_branch_payload=source_payload, position=item["position"], checksum=digest)
+            CambioSolicitudColectivo.objects.create(
+                response=response, policy=item["policy"], original_record=item["record"],
+                action=item["action"], functional_field=field,
+                encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value),
+                encrypted_observation=encrypt(value) if field == "observaciones" else "",
+                encrypted_branch_payload=source_payload, position=item["position"], checksum=digest,
+            )
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_DRAFT_SAVED", origin="EXTERNO", safe_metadata={"version": version, "changes": response.changes.count()})
     return response
 
 
 @transaction.atomic
-def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool) -> RespuestaSolicitudColectivo:
+def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool, no_changes: bool = False) -> RespuestaSolicitudColectivo:
     locked = RespuestaSolicitudColectivo.objects.select_for_update().select_related("request", "access").get(pk=response.pk)
     if locked.status == locked.Status.SUBMITTED:
         return locked
@@ -515,13 +577,19 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     )
     if locked.status != locked.Status.DRAFT or not declaration or locked.changes.filter(validation_status=CambioSolicitudColectivo.Validation.INVALID).exists():
         raise ExternalAccessError("La respuesta no está lista para enviar.")
-    if not valid_novelties.exists():
-        raise ExternalAccessError("No hay cambios preparados para enviar.")
+    has_changes = valid_novelties.exists()
+    if no_changes and has_changes:
+        raise ExternalAccessError("Ha registrado novedades. Desmarque 'No tengo novedades' para continuar.")
+    if not has_changes and not no_changes:
+        raise ExternalAccessError("Registre al menos una novedad o confirme que no tiene novedades para este periodo.")
     now = timezone.now()
     locked.status = locked.Status.SUBMITTED
     locked.declaration_confirmed = True
     locked.submitted_at = now
-    locked.save(update_fields=("status", "declaration_confirmed", "submitted_at", "updated_at"))
+    metadata = dict(locked.safe_metadata or {})
+    metadata["response_type"] = "NO_CHANGES" if no_changes else "CHANGES"
+    locked.safe_metadata = metadata
+    locked.save(update_fields=("status", "declaration_confirmed", "submitted_at", "safe_metadata", "updated_at"))
     request = locked.request
     request.transition_to(request.Status.ANSWERED)
     request.save(update_fields=("status", "updated_at"))
@@ -571,12 +639,19 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     access.status = access.Status.USED
     access.used_for_submission_at = now
     access.save(update_fields=("status", "used_for_submission_at"))
+    RenovacionColectiva.objects.filter(access=access).update(
+        status=RenovacionColectiva.Status.RESPONDED,
+        responded_at=now,
+        last_activity_at=now,
+        updated_at=now,
+    )
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_RESPONSE_SUBMITTED", origin="EXTERNO", new_status=request.status, safe_metadata={"version": locked.version})
+    result_label = "Sin novedades" if no_changes else "Con novedades"
     _notify(
         request,
         "CLIENT_RESPONSE",
-        "Novedad recibida",
-        f"El cliente respondió una novedad de la póliza {request.masked_policy_reference}.",
+        "Sin novedades" if no_changes else "Novedad recibida",
+        f"El cliente respondió: {result_label.lower()} · póliza {request.masked_policy_reference}.",
         str(locked.version),
     )
     return locked

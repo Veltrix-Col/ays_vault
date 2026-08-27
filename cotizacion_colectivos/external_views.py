@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 import json
+import re
 from dataclasses import asdict
 
 from django.conf import settings
@@ -21,7 +22,7 @@ from django.views.decorators.http import require_http_methods
 
 from .branches import COLLECTIVE_BRANCH_CONFIG
 from .forms import AttachmentUploadForm, ExternalOTPForm, ExternalSubmitForm
-from .models import AccesoCotizacionIndividual, CambioSolicitudColectivo, CotizacionIndividual, RespuestaSolicitudColectivo
+from .models import AccesoCotizacionIndividual, CambioSolicitudColectivo, CotizacionIndividual, RenovacionColectiva, RespuestaSolicitudColectivo
 from .services.attachments import store_attachment
 from .services.excel_roundtrip import build_novelties_template
 from .services.excel_previews import cancel_preview, confirm_preview, create_preview, resolve_preview
@@ -29,7 +30,9 @@ from .services.external import (
     EXTERNAL_COOKIE,
     ExternalAccessError,
     issue_otp,
+    authorize_direct_access,
     resolve_external_session,
+    resolve_no_changes_token,
     resolve_token,
     save_response,
     submit_response,
@@ -39,6 +42,7 @@ from vault.crypto import decrypt
 from vault.notifications import mask_email
 from .services.requests import request_snapshot
 from .services.functional_groups import consolidate_functional_groups
+from .services.renewals import _monthly_period_label
 from .services.mappings import (
     CONTACT_ID_TYPE_CHOICES,
     INSURED_STATE_CHOICES,
@@ -298,6 +302,44 @@ def verify(request, token):
     }, status=400)
 
 
+@never_cache
+@require_http_methods(["GET"])
+def no_changes_entry(request, token):
+    try:
+        cycle = resolve_no_changes_token(token)
+    except ExternalAccessError:
+        return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+    if cycle.status == RenovacionColectiva.Status.RESPONDED:
+        return render(request, "cotizacion_colectivos/external/no_changes_submitted.html", {"cycle": cycle})
+    return render(request, "cotizacion_colectivos/external/no_changes_confirm.html", {
+        "cycle": cycle,
+        "monthly_period_label": _monthly_period_label(cycle.monthly_period),
+        "token": token,
+    })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def no_changes_confirm(request, token):
+    try:
+        cycle = resolve_no_changes_token(token)
+        if cycle.status == RenovacionColectiva.Status.RESPONDED:
+            return render(request, "cotizacion_colectivos/external/no_changes_submitted.html", {"cycle": cycle})
+        if cycle.status not in {RenovacionColectiva.Status.SENT, RenovacionColectiva.Status.ALERT} or not cycle.access_id:
+            raise ExternalAccessError("Este enlace ya no está disponible.")
+        access = cycle.access
+        # authorize_direct_access returns a signed session cookie.  The
+        # persistence services require the actual ORM access instance, so
+        # keep the model reference and refresh it after authorization.
+        authorize_direct_access(access)
+        access.refresh_from_db()
+        response = save_response(access=access, rows=[], observations="")
+        submit_response(access=access, response=response, declaration=True, no_changes=True)
+    except ExternalAccessError:
+        return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
+    return render(request, "cotizacion_colectivos/external/no_changes_submitted.html", {"cycle": cycle})
+
+
 def _rows(request_obj):
     return request_obj.records.select_related("policy").only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
 
@@ -519,10 +561,9 @@ def _posted_rows(request, request_obj):
         key.removeprefix("action_entity_")
         for key in request.POST
         if key.startswith("action_entity_")
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", key.removeprefix("action_entity_"))
     )
     for key in functional_keys:
-        if len(key) != 64 or any(character not in "0123456789abcdef" for character in key):
-            continue
         source_records = tuple(filter(None, request.POST.get(f"source_records_{key}", "").split(",")))
         row = {
             "record": source_records[0] if source_records else "",
@@ -533,13 +574,12 @@ def _posted_rows(request, request_obj):
         }
         row.update({field: request.POST.get(f"{field}_entity_{key}", "") for field in branch_fields})
         rows.append(row)
-    if functional_keys:
-        return rows
-    for record in _rows(request_obj):
-        key = str(record.public_key)
-        row = {"record": key, "action": request.POST.get(f"action_{key}", "SIN_CAMBIOS")}
-        row.update({field: request.POST.get(f"{field}_{key}", "") for field in branch_fields})
-        rows.append(row)
+    if not functional_keys:
+        for record in _rows(request_obj):
+            key = str(record.public_key)
+            row = {"record": key, "action": request.POST.get(f"action_{key}", "SIN_CAMBIOS")}
+            row.update({field: request.POST.get(f"{field}_{key}", "") for field in branch_fields})
+            rows.append(row)
     policies = list(request_obj.policies.all())
     if not policies and request.POST.get("include_action") == "INCLUIR":
         policies = [None]
@@ -575,12 +615,33 @@ def submit(request):
     form = ExternalSubmitForm(request.POST)
     try:
         access = _access_from_cookie(request)
-        response = access.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).first()
         if not form.is_valid():
             raise ExternalAccessError("La respuesta no está lista para enviar.")
-        if response is None:
-            raise ExternalAccessError("No hay cambios preparados para enviar.")
-        submit_response(access=access, response=response, declaration=form.cleaned_data["declaration"])
+        no_changes = bool(form.cleaned_data.get("no_changes"))
+        if no_changes:
+            raise ExternalAccessError("La confirmación sin novedades debe realizarse desde el enlace del correo.")
+        rows = _posted_rows(request, access.request)
+        has_prepared_changes = any(
+            str(row.get("action", "")).strip().upper() in {"INCLUIR", "RETIRAR", "MODIFICAR"}
+            for row in rows
+        )
+        logger.info(
+            "external_submit parsed_rows=%d changed_rows=%d no_changes=%s",
+            len(rows), sum(1 for row in rows if str(row.get("action", "")).strip().upper() in {"INCLUIR", "RETIRAR", "MODIFICAR"}), no_changes,
+        )
+        if not has_prepared_changes and not no_changes:
+            raise ExternalAccessError("Registre al menos una novedad o confirme que no tiene novedades para este periodo.")
+        # The final POST is the source of truth.  Persist the prepared rows
+        # immediately before submission so both automatic and manually-issued
+        # links share the same contract and never depend on an intermediate
+        # "save draft" click.
+        response = save_response(access=access, rows=rows, observations="")
+        submit_response(
+            access=access,
+            response=response,
+            declaration=form.cleaned_data["declaration"],
+            no_changes=no_changes,
+        )
     except ExternalAccessError as exc:
         message = str(exc.messages[0] if exc.messages else "La respuesta no está lista para enviar.")
         return HttpResponse(message, status=400)

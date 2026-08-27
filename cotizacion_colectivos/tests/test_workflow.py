@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlsplit
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import OperationalError
 from django.test import Client, RequestFactory, TestCase, SimpleTestCase, override_settings
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils import timezone
 from openpyxl import load_workbook
 
@@ -27,9 +29,9 @@ from cotizacion_colectivos.excel import build_current_policy_workbook
 from cotizacion_colectivos.models import AccesoCotizacionIndividual, CambioSolicitudColectivo, CotizacionIndividual, EventoSolicitudColectivo, NotificacionCotizacionIndividual, NotificacionColectivos, RespuestaSolicitudColectivo, SolicitudColectivo
 from cotizacion_colectivos.services.common import ColectivosServiceError, sign_record_id, unsign_record_id
 from cotizacion_colectivos.services.requests import create_or_reuse_request_from_policy, create_request_from_policy, request_snapshot, transition_request
-from cotizacion_colectivos.quotation_forms.security import sign_receipt
+from cotizacion_colectivos.quotation_forms.security import sign_receipt, unsign_receipt
 from cotizacion_colectivos.services.individual_access import generate_individual_access
-from vault.crypto import encrypt
+from vault.crypto import decrypt, encrypt
 from cotizacion_colectivos.quotation_forms.catalog import get_policy_branch_schema
 from cotizacion_colectivos.views import _render_policy_workspace
 
@@ -489,7 +491,22 @@ class RequestWorkflowTests(TestCase):
 
         inbox = self.client.get(reverse("cotizacion_colectivos:request_list"))
         canonical = reverse("cotizacion_colectivos:individual_expedient", args=[token])
-        self.assertContains(inbox, f'href="{canonical}"', html=False)
+        content = inbox.content.decode(inbox.charset or "utf-8")
+        match = re.search(
+            r'<a\b[^>]*\bhref="([^"]+)"[^>]*>\s*Abrir expediente\s*</a>',
+            content,
+        )
+        self.assertIsNotNone(match, "No se encontró el enlace canónico al expediente.")
+        rendered_href = match.group(1)
+        rendered_path = urlsplit(rendered_href).path
+        resolved = resolve(rendered_path)
+        self.assertEqual(resolved.url_name, "individual_expedient")
+        self.assertEqual(unsign_receipt(resolved.kwargs["token"]), str(quotation.public_id))
+        self.assertTrue(
+            rendered_path.startswith(
+                "/cotizacion-colectivos/solicitudes/cotizacion-individual/"
+            )
+        )
         detail = self.client.get(canonical)
         self.assertContains(detail, "Expediente interno")
         self.assertContains(detail, "Póliza POLIZA-COMPLETA-123")
@@ -538,7 +555,49 @@ class RequestWorkflowTests(TestCase):
         self.assertContains(page, "Respuesta recibida")
         self.assertContains(page, "Fecha de retiro")
         self.assertContains(page, "2026-08-31")
-        self.assertContains(page, "identificador técnico")
+        self.assertContains(page, "Información técnica")
+        self.assertContains(page, "Identificador")
         self.assertContains(page, '<details class="workspace-card technical-disclosure">', html=False)
         self.assertNotContains(page, '<details open class="workspace-card technical-disclosure">', html=False)
         self.assertContains(page, "Contrato de layout pendiente")
+
+    def test_response_novelty_edit_is_local_auditable_and_isolated(self):
+        item = self.create_request()
+        item.status = item.Status.ANSWERED
+        item.save(update_fields=("status", "updated_at"))
+        response = RespuestaSolicitudColectivo.objects.create(
+            request=item, version=1, status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+            origin=RespuestaSolicitudColectivo.Origin.WEB, submitted_at=timezone.now(),
+            checksum="d" * 64, encrypted_client_observations=encrypt("observación original"),
+        )
+        anchor = CambioSolicitudColectivo.objects.create(
+            response=response, policy=item.policies.first(), original_record=item.records.first(),
+            action=CambioSolicitudColectivo.Action.RETIRE, functional_field="accion",
+            encrypted_branch_payload=encrypt(json.dumps({"functional_key": "people-kathe"})),
+            position=1, checksum="a" * 64,
+        )
+        original = CambioSolicitudColectivo.objects.create(
+            response=response, policy=item.policies.first(), original_record=item.records.first(),
+            action=CambioSolicitudColectivo.Action.RETIRE, functional_field="fecha_retiro",
+            encrypted_new_value=encrypt("2026-09-01"), position=1, checksum="b" * 64,
+        )
+        self.client.force_login(self.creator)
+        edit_url = reverse("cotizacion_colectivos:response_novelty_edit", args=[item.public_id, 1, anchor.pk])
+        result = self.client.post(edit_url, {"fecha_retiro": "2026-09-15", "observaciones": "Ajuste operativo"})
+        self.assertRedirects(result, reverse("cotizacion_colectivos:request_detail", args=[item.public_id]), fetch_redirect_response=False)
+        response.refresh_from_db()
+        self.assertEqual(response.safe_metadata["operational_edits"][str(anchor.pk)]["fields"]["fecha_retiro"], "2026-09-15")
+        self.assertEqual(decrypt(original.encrypted_new_value), "2026-09-01")
+        page = self.client.get(reverse("cotizacion_colectivos:request_detail", args=[item.public_id]))
+        # The expediente is read-only and presents the client's original
+        # response.  Historical operational edits remain auditable above but
+        # must not replace that evidence in the current UX.
+        self.assertContains(page, "Respuesta recibida")
+        self.assertContains(page, "Persona interna")
+        self.assertContains(page, "2026-09-15")
+        self.assertNotContains(page, "2026-09-01")
+        self.assertNotContains(page, "Ajuste operativo")
+        self.assertNotContains(page, "Editar")
+        foreign = self.create_local_request(999)
+        denied_url = reverse("cotizacion_colectivos:response_novelty_edit", args=[foreign.public_id, 1, anchor.pk])
+        self.assertEqual(self.client.post(denied_url, {"fecha_retiro": "2026-09-16"}).status_code, 404)
