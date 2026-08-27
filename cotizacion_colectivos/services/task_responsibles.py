@@ -11,6 +11,12 @@ from .common import colectivos_zoho, translate_zoho_error
 from ..zoho import cached_metadata_fields
 
 
+# Confirmed by the Sandbox Empleados metadata snapshot (text field labelled
+# “Cargo”). Keep this explicit so the operational filter does not drift toward
+# similarly named fields such as Cargo_ocupaci_n_u_oficio.
+EMPLOYEE_CARGO_FIELD = "Cargo"
+
+
 @dataclass(frozen=True)
 class TaskResponsibleOption:
     actual_value: str
@@ -28,10 +34,42 @@ def _fold(value: str) -> str:
     return "".join(char for char in text if not unicodedata.combining(char)).casefold().strip()
 
 
-def task_responsible_options(*, zoho=None) -> tuple[TaskResponsibleOption, ...]:
-    """Return the confirmed Tasks.Responsable picklist, never a local list."""
+def task_responsible_options(*, zoho=None, collective_only=False) -> tuple[TaskResponsibleOption, ...]:
+    """Return confirmed responsible options, optionally restricted to Colectivos cargo."""
     try:
         facade = zoho or colectivos_zoho()
+        if collective_only:
+            try:
+                records = []
+                for page_number in range(1, 4):
+                    page = facade.records.list(
+                        module="Empleados",
+                        fields=("id", "Name", EMPLOYEE_CARGO_FIELD, "Estado"),
+                        page=page_number,
+                        limit=200,
+                    )
+                    records.extend(getattr(page, "records", ()) or ())
+                    if not getattr(page, "more_records", False):
+                        break
+            except Exception as exc:
+                if isinstance(exc, ZohoError):
+                    raise translate_zoho_error(exc) from exc
+                raise ValidationError("No fue posible cargar los responsables del área Colectivos.") from exc
+            options = []
+            seen = set()
+            for record in records:
+                cargo = _fold(_value(record, EMPLOYEE_CARGO_FIELD))
+                actual = _value(record, "Name") or _value(record, "id")
+                display = _value(record, "Name") or actual
+                if "colectiv" not in cargo or not actual or actual in seen:
+                    continue
+                if _fold(_value(record, "Estado")) not in {"", "activo", "active"}:
+                    continue
+                seen.add(actual)
+                options.append(TaskResponsibleOption(actual, display))
+            if not options:
+                raise ValidationError("No fue posible cargar los responsables del área Colectivos.")
+            return tuple(options)
         field = next(
             (item for item in cached_metadata_fields(facade, "Tasks")
              if str(getattr(item, "api_name", "")) == "Responsable"),

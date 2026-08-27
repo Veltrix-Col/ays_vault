@@ -27,6 +27,7 @@ from cotizacion_colectivos.services.task_publisher import (
     enqueue_task,
     get_task_publisher,
     publish_task_outbox,
+    read_published_task,
     sanitized_dry_run,
 )
 from cotizacion_colectivos.services.task_responsibles import (
@@ -117,6 +118,30 @@ class TaskPublisherTests(TestCase):
             options = task_responsible_options(zoho=SimpleNamespace())
         self.assertEqual(options[0].actual_value, "Sara Rua Vargas")
         self.assertEqual(options[0].display_value, "Sara Rua Vargas · A&S")
+
+    def test_collective_responsibles_use_empleados_cargo_case_insensitively(self):
+        facade = SimpleNamespace(records=SimpleNamespace(list=Mock(side_effect=[
+            SimpleNamespace(records=(
+                {"id": "1", "Name": "Ana", "Cargo": "Analista COLECTIVOS", "Estado": "Activo"},
+                {"id": "2", "Name": "Bruno", "Cargo": "Contabilidad", "Estado": "Activo"},
+                {"id": "3", "Name": "Carla", "Cargo": "Líder colectivo", "Estado": "Inactivo"},
+            ), more_records=False),
+        ])))
+        options = task_responsible_options(zoho=facade, collective_only=True)
+        self.assertEqual(tuple(item.actual_value for item in options), ("Ana",))
+
+    def test_collective_responsibles_fail_closed_when_empleados_read_fails(self):
+        facade = SimpleNamespace(records=SimpleNamespace(list=Mock(side_effect=RuntimeError("read failed"))))
+        with self.assertRaises(ValidationError):
+            task_responsible_options(zoho=facade, collective_only=True)
+
+    def test_published_task_read_returns_current_responsible_and_falls_back_safely(self):
+        facade = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(return_value={
+            "id": "700000000000000001", "Responsable": {"name": "Responsable actual"}, "Estado": "Abierta",
+        })))
+        self.assertEqual(read_published_task("700000000000000001", zoho=facade)["Responsable"]["name"], "Responsable actual")
+        failing = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(side_effect=RuntimeError("read failed"))))
+        self.assertIsNone(read_published_task("700000000000000001", zoho=failing))
 
     def test_responsible_email_requires_one_exact_employees_match(self):
         search = Mock()

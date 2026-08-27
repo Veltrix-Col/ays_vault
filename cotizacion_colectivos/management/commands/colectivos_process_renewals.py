@@ -53,6 +53,9 @@ class Command(BaseCommand):
             limit=options["limit"], dry_run=options["dry_run"],
             cycle_id=options["cycle_id"], force_due=options["force_due"],
         )
+        if result.get("disabled"):
+            self.stdout.write("Automatización mensual de Colectivos desactivada. No se generaron enlaces ni se enviaron correos.")
+            return
         self.stdout.write(f"Renovaciones: procesadas={result['processed']} enviadas={result['sent']} recordatorios={result.get('reminders', 0)} sin_email={result.get('no_email', 0)} errores={result['errors']}")
         if options["dry_run"]:
             self.stdout.write("Dry-run: no se generaron links ni se enviaron correos.")

@@ -66,6 +66,21 @@ class TaskPublicationUncertain(RuntimeError):
     reconciliation_required = True
 
 
+def read_published_task(task_id: str, *, zoho=None) -> dict[str, object] | None:
+    """Read current Task fields; callers retain local state if Zoho is unavailable."""
+    value = str(task_id or "").strip()
+    if not value.isdigit() or not 10 <= len(value) <= 30:
+        return None
+    try:
+        record = (zoho or colectivos_zoho()).records.get_by_id(
+            module="Tasks", record_id=value,
+            fields=("id", "Subject", "Responsable", "Estado"),
+        )
+    except Exception:
+        return None
+    return record if isinstance(record, dict) else None
+
+
 @dataclass(frozen=True)
 class ColectivosTaskPayload:
     request_kind: str

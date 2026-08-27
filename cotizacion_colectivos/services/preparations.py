@@ -23,7 +23,10 @@ from .functional_groups import consolidate_functional_groups
 # Contact prefill now includes structured First_Name/Last_Name/Date_of_Birth;
 # invalidate older snapshots so link generation cannot reuse an incomplete
 # member representation.
-PREPARATION_VERSION = 2
+# The policy DTO now includes the commercial email used to prefill both
+# manual access forms.  Invalidate snapshots created before that field was
+# available so the next workspace load performs the normal policy READ.
+PREPARATION_VERSION = 3
 PARAMETER_VERSION = 1
 
 

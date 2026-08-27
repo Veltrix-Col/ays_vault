@@ -38,6 +38,7 @@ from .task_publisher import ColectivosTaskPayload, enqueue_task
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
+NO_CHANGES_SALT = "cotizacion_colectivos.no_changes.v1"
 ALLOWED_ACTIONS = set(CambioSolicitudColectivo.Action.values)
 ACTION_TO_ADJUSTMENT = {
     CambioSolicitudColectivo.Action.UNCHANGED: "SIN_CAMBIOS",
@@ -68,6 +69,50 @@ class GeneratedAccess:
     token: str
     url: str
     regenerated: bool = False
+
+
+def generate_no_changes_token(*, cycle, request_obj=None) -> str:
+    """Create a signed, policy-scoped confirmation token for renewal email CTA."""
+    request_obj = request_obj or cycle.request
+    payload = {
+        "action": "NO_CHANGES",
+        "cycle": int(cycle.pk),
+        "request": str(request_obj.public_id) if request_obj is not None else "",
+        "policy": str(cycle.policy_remote_id),
+        "period": str(cycle.monthly_period),
+    }
+    return signing.dumps(payload, salt=NO_CHANGES_SALT, compress=True)
+
+
+def resolve_no_changes_token(token: str, *, max_age: int | None = None):
+    """Resolve and validate the signed renewal/policy scope without mutating state."""
+    try:
+        payload = signing.loads(
+            token,
+            salt=NO_CHANGES_SALT,
+            max_age=max_age or int(getattr(settings, "COLECTIVOS_RENEWAL_LINK_TTL_DAYS", 8)) * 86400,
+        )
+        if payload.get("action") != "NO_CHANGES":
+            raise ValueError("invalid action")
+        cycle = RenovacionColectiva.objects.select_related("request", "access").get(pk=int(payload["cycle"]))
+    except (signing.BadSignature, KeyError, TypeError, ValueError, RenovacionColectiva.DoesNotExist) as exc:
+        raise ExternalAccessError("El enlace de confirmación no es válido o expiró.") from exc
+    if str(cycle.policy_remote_id) != str(payload.get("policy")) or str(cycle.monthly_period) != str(payload.get("period")):
+        raise ExternalAccessError("El enlace de confirmación no corresponde a este periodo.")
+    if cycle.request_id and str(cycle.request.public_id) != str(payload.get("request")):
+        raise ExternalAccessError("El enlace de confirmación no corresponde a esta solicitud.")
+    if cycle.status != RenovacionColectiva.Status.RESPONDED and (
+        not cycle.access_id
+        or cycle.access.status in {
+            AccesoExternoSolicitudColectivo.Status.REVOKED,
+            AccesoExternoSolicitudColectivo.Status.EXPIRED,
+            AccesoExternoSolicitudColectivo.Status.BLOCKED,
+            AccesoExternoSolicitudColectivo.Status.USED,
+        }
+        or cycle.access.expires_at <= timezone.now()
+    ):
+        raise ExternalAccessError("El enlace de confirmación ya no está disponible.")
+    return cycle
 
 
 def _token_hash(secret: str) -> str:
@@ -510,7 +555,13 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 attribute = {"plan": "plan", "fecha_ingreso": "entry_date", "fecha_retiro": "exit_date"}[field]
                 prior = str(getattr(item["record"], attribute, "") or "")
             digest = response_checksum([{"action": item["action"], "field": field, "position": item["position"], "policy_position": item["policy"].position if item["policy"] else 0, "value": value}])
-            CambioSolicitudColectivo.objects.create(response=response, policy=item["policy"], original_record=item["record"], action=item["action"], functional_field=field, encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value), encrypted_branch_payload=source_payload, position=item["position"], checksum=digest)
+            CambioSolicitudColectivo.objects.create(
+                response=response, policy=item["policy"], original_record=item["record"],
+                action=item["action"], functional_field=field,
+                encrypted_previous_value=encrypt(prior), encrypted_new_value=encrypt(value),
+                encrypted_observation=encrypt(value) if field == "observaciones" else "",
+                encrypted_branch_payload=source_payload, position=item["position"], checksum=digest,
+            )
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_DRAFT_SAVED", origin="EXTERNO", safe_metadata={"version": version, "changes": response.changes.count()})
     return response
 

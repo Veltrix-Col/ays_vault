@@ -345,11 +345,11 @@ class PolicyNavigationTests(TestCase):
             "cotizacion_colectivos:request_detail", args=[item.public_id],
         ))
         self.assertContains(response, "Empresa autorizada")
-        self.assertContains(response, "Abrir personas y riesgos de la póliza")
+        self.assertNotContains(response, "Abrir personas y riesgos de la póliza")
         self.assertContains(response, reverse(
             "cotizacion_colectivos:policy_detail", args=[TOKEN],
         ))
-        self.assertContains(response, reverse(
+        self.assertNotContains(response, reverse(
             "cotizacion_colectivos:policy_group", args=[TOKEN],
         ))
         self.assertNotContains(response, SOURCE_ID)
@@ -416,7 +416,9 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "Ver grupo")
         self.assertContains(response, "Descargar Excel actual")
         self.assertContains(response, "Generar enlace")
-        self.assertContains(response, "ingreso o un retiro")
+        self.assertContains(response, "ingresos y retiros")
+        self.assertContains(response, "exclusivamente a esta póliza")
+        self.assertNotContains(response, "ingreso o un retiro")
         self.assertNotContains(response, "Renovación")
         self.assertContains(response, "Actualizar información desde Zoho")
         self.assertNotContains(response, "Generar enlace de actualización")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import json
+import hashlib
 import time
 import unicodedata
 import uuid
@@ -26,12 +27,13 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 from django.template.loader import render_to_string
 
-from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
+from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, NoveltyEditForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
 from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
+from .services.operational_settings import monthly_renewals_enabled, set_monthly_renewals_enabled
 from .dto import ClientSearchResult, RequestPolicyOption
 from .services.requests import create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
 from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation, update_access_recipient
@@ -70,7 +72,7 @@ from .services.individual_quotations import (
 )
 from .services.individual_access import generate_individual_access, individual_otp_required
 from .services.task_responsibles import resolve_task_responsible_email, task_responsible_options
-from .services.task_publisher import publish_task_outbox
+from .services.task_publisher import publish_task_outbox, read_published_task
 from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
     contact_missing_fields, get_contacts_publisher,
@@ -202,10 +204,8 @@ def index(request, mode=None):
             logger.exception("colectivos_renewals_read_failed error=%s", type(exc).__name__)
             renewal_sync_error = "No fue posible actualizar las próximas renovaciones desde Zoho."
             cycles = tuple(RenovacionColectiva.objects.filter(monthly_period=next_month_period(timezone.localdate()), line_of_business="Colectivo").order_by("scheduled_for", "pk"))
-        tab = request.GET.get("novedades_tab", "upcoming")
-        if tab not in {"upcoming", "tracking"}:
-            tab = "upcoming"
-        renewal_rows = upcoming_cycles(query=request.GET.get("q")) if tab == "upcoming" else tracking_cycles(query=request.GET.get("q"), status=request.GET.get("status", "all"))
+        tab = "upcoming"
+        renewal_rows = upcoming_cycles(query=request.GET.get("q"))
         renewal_rows = tuple(renewal_rows)
         for renewal_row in renewal_rows:
             renewal_row.monthly_period_label = _monthly_period_label(renewal_row.monthly_period)
@@ -224,8 +224,26 @@ def index(request, mode=None):
             "renewal_dashboard": renewal_dashboard_counts(),
             "renewal_window_days": getattr(settings, "COLECTIVOS_RENEWAL_WINDOW_DAYS", 30),
             "renewal_sync_error": renewal_sync_error,
+            "monthly_renewals_enabled": monthly_renewals_enabled(),
+            "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
         })
     return render(request, "cotizacion_colectivos/index.html", context)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def monthly_renewals_toggle(request):
+    if not has_internal_permission(request, "manage_notifications"):
+        return permission_denied_response()
+    enabled = str(request.POST.get("enabled") or "").lower() in {"1", "true", "on", "yes"}
+    set_monthly_renewals_enabled(enabled=enabled, actor=get_internal_actor(request, create=True))
+    messages.success(request, "Automatización mensual activada." if enabled else "Automatización mensual desactivada.")
+    next_url = request.POST.get("next") or ""
+    allowed_next = {
+        reverse("cotizacion_colectivos:novelties_index"),
+        reverse("cotizacion_colectivos:renewal_tracking"),
+    }
+    return redirect(next_url if next_url in allowed_next else "cotizacion_colectivos:novelties_index")
 
 
 @never_cache
@@ -259,6 +277,9 @@ def renewal_tracking(request):
         "renewal_cycles": rows,
         "renewal_query": request.GET.get("q", ""),
         "renewal_status": request.GET.get("status", "all"),
+        "renewal_tab": "tracking",
+        "monthly_renewals_enabled": monthly_renewals_enabled(),
+        "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
         "colectivos_mode": resolve_tool_mode(request, NOVELTIES_MODE),
         **_environment_context(),
     })
@@ -1015,7 +1036,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         else:
             individual_affiliates = affiliate_options(members)
             try:
-                task_responsibles = task_responsible_options()
+                task_responsibles = task_responsible_options(collective_only=True)
             except (ValidationError, ColectivosServiceError):
                 task_responsibles = ()
     context = {
@@ -1170,7 +1191,7 @@ def policy_individual_access(request, token):
         options = affiliate_options(members)
         affiliate_key = str(request.POST.get("affiliate_key") or "")
         actor = get_internal_actor(request, create=True)
-        responsible_options = task_responsible_options()
+        responsible_options = task_responsible_options(collective_only=True)
         choices = [(item.actual_value, item.display_value) for item in responsible_options]
         email_form = IndividualAccessPrepareForm(request.POST)
         email_form.fields["responsible"].choices = choices
@@ -1667,7 +1688,7 @@ def request_list(request):
         try:
             responsible_choices.extend(
                 (option.actual_value, option.display_value)
-                for option in task_responsible_options()
+                for option in task_responsible_options(collective_only=True)
             )
         except Exception:
             pass
@@ -2129,31 +2150,124 @@ def request_detail(request, public_id):
             )
         except ValueError:
             observations = ""
-        fields = []
+        novelties = {}
+        operational_edits = (latest_response.safe_metadata or {}).get("operational_edits") or {}
         for change in latest_response.changes.all():
+            if change.action not in {
+                CambioSolicitudColectivo.Action.INCLUDE,
+                CambioSolicitudColectivo.Action.RETIRE,
+                CambioSolicitudColectivo.Action.MODIFY,
+            }:
+                continue
             try:
                 value = decrypt(change.encrypted_new_value) if change.encrypted_new_value else ""
             except ValueError:
                 value = "Información no disponible"
-            fields.append({
+            key = (change.action, change.original_record_id or f"include-{change.position}")
+            novelty = novelties.setdefault(key, {
+                "action": change.get_action_display(),
+                "action_code": change.action,
+                "record": "Inclusión",
+                "label": "Registro seleccionado",
+                "values": [],
+                "change_id": None,
+                "edit_values": {},
+            })
+            if change.functional_field == "accion":
+                novelty["change_id"] = change.pk
+                edit_values = operational_edits.get(str(change.pk), {})
+                novelty["edit_values"] = dict(edit_values.get("fields") or {}) if isinstance(edit_values, dict) else {}
+                continue
+            if novelty["change_id"] is None:
+                # Historical responses may predate the explicit action marker;
+                # the first functional change is still a server-side anchor.
+                novelty["change_id"] = change.pk
+            if change.original_record_id:
+                novelty["record"] = f"Registro {change.original_record.original_position}"
+                payload = {}
+                try:
+                    payload_source = (
+                        change.original_record.encrypted_branch_payload
+                        if change.original_record and change.original_record.encrypted_branch_payload
+                        else change.encrypted_branch_payload
+                    )
+                    payload = json.loads(decrypt(payload_source)) if payload_source else {}
+                    novelty["label"] = (
+                        payload.get("display_name")
+                        or payload.get("name")
+                        or payload.get("Nombre")
+                        or payload.get("full_name")
+                        or ({
+                            "PERSONA": "Persona",
+                            "BENEFICIARIO": "Beneficiario",
+                            "VEHICULO": "Vehículo",
+                            "INMUEBLE": "Inmueble",
+                        }.get(str(change.original_record.element_type or ""), "Registro recibido"))
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    novelty["label"] = "Registro recibido"
+                # Enrich the human card from the persisted snapshot only;
+                # never perform a per-row Zoho lookup.
+                for source_key, label in (
+                    ("documento", "Documento"), ("document", "Documento"),
+                    ("N_mero_de_ID", "Documento"), ("tipo_id", "Tipo de identificación"),
+                    ("placa", "Placa"), ("marca", "Marca"), ("modelo", "Modelo"),
+                    ("clase", "Clase"), ("observaciones", "Observaciones"),
+                ):
+                    candidate = payload.get(source_key)
+                    if candidate not in (None, "") and not any(item["label"] == label for item in novelty["values"]):
+                        novelty["values"].append({"label": label, "value": candidate})
+            elif change.encrypted_branch_payload:
+                try:
+                    payload = json.loads(decrypt(change.encrypted_branch_payload))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {}
+                for source_key, label in (
+                    ("documento", "Documento"), ("document", "Documento"),
+                    ("N_mero_de_ID", "Documento"), ("tipo_id", "Tipo de identificación"),
+                    ("placa", "Placa"), ("marca", "Marca"), ("modelo", "Modelo"),
+                    ("clase", "Clase"), ("observaciones", "Observaciones"),
+                ):
+                    candidate = payload.get(source_key)
+                    if candidate not in (None, "") and not any(item["label"] == label for item in novelty["values"]):
+                        novelty["values"].append({"label": label, "value": candidate})
+            edit_value = novelty.get("edit_values", {}).get(change.functional_field)
+            display_value = edit_value if edit_value is not None else value
+            if change.functional_field == "observaciones" and change.encrypted_observation:
+                try:
+                    display_value = decrypt(change.encrypted_observation) or display_value
+                except (TypeError, ValueError):
+                    pass
+            # Empty optional fields are not useful in the human response card.
+            # Keep the underlying change intact for audit/review workflows.
+            if display_value in (None, ""):
+                continue
+            novelty["edit_values"].setdefault(change.functional_field, value or "")
+            if change.functional_field == "observaciones" and change.encrypted_observation:
+                novelty["edit_values"]["observaciones"] = display_value
+            novelty["values"].append({
                 "label": RESPONSE_FIELD_LABELS.get(
                     change.functional_field,
                     change.functional_field.replace("_", " ").strip().capitalize() or "Información",
                 ),
-                "value": value or "Sin dato",
-                "action": change.get_action_display(),
-                "record": (
-                    f"Registro {change.original_record.original_position}"
-                    if change.original_record_id else "Inclusión"
-                ),
+                "value": display_value,
             })
+        novelties = tuple(item for item in novelties.values() if item.get("values"))
         response_summary = {
             "item": latest_response,
-            "fields": tuple(fields),
+            "fields": novelties,
             "observations": observations,
             "attachment_count": latest_response.attachments.count(),
+            "response_type": (latest_response.safe_metadata or {}).get("response_type", "CHANGES"),
         }
     latest_outbox = item.task_outbox.order_by("-updated_at", "-pk").first()
+    task_responsibles = ()
+    task_responsibles_error = ""
+    if latest_outbox and latest_outbox.status == latest_outbox.Status.PENDING:
+        try:
+            task_responsibles = task_responsible_options(collective_only=True)
+        except (ValidationError, ColectivosServiceError):
+            task_responsibles_error = "No fue posible cargar los responsables del área Colectivos."
     zoho_tasks = []
     for outbox in item.task_outbox.order_by("event_kind", "-updated_at", "-pk"):
         remote_id = ""
@@ -2162,12 +2276,23 @@ def request_detail(request, public_id):
                 remote_id = decrypt(outbox.encrypted_remote_id)
             except ValueError:
                 remote_id = "No disponible"
+        task_record = read_published_task(remote_id) if remote_id else None
+        local_responsible = ""
+        try:
+            local_responsible = str(json.loads(decrypt(outbox.encrypted_payload)).get("Responsable") or "").strip()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        remote_responsible = task_record.get("Responsable") if isinstance(task_record, dict) else ""
+        if isinstance(remote_responsible, dict):
+            remote_responsible = remote_responsible.get("name") or remote_responsible.get("id") or ""
         zoho_tasks.append({
             "outbox_id": outbox.pk,
             "kind": outbox.event_kind,
             "type": {"INCLUSION": "Ingresos", "RETIRO": "Retiros", "COTIZACION": "Cotización"}.get(outbox.event_kind, outbox.event_kind),
             "status": outbox.get_status_display(),
             "task_id": remote_id,
+            "responsible": str(remote_responsible or local_responsible).strip(),
+            "remote_state": str(task_record.get("Estado") or "").strip() if isinstance(task_record, dict) else "",
             "last_attempt": outbox.updated_at if outbox.attempts else None,
             "attempts": outbox.attempts,
             "safe_error": outbox.safe_error_code,
@@ -2185,6 +2310,19 @@ def request_detail(request, public_id):
             zoho_summary["task_id"] = decrypt(latest_outbox.encrypted_remote_id)
         except ValueError:
             zoho_summary["task_id"] = "No disponible"
+    has_request_actions = bool(
+        (response_summary and response_summary["item"].attachments.exists())
+        or (item.status == "BORRADOR" and has_internal_permission(request, "create_requests"))
+        or (
+            (not access_summary or not access_summary.get("token_valid"))
+            and item.status in {"LISTA_PARA_ENVIAR", "REQUIERE_CORRECCION"}
+            and has_internal_permission(request, "generate_external_access")
+        )
+        or (access_summary and access_summary.get("token_valid") and has_internal_permission(request, "regenerate_external_access"))
+        or (access_summary and access_summary.get("token_valid") and has_internal_permission(request, "revoke_external_access"))
+        or any(task["status"] in {"Pendiente", "Requiere conciliación", "Bloqueada"} for task in zoho_tasks)
+        or item.request_type == "COTIZACION"
+    )
     allowed_targets = tuple(
         target for target in SolicitudColectivo.TRANSITIONS.get(item.status, set())
         if has_internal_permission(request, _transition_permission(target))
@@ -2207,8 +2345,88 @@ def request_detail(request, public_id):
         "response_summary": response_summary,
         "zoho_summary": zoho_summary,
         "zoho_tasks": tuple(zoho_tasks),
+        "task_responsibles": task_responsibles,
+        "task_responsibles_error": task_responsibles_error,
+        "has_request_actions": has_request_actions,
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def response_novelty_edit(request, public_id, version, change_id):
+    """Persist an auditable local correction for one response novelty."""
+    if not (
+        has_internal_permission(request, "edit_requests")
+        or has_internal_permission(request, "approve_responses")
+    ):
+        return permission_denied_response()
+    response = get_object_or_404(
+        RespuestaSolicitudColectivo.objects.select_related("request"),
+        request__public_id=public_id,
+        version=version,
+        status__in=(RespuestaSolicitudColectivo.Status.SUBMITTED, RespuestaSolicitudColectivo.Status.APPROVED),
+    )
+    anchor = get_object_or_404(
+        CambioSolicitudColectivo,
+        pk=change_id,
+        response=response,
+        action__in=(CambioSolicitudColectivo.Action.INCLUDE, CambioSolicitudColectivo.Action.RETIRE, CambioSolicitudColectivo.Action.MODIFY),
+    )
+    anchor = response.changes.filter(
+        action=anchor.action,
+        original_record_id=anchor.original_record_id,
+        position=anchor.position,
+        functional_field="accion",
+    ).first() or anchor
+    allowed_by_action = {
+        CambioSolicitudColectivo.Action.RETIRE: {"fecha_retiro", "fecha_efectiva", "observaciones"},
+        CambioSolicitudColectivo.Action.INCLUDE: {"fecha_ingreso", "fecha_efectiva", "nombres", "apellidos", "documento", "tipo_id", "rol", "parentesco", "estado", "plan", "observaciones"},
+        CambioSolicitudColectivo.Action.MODIFY: {"fecha_efectiva", "plan", "parentesco", "estado", "observaciones"},
+    }[anchor.action]
+    form = NoveltyEditForm(request.POST)
+    if not form.is_valid():
+        messages.warning(request, "La corrección de la novedad no es válida.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    fields = {
+        key: (value.isoformat() if hasattr(value, "isoformat") else str(value or "").strip())
+        for key, value in form.cleaned_data.items()
+        if key in allowed_by_action
+    }
+    if anchor.action == CambioSolicitudColectivo.Action.RETIRE and not (fields.get("fecha_retiro") or fields.get("fecha_efectiva")):
+        messages.warning(request, "La novedad de retiro requiere una fecha solicitada.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    metadata = dict(response.safe_metadata or {})
+    edits = dict(metadata.get("operational_edits") or {})
+    edits[str(anchor.pk)] = {
+        "fields": fields,
+        "updated_at": timezone.now().isoformat(),
+        "updated_by": int(get_internal_actor(request, create=True).pk),
+    }
+    metadata["operational_edits"] = edits
+    response.safe_metadata = metadata
+    response.save(update_fields=("safe_metadata", "updated_at"))
+
+    # Keep the pending local Task intent aligned with the operational version;
+    # a published remote Task is never rewritten here.
+    event_kind = {"INCLUIR": "INCLUSION", "RETIRAR": "RETIRO", "MODIFICAR": "MODIFICACION"}.get(anchor.action, "")
+    outbox = response.request.task_outbox.filter(event_kind=event_kind, status=ColectivosTaskOutbox.Status.PENDING).order_by("-pk").first()
+    if outbox is not None:
+        try:
+            record = json.loads(decrypt(outbox.encrypted_payload))
+            date_value = fields.get("fecha_retiro") or fields.get("fecha_ingreso") or fields.get("fecha_efectiva")
+            if date_value:
+                record["Fecha_de_solicitud_del_cliente"] = date_value
+            if fields.get("observaciones"):
+                record["Observaciones"] = fields["observaciones"]
+            serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            outbox.encrypted_payload = encrypt(serialized)
+            outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
+            outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("response_novelty_task_sync_failed request_id=%s response_id=%s", public_id, response.pk)
+    messages.success(request, "Novedad corregida localmente. La respuesta original permanece disponible para auditoría.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
 
 
 @never_cache
@@ -2221,7 +2439,26 @@ def request_publish_task(request, public_id, outbox_id):
     if outbox.status == outbox.Status.PUBLISHED:
         messages.info(request, "La Tarea ya fue publicada.")
     else:
-        publish_task_outbox(outbox.pk)
+        try:
+            options = task_responsible_options(collective_only=True)
+            selected = next(
+                (option for option in options if option.actual_value == str(request.POST.get("responsible") or "").strip()),
+                None,
+            )
+            if selected is None:
+                raise ValidationError("Seleccione un responsable válido del área Colectivos.")
+            responsible_email = resolve_task_responsible_email(selected)
+            record = json.loads(decrypt(outbox.encrypted_payload))
+            record["Responsable"] = selected.actual_value
+            record["Correo_responsable"] = responsible_email
+            serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            outbox.encrypted_payload = encrypt(serialized)
+            outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
+            outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
+            publish_task_outbox(outbox.pk)
+        except (ValidationError, ColectivosServiceError) as exc:
+            messages.error(request, str(exc))
+            return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
         outbox.refresh_from_db()
         if outbox.status == outbox.Status.PUBLISHED:
             messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
@@ -3049,7 +3286,7 @@ def individual_update_responsible(request, token):
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
         _ensure_individual_can_manage_task(quotation)
-        options = task_responsible_options()
+        options = task_responsible_options(collective_only=True)
         option = next((item for item in options if item.actual_value == str(request.POST.get("responsible") or "").strip()), None)
         if option is None:
             raise ValidationError("Seleccione un responsable válido.")
@@ -3322,7 +3559,7 @@ def individual_expedient(request, token):
     task_responsibles = ()
     if latest_outbox and not (context.get("task_responsible") or safe_metadata.get("task_responsible")):
         try:
-            task_responsibles = task_responsible_options()
+            task_responsibles = task_responsible_options(collective_only=True)
         except Exception:
             task_responsibles = ()
     remote_task_id = ""

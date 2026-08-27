@@ -36,7 +36,7 @@
         {% if entry.secondary_policies %}<details class="secondary-policies"><summary>Ver {{ entry.secondary_policies|length }} póliza{{ entry.secondary_policies|length|pluralize:"s" }} histórica{{ entry.secondary_policies|length|pluralize:"s" }} o no operable{{ entry.secondary_policies|length|pluralize:"s" }}</summary>
           <div class="policy-stack">{% for policy in entry.secondary_policies %}<a class="branch-policy branch-policy--secondary" href="{{ policy.url }}" data-policy-card data-policy-search-text="{{ branch.code }} {{ branch.name }} {{ policy.reference }} {{ policy.insurer }} {{ policy.state }}"><span><strong>{{ policy.reference }}</strong><small>{{ policy.insurer }} · {{ policy.state }}{% if policy.start_date or policy.end_date %} · {{ policy.start_date|default:"?" }}–{{ policy.end_date|default:"?" }}{% endif %}</small></span><span aria-hidden="true">→</span></a>{% endfor %}</div>
         </details>{% endif %}
-      </section>{% empty %}<p class="status-inline">Este ramo no ofrece {{ colectivos_mode.name }} con el contrato confirmado.</p>{% endfor %}
+      </section>{% endfor %}
       {% for warning in branch.warnings %}<p class="status-inline">{{ warning }}</p>{% endfor %}
     </article>
   {% endwith %}{% endfor %}

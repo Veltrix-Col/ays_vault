@@ -3,12 +3,15 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser, Permission
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from vault.crypto import encrypt
 
-from cotizacion_colectivos.models import RenovacionColectiva
+from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
 from cotizacion_colectivos.services.renewals import RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
 
@@ -101,6 +104,72 @@ class RenewalReadContractTests(SimpleTestCase):
 
 @override_settings(COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False)
 class RenewalSelectionTests(TestCase):
+    def _notification_manager(self):
+        user = get_user_model().objects.create_user("renewal-manager", password="Password123!")
+        permission = Permission.objects.get(
+            codename="manage_notifications",
+            content_type__app_label="cotizacion_colectivos",
+        )
+        user.user_permissions.add(permission)
+        self.client.force_login(user)
+        return user
+
+    def test_monthly_switch_authorized_toggles_and_persists_on_get(self):
+        self._notification_manager()
+        endpoint = reverse("cotizacion_colectivos:monthly_renewals_toggle")
+        response = self.client.post(endpoint, {"enabled": "1", "next": reverse("cotizacion_colectivos:renewal_tracking")})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("cotizacion_colectivos:renewal_tracking"))
+        self.assertTrue(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
+        with patch("cotizacion_colectivos.views.sync_renewal_cycles", return_value=()), patch(
+            "cotizacion_colectivos.views.upcoming_cycles", return_value=()
+        ), patch("cotizacion_colectivos.views.renewal_dashboard_counts", return_value={}):
+            page = self.client.get(reverse("cotizacion_colectivos:novelties_index"))
+        self.assertContains(page, "ON · Automatización activa")
+
+        response = self.client.post(endpoint, {"enabled": "0", "next": reverse("cotizacion_colectivos:renewal_tracking")})
+        self.assertEqual(response["Location"], reverse("cotizacion_colectivos:renewal_tracking"))
+        self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
+    def test_monthly_switch_unauthorized_cannot_change_and_get_is_read_only(self):
+        user = get_user_model().objects.create_user("renewal-viewer", password="Password123!")
+        self.client.force_login(user)
+        endpoint = reverse("cotizacion_colectivos:monthly_renewals_toggle")
+        response = self.client.post(endpoint, {"enabled": "1"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ColectivosOperationalSetting.objects.filter(key="monthly_renewals_enabled", enabled=True).exists())
+
+    @override_settings(
+        COLECTIVOS_INTERNAL_PUBLIC_ACCESS=True,
+        COLECTIVOS_TECHNICAL_ACTOR_USERNAME="renewal-technical-actor",
+    )
+    def test_monthly_switch_sso_actor_does_not_assign_anonymous_user(self):
+        response = self.client.post(
+            reverse("cotizacion_colectivos:monthly_renewals_toggle"),
+            {"enabled": "1"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/cotizacion-colectivos/"))
+        setting = ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled")
+        self.assertTrue(setting.enabled)
+        self.assertEqual(setting.updated_by.username, "renewal-technical-actor")
+        self.assertNotIsInstance(setting.updated_by, AnonymousUser)
+
+        with patch("cotizacion_colectivos.views.sync_renewal_cycles", return_value=()), patch(
+            "cotizacion_colectivos.views.upcoming_cycles", return_value=()
+        ), patch("cotizacion_colectivos.views.renewal_dashboard_counts", return_value={}):
+            page = self.client.get(reverse("cotizacion_colectivos:novelties_index"))
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
+        response = self.client.post(
+            reverse("cotizacion_colectivos:monthly_renewals_toggle"),
+            {"enabled": "0"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
     def _policy(self, email):
         return RenewalPolicy(
             remote_id="4991513000271000099", token="policy-token", policy="0400",
@@ -121,6 +190,31 @@ class RenewalSelectionTests(TestCase):
             sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
         cycle.refresh_from_db()
         self.assertEqual(cycle.recipient_email, "new@example.test")
+
+    def test_new_cycle_records_automation_eligibility_at_sync_time(self):
+        policy = self._policy("new@example.test")
+        with patch("cotizacion_colectivos.services.renewals.monthly_renewals_enabled", return_value=False), patch(
+            "cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)
+        ):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle = RenovacionColectiva.objects.get(cycle_key="4991513000271000099:2026-09")
+        self.assertFalse(cycle.automation_eligible)
+
+        policy = RenewalPolicy(**{**policy.__dict__, "email": "newer@example.test"})
+        with patch("cotizacion_colectivos.services.renewals.monthly_renewals_enabled", return_value=True), patch(
+            "cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)
+        ):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle.refresh_from_db()
+        self.assertFalse(cycle.automation_eligible)
+
+    def test_new_cycle_is_automation_eligible_when_synced_enabled(self):
+        policy = RenewalPolicy(**{**self._policy("new@example.test").__dict__, "remote_id": "4991513000271000100"})
+        with patch("cotizacion_colectivos.services.renewals.monthly_renewals_enabled", return_value=True), patch(
+            "cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)
+        ):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        self.assertTrue(RenovacionColectiva.objects.get(cycle_key="4991513000271000100:2026-09").automation_eligible)
 
     def test_sync_clears_programmed_recipient_when_zoho_email_is_empty(self):
         cycle = RenovacionColectiva.objects.create(
@@ -176,7 +270,7 @@ class RenewalSelectionTests(TestCase):
     def test_targeted_dry_run_only_counts_requested_cycle(self):
         target = RenovacionColectiva.objects.create(
             cycle_key="4991513000271000020:2026-09", policy_remote_id="4991513000271000020",
-            policy_token="protected", masked_policy="0420", client_label="Empresa", branch_name="VG deudores",
+            policy_token="protected", masked_policy="0420", client_label="Empresa", branch_name="VG deudores", automation_eligible=True,
             monthly_period="2026-09", scheduled_for=date(2026, 12, 31), status=RenovacionColectiva.Status.PROGRAMMED,
         )
         other = RenovacionColectiva.objects.create(

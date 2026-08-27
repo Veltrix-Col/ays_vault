@@ -9,6 +9,18 @@ from django.utils import timezone
 from vault.crypto import decrypt
 
 
+class ColectivosOperationalSetting(models.Model):
+    """Persistent, fail-closed feature settings for Colectivos automation."""
+
+    key = models.CharField(max_length=80, unique=True)
+    enabled = models.BooleanField(default=False)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("key",)
+
+
 class WorkspacePolizaColectivo(models.Model):
     """Workspace local cifrado; Zoho sigue siendo la fuente de verdad."""
 
@@ -240,6 +252,7 @@ class RenovacionColectiva(models.Model):
     encrypted_recipient = models.TextField(blank=True, editable=False)
     recipient_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     selected = models.BooleanField(default=False, db_index=True)
+    automation_eligible = models.BooleanField(default=False, db_index=True)
     scheduled_for = models.DateField(db_index=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PROGRAMMED, db_index=True)
     request = models.ForeignKey("SolicitudColectivo", null=True, blank=True, on_delete=models.SET_NULL, related_name="renewal_cycles")

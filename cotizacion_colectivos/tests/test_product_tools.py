@@ -28,6 +28,9 @@ class ProductToolsContractTests(SimpleTestCase):
     def test_novelties_template_exposes_collective_renewal_workspace_without_changing_manual_flow(self):
         templates = (
             Path("templates/cotizacion_colectivos/index.html"),
+            Path("templates/cotizacion_colectivos/_renewal_panel_nav.html"),
+            Path("templates/cotizacion_colectivos/renewal_tracking.html"),
+            Path("templates/cotizacion_colectivos/_quick_tools_nav.html"),
             Path("templates/cotizacion_colectivos/policy_detail.html"),
             Path("templates/cotizacion_colectivos/external/portal.html"),
             Path("templates/cotizacion_colectivos/external/_functional_entity.html"),
@@ -36,8 +39,8 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Renovaciones Colectivo", content)
         self.assertIn("Próximos envíos", content)
         self.assertNotIn("Próximas a vencer", content)
-        self.assertIn("Próximos a enviar", content)
         self.assertIn("Seguimiento de links", content)
+        self.assertIn("renewal-panel-nav", content)
         self.assertIn("novelties-workspace-layout", content)
         self.assertIn("novelties-workspace-sidebar", content)
         self.assertIn("novelties_client_search", content)
@@ -68,9 +71,46 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertNotIn("cliente → póliza → ingreso o retiro → enlace → respuesta", html)
         self.assertIn("Renovaciones Colectivo", html)
         self.assertIn("Buscar cliente", html)
+        self.assertIn("Próximos envíos", html)
         self.assertIn("Próximos a enviar", html)
         self.assertIn("Seguimiento de links", html)
+        self.assertIn("renewal-panel-nav", html)
         self.assertIn("Periodo: Septiembre 2026", html)
+
+    def test_renewal_tracking_uses_human_period_separator(self):
+        content = Path("templates/cotizacion_colectivos/renewal_tracking.html").read_text(encoding="utf-8")
+        self.assertIn('{{ cycle.masked_policy }} / <span class="muted">{{ cycle.monthly_period_label }}</span>', content)
+        self.assertNotIn("{{ cycle.monthly_period }}", content)
+
+    def test_monthly_switch_is_interactive_only_for_authorized_context(self):
+        template = "cotizacion_colectivos/_renewal_panel_nav.html"
+        base = {
+            "renewal_tab": "upcoming",
+            "monthly_renewals_enabled": False,
+        }
+        authorized = render_to_string(template, {**base, "can_manage_notifications": True})
+        self.assertIn('method="post"', authorized)
+        self.assertIn('name="enabled" value="1"', authorized)
+        self.assertIn("OFF · Automatización desactivada", authorized)
+        self.assertIn(f'action="{reverse("cotizacion_colectivos:monthly_renewals_toggle")}"', authorized)
+
+        unauthorized = render_to_string(template, {**base, "can_manage_notifications": False})
+        self.assertNotIn('method="post"', unauthorized)
+        self.assertIn("Automatización: desactivada", unauthorized)
+        self.assertIn("Activar automatización mensual", authorized)
+        self.assertIn("Cancelar", authorized)
+
+    def test_collective_request_task_uses_responsible_selection_modal(self):
+        content = Path("templates/cotizacion_colectivos/request_detail.html").read_text(encoding="utf-8")
+        self.assertIn('data-dialog-open="task-create-dialog-{{ task.outbox_id }}"', content)
+        self.assertIn("Buscar responsable", content)
+        self.assertIn("data-task-responsible-select", content)
+        self.assertNotIn('form method="post" action="{% url \'cotizacion_colectivos:request_publish_task\' item.public_id task.outbox_id %}">{% csrf_token %}<button type="submit">Crear Tarea</button>', content)
+
+    def test_published_task_uses_fresh_read_with_local_fallback(self):
+        content = Path("cotizacion_colectivos/services/task_publisher.py").read_text(encoding="utf-8")
+        self.assertIn('module="Tasks"', content)
+        self.assertIn("read_published_task", content)
 
     @override_settings(COLECTIVOS_TASK_PUBLISH_ENABLED=False)
     def test_task_publisher_disabled_configuration_is_fail_closed(self):
