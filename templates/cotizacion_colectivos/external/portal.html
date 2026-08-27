@@ -12,7 +12,7 @@
     <span>{{ item.get_request_type_display }}</span>
   </div>
 </header>
-<section class="external-guide" aria-labelledby="external-guide-title"><h2 id="external-guide-title">Antes de comenzar</h2><ol><li>Revise la información de sus pólizas.</li><li>Registre únicamente los ingresos o retiros que desea solicitar.</li><li>Complete los datos de cada persona y revise los cambios.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol></section>
+<section class="external-guide" aria-labelledby="external-guide-title"><h2 id="external-guide-title">Antes de comenzar</h2><ol><li>Revise la información de sus pólizas.</li><li>Registre únicamente los ingresos o retiros que desea solicitar.</li><li>Complete los datos de cada persona y prepare los cambios.</li><li>Confirme y envíe su respuesta cuando esté lista.</li></ol></section>
 <section class="external-card external-card--notice" aria-labelledby="important-notice">
   <h2 id="important-notice">Información importante</h2>
   <p>Este enlace fue generado para revisar la información de las pólizas indicadas. Si no reconoce el enlace o la información no le corresponde, no realice cambios y comuníquese con A&amp;S.</p>
@@ -23,12 +23,12 @@
 {% if saved and saved_preview %}<section class="external-card" aria-labelledby="saved-preview-heading"><h2 id="saved-preview-heading">Previsualización de cambios guardados</h2><ul>{% for item in saved_preview %}<li><strong>{{ item.action }} · {{ item.field|capfirst }}:</strong> {{ item.value }}</li>{% endfor %}</ul></section>{% endif %}
 <section class="external-card external-card--steps">
   <h2>¿Qué debo hacer?</h2>
-  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Solicite el retiro de un integrante existente o agregue un nuevo ingreso.</li><li>Guarde y envíe su respuesta cuando esté lista.</li></ol>
+  <ol><li>Revise las personas, bienes y coberturas de cada póliza.</li><li>Solicite el retiro de un integrante existente o agregue un nuevo ingreso.</li><li>Prepare los cambios y confirme el envío de su respuesta.</li></ol>
   {% if item.warnings %}<div class="warning">{% for warning in item.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
 </section>
-<form method="post" action="{% url 'colectivos_external:save_draft' %}" class="external-card" data-external-response>
+<form method="post" action="{% url 'colectivos_external:submit' %}" class="external-card" data-external-response>
   {% csrf_token %}
-  <div class="external-section-heading"><div><p class="eyebrow">Su información</p><h2>Mis pólizas y mi grupo</h2></div><span class="external-save-state">Guardado manual</span></div>
+  <div class="external-section-heading"><div><p class="eyebrow">Su información</p><h2>Mis pólizas y mi grupo</h2></div><span class="external-save-state">Cambios preparados</span></div>
   <nav class="external-policy-nav" aria-label="Pólizas disponibles">
     {% for section in policy_sections %}<a href="#policy-{{ forloop.counter }}">Póliza {{ forloop.counter }} · {% if section.policy %}{{ section.policy.branch_name }}{% else %}{{ item.branch_name }}{% endif %}</a>{% endfor %}
   </nav>
@@ -60,9 +60,6 @@
         {% include "cotizacion_colectivos/external/_functional_entity.html" with entity=group.principal section=section risk=group.risks.0 entity_index=group_index %}
         {% for entity in group.members %}{% include "cotizacion_colectivos/external/_functional_entity.html" with entity=entity section=section risk=group.risks.0 entity_index=forloop.counter %}{% endfor %}
         {% if group.risks and section.branch_code != '28' and section.branch_code != '40' %}
-          <details class="functional-related-details"><summary>Ver coberturas y detalles relacionados</summary><div class="functional-related-list">
-            {% for risk in group.risks %}<article><strong>{{ risk.summary|default:"Detalle relacionado" }}</strong>{% for label, value in risk.attributes.items %}{% if value %}<span><b>{{ label|capfirst }}:</b> {{ value }}</span>{% endif %}{% endfor %}</article>{% endfor %}
-          </div></details>
         {% endif %}
       </div>
     {% endwith %}{% empty %}<p>No hay información disponible para esta póliza.</p>{% endfor %}
@@ -97,12 +94,10 @@
   </section>
   {% endfor %}
   <div class="functional-drawer-backdrop" data-drawer-backdrop hidden></div>
-  <label>¿Hay algo más que debamos saber?<textarea name="client_observations" maxlength="2000"></textarea></label>
-  <div class="external-sticky-save"><span>Sus cambios no se envían a Zoho automáticamente.</span><button type="submit">Guardar mis cambios</button></div>
+  <section class="external-confirmation" aria-labelledby="external-confirmation-title"><h2 id="external-confirmation-title">Confirmar y enviar</h2><p>{{ submit_form.declaration }} {{ submit_form.declaration.label }}</p>{% if submit_form.errors %}<p class="form-error">{{ submit_form.errors }}</p>{% endif %}<button type="submit" formnovalidate>Confirmar y enviar</button></section>
   {% if latest %}<p>Último borrador: versión {{ latest.version }} · {{ latest.updated_at }}</p>{% endif %}
 </form>
 <section class="external-card"><details><summary><strong>Prefiero trabajar con Excel</strong></summary><p>Descargue la plantilla o cargue un archivo para revisarlo antes de aplicarlo a esta respuesta.</p><div class="external-excel-actions"><form method="post" action="{% url 'colectivos_external:download_template' %}">{% csrf_token %}<button type="submit">Descargar plantilla</button></form><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_excel' %}">{% csrf_token %}<label>Archivo XLSX<input type="file" name="workbook" accept=".xlsx" required></label><button type="submit">Revisar archivo</button></form></div></details></section>
 {% if latest %}<section class="external-card"><h2>Adjuntos</h2><p>PDF, JPG o PNG.</p><form method="post" enctype="multipart/form-data" action="{% url 'colectivos_external:upload_attachment' %}">{% csrf_token %}{{ attachment_form.as_p }}<button type="submit">Cargar soporte</button></form></section>{% endif %}
-<section class="external-card"><h2>Confirmar y enviar</h2><form method="post" action="{% url 'colectivos_external:submit' %}">{% csrf_token %}<label>Observaciones del cliente<textarea name="client_observations" maxlength="2000"></textarea></label>{{ submit_form.as_p }}<button type="submit">Enviar respuesta</button></form></section>
 <script src="{% static 'js/colectivos-external.js' %}" defer></script>
 {% endblock %}

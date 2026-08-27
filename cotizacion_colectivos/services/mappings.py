@@ -79,6 +79,7 @@ POLICY_DETAIL_FIELDS = (
     "id",
     "Name",
     "Tomador_principal1",
+    "Correo_gesti_n_comercial",
     "Estado_de_la_p_liza",
     "Ramo",
     "Aseguradora1",

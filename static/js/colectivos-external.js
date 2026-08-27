@@ -8,7 +8,6 @@
   const progress = form.querySelector("[data-progress-count]");
   const visible = form.querySelector("[data-visible-count]");
   const backdrop = form.querySelector("[data-drawer-backdrop]");
-  const saveButton = form.querySelector(".external-sticky-save button[type='submit']");
   const tables = [...form.querySelectorAll("[data-functional-table]")];
   let activeDrawer = null;
   let activeTrigger = null;
@@ -77,18 +76,14 @@
     changedRows += form.querySelectorAll("[data-include-action]:checked").length;
     if (visible) visible.textContent = String(visibleRows);
     if (progress) progress.textContent = String(changedRows);
-    if (saveButton) saveButton.textContent = changedRows ? `Guardar mis cambios (${changedRows})` : "Guardar mis cambios";
   }
 
   function markModified(control) {
     const record = control.closest("[data-functional-entity]");
-    if (!record || control.matches("[data-row-action]")) return;
-    const hasValue = control.type === "checkbox" ? control.checked : Boolean(control.value);
-    if (!hasValue) return;
-    const action = record.querySelector("[data-row-action]");
-    if (!action || action.value !== "SIN_CAMBIOS") return;
-    const modify = [...action.options].find((option) => option.value === "MODIFICAR");
-    if (modify) action.value = "MODIFICAR";
+    // Los campos del modal sólo se convierten en una novedad al pulsar
+    // «Preparar retiro». Así se evita contar un borrador incompleto y se
+    // conserva la semántica RETIRAR para el POST definitivo.
+    if (record || control.matches("[data-row-action]")) return;
   }
 
   function focusableElements(drawer) {
@@ -157,6 +152,14 @@
       return;
     }
     if (event.target.closest("[data-drawer-done]")) {
+      const dateInput = activeDrawer?.querySelector("input[name^='fecha_retiro_entity_']");
+      if (dateInput && !dateInput.value) {
+        dateInput.reportValidity?.();
+        dateInput.focus();
+        return;
+      }
+      const action = activeDrawer?.closest("[data-functional-entity]")?.querySelector("[data-row-action]");
+      if (action) action.value = "RETIRAR";
       closeDrawer();
       return;
     }

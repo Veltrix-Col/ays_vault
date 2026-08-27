@@ -351,6 +351,32 @@ class ExternalSubmitForm(forms.Form):
     declaration = forms.BooleanField(
         label="Confirmo que revisé la información y deseo enviar mi respuesta."
     )
+    no_changes = forms.BooleanField(
+        label="No tengo novedades para reportar en este periodo.",
+        required=False,
+        widget=forms.CheckboxInput(attrs={"aria-describedby": "no-changes-help"}),
+    )
+
+
+class NoveltyEditForm(forms.Form):
+    """Local operational correction for one received novelty.
+
+    The original client response remains immutable; the view stores cleaned
+    values in the response metadata under the server-resolved change anchor.
+    """
+
+    fecha_retiro = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    fecha_ingreso = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    fecha_efectiva = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    nombres = forms.CharField(required=False, max_length=120)
+    apellidos = forms.CharField(required=False, max_length=120)
+    documento = forms.CharField(required=False, max_length=40)
+    tipo_id = forms.CharField(required=False, max_length=20)
+    rol = forms.CharField(required=False, max_length=40)
+    parentesco = forms.CharField(required=False, max_length=80)
+    estado = forms.CharField(required=False, max_length=80)
+    plan = forms.CharField(required=False, max_length=120)
+    observaciones = forms.CharField(required=False, max_length=500, widget=forms.Textarea(attrs={"rows": 3}))
 
 
 class AttachmentUploadForm(forms.Form):
