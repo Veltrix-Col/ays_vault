@@ -232,18 +232,27 @@ def sync_renewal_cycles(*, zoho=None, today=None, window=None) -> tuple[Renovaci
     cycles = []
     automation_enabled = monthly_renewals_enabled()
     for item in list_collective_renewals(zoho=zoho, today=today, window=window):
-        cycle, created = RenovacionColectiva.objects.update_or_create(
-            cycle_key=_cycle_key(item),
-            defaults={
-                "policy_remote_id": item.remote_id, "policy_token": encrypt(item.token),
-                "masked_policy": item.policy, "client_label": item.client,
-                "branch_name": item.branch, "line_of_business": "Colectivo",
-                "expiry_date": item.expiry_date, "monthly_period": item.monthly_period,
-                "policy_status": item.policy_status, "payment_frequency": item.payment_frequency,
-                "seller_label": item.seller,
-                "scheduled_for": item.scheduled_for,
-            },
-        )
+        cycle_key = _cycle_key(item)
+        defaults = {
+            "policy_remote_id": item.remote_id, "policy_token": encrypt(item.token),
+            "masked_policy": item.policy, "client_label": item.client,
+            "branch_name": item.branch, "line_of_business": "Colectivo",
+            "expiry_date": item.expiry_date, "monthly_period": item.monthly_period,
+            "policy_status": item.policy_status, "payment_frequency": item.payment_frequency,
+            "seller_label": item.seller,
+        }
+        with transaction.atomic():
+            cycle = RenovacionColectiva.objects.select_for_update().filter(cycle_key=cycle_key).first()
+            if cycle is None:
+                cycle = RenovacionColectiva.objects.create(
+                    cycle_key=cycle_key, scheduled_for=item.scheduled_for, **defaults,
+                )
+                created = True
+            else:
+                for field, value in defaults.items():
+                    setattr(cycle, field, value)
+                cycle.save(update_fields=tuple(defaults) + ("updated_at",))
+                created = False
         if created:
             cycle.automation_eligible = automation_enabled
             cycle.save(update_fields=("automation_eligible", "updated_at"))

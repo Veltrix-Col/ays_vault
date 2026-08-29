@@ -171,13 +171,76 @@ class RenewalReadContractTests(SimpleTestCase):
 class RenewalSelectionTests(TestCase):
     def _notification_manager(self):
         user = get_user_model().objects.create_user("renewal-manager", password="Password123!")
-        permission = Permission.objects.get(
-            codename="manage_notifications",
+        permissions = Permission.objects.filter(
+            codename__in=("manage_notifications", "view_requests"),
             content_type__app_label="cotizacion_colectivos",
         )
-        user.user_permissions.add(permission)
+        user.user_permissions.add(*permissions)
         self.client.force_login(user)
         return user
+
+    def _scheduled_cycle(self, **overrides):
+        values = {
+            "cycle_key": "4991513000271000200:2026-09",
+            "policy_remote_id": "4991513000271000200",
+            "policy_token": "protected",
+            "masked_policy": "0400",
+            "client_label": "Empresa",
+            "branch_name": "VG deudores",
+            "monthly_period": "2026-09",
+            "scheduled_for": date(2026, 8, 31),
+            "status": RenovacionColectiva.Status.PROGRAMMED,
+            "automation_eligible": True,
+        }
+        values.update(overrides)
+        return RenovacionColectiva.objects.create(**values)
+
+    def test_authorized_can_edit_only_scheduled_date_with_master_switch_off(self):
+        self._notification_manager()
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
+        self.assertTrue(cycle.automation_eligible)
+        self.assertEqual(cycle.monthly_period, "2026-09")
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.PROGRAMMED)
+        self.assertIsNone(cycle.sent_at)
+
+    def test_schedule_edit_rejects_invalid_or_immutable_cycle(self):
+        self._notification_manager()
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "not-a-date"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+        cycle.status = RenovacionColectiva.Status.SENT
+        cycle.sent_at = timezone.now()
+        cycle.save(update_fields=("status", "sent_at", "updated_at"))
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    def test_schedule_edit_requires_internal_view_access_not_manage_notifications(self):
+        user = get_user_model().objects.create_user("renewal-viewer", password="Password123!")
+        self.client.force_login(user)
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 403)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    def test_internal_viewer_without_manage_notifications_can_edit_schedule(self):
+        user = get_user_model().objects.create_user("renewal-internal-viewer", password="Password123!")
+        permission = Permission.objects.get(codename="view_requests", content_type__app_label="cotizacion_colectivos")
+        user.user_permissions.add(permission)
+        self.client.force_login(user)
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
 
     def test_monthly_switch_authorized_toggles_and_persists_on_get(self):
         self._notification_manager()
@@ -195,6 +258,19 @@ class RenewalSelectionTests(TestCase):
 
         response = self.client.post(endpoint, {"enabled": "0", "next": reverse("cotizacion_colectivos:renewal_tracking")})
         self.assertEqual(response["Location"], reverse("cotizacion_colectivos:renewal_tracking"))
+        self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
+    def test_monthly_switch_internal_viewer_without_manage_notifications_can_toggle(self):
+        user = get_user_model().objects.create_user("renewal-internal-viewer", password="Password123!")
+        permission = Permission.objects.get(codename="view_requests", content_type__app_label="cotizacion_colectivos")
+        user.user_permissions.add(permission)
+        self.client.force_login(user)
+        endpoint = reverse("cotizacion_colectivos:monthly_renewals_toggle")
+        response = self.client.post(endpoint, {"enabled": "1"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+        response = self.client.post(endpoint, {"enabled": "0"})
+        self.assertEqual(response.status_code, 302)
         self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
 
     def test_monthly_switch_unauthorized_cannot_change_and_get_is_read_only(self):
@@ -274,6 +350,19 @@ class RenewalSelectionTests(TestCase):
         self.assertFalse(cycle.selected)
         self.assertEqual(cycle.monthly_period, "2026-09")
         self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    @override_settings(COLECTIVOS_RENEWAL_READ_CACHE_SECONDS=0)
+    def test_sync_does_not_overwrite_manually_rescheduled_date(self):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000015:2026-09", policy_remote_id="4991513000271000015",
+            policy_token="protected", masked_policy="0408", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 9, 2), status=RenovacionColectiva.Status.PROGRAMMED,
+        )
+        policy = RenewalPolicy(**{**self._policy("new@example.test").__dict__, "remote_id": cycle.policy_remote_id})
+        with patch("cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
 
     def test_new_cycle_records_automation_eligibility_at_sync_time(self):
         policy = self._policy("new@example.test")

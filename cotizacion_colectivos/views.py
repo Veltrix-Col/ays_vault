@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django import forms as django_forms
 from django.contrib import messages
 from django.core import signing
 from django.db import OperationalError, transaction
@@ -227,6 +228,8 @@ def index(request, mode=None):
             "renewal_sync_error": renewal_sync_error,
             "monthly_renewals_enabled": monthly_renewals_enabled(),
             "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
+            "can_edit_renewal_schedule": has_internal_permission(request, "view_requests"),
+            "can_manage_renewal_automation": has_internal_permission(request, "view_requests"),
         })
     return render(request, "cotizacion_colectivos/index.html", context)
 
@@ -234,7 +237,7 @@ def index(request, mode=None):
 @never_cache
 @require_http_methods(["POST"])
 def monthly_renewals_toggle(request):
-    if not has_internal_permission(request, "manage_notifications"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     enabled = str(request.POST.get("enabled") or "").lower() in {"1", "true", "on", "yes"}
     set_monthly_renewals_enabled(enabled=enabled, actor=get_internal_actor(request, create=True))
@@ -262,6 +265,43 @@ def renewal_toggle(request, cycle_id):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def renewal_schedule_update(request, cycle_id):
+    """Update only the scheduled date of an unsent programmed cycle."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    date_field = django_forms.DateField(input_formats=["%Y-%m-%d"], required=True)
+    try:
+        scheduled_for = date_field.clean(request.POST.get("scheduled_for"))
+    except ValidationError:
+        messages.error(request, "Selecciona una fecha válida.")
+        return redirect("cotizacion_colectivos:novelties_index")
+    with transaction.atomic():
+        try:
+            cycle = RenovacionColectiva.objects.select_for_update().get(pk=cycle_id)
+        except RenovacionColectiva.DoesNotExist:
+            raise Http404("Programación no encontrada")
+        if (
+            cycle.status != RenovacionColectiva.Status.PROGRAMMED
+            or cycle.sent_at is not None
+            or cycle.responded_at is not None
+        ):
+            messages.error(request, "Este envío ya no puede reprogramarse.")
+            return redirect("cotizacion_colectivos:novelties_index")
+        previous_date = cycle.scheduled_for
+        cycle.scheduled_for = scheduled_for
+        cycle.save(update_fields=("scheduled_for", "updated_at"))
+    audit(
+        request,
+        "UPDATE",
+        reason="renewal_schedule_updated",
+        metadata={"cycle_id": cycle_id, "previous_date": str(previous_date), "scheduled_for": str(scheduled_for)},
+    )
+    messages.success(request, "Fecha de envío actualizada.")
+    return redirect("cotizacion_colectivos:novelties_index")
+
+
+@never_cache
 @require_http_methods(["GET"])
 def renewal_tracking(request):
     if not has_internal_permission(request, "view_requests"):
@@ -281,6 +321,7 @@ def renewal_tracking(request):
         "renewal_tab": "tracking",
         "monthly_renewals_enabled": monthly_renewals_enabled(),
         "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
+        "can_manage_renewal_automation": has_internal_permission(request, "view_requests"),
         "colectivos_mode": resolve_tool_mode(request, NOVELTIES_MODE),
         **_environment_context(),
     })

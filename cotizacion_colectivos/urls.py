@@ -8,6 +8,7 @@ urlpatterns = [
     path("novedades/", views.index, {"mode": "novelties"}, name="novelties_index"),
     path("novedades/seguimiento/", views.renewal_tracking, name="renewal_tracking"),
     path("novedades/renovaciones/<int:cycle_id>/seleccion/", views.renewal_toggle, name="renewal_toggle"),
+    path("novedades/renovaciones/<int:cycle_id>/programacion/", views.renewal_schedule_update, name="renewal_schedule_update"),
     path("novedades/renovaciones/<int:cycle_id>/reenviar/", views.renewal_resend, name="renewal_resend"),
     path("novedades/renovaciones/automatizacion/", views.monthly_renewals_toggle, name="monthly_renewals_toggle"),
     path("solicitudes-renovaciones/", views.index, {"mode": "requests"}, name="requests_index"),
