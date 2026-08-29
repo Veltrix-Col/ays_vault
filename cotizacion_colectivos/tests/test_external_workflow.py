@@ -245,6 +245,29 @@ class ExternalWorkflowTests(TestCase):
         self.assertNotEqual(self.request.status, self.request.Status.ANSWERED)
         self.assertFalse(NotificacionColectivos.objects.filter(notification_type="CLIENT_RESPONSE").exists())
 
+    @patch("cotizacion_colectivos.services.external.enqueue_task")
+    def test_novelties_submit_builds_task_contract_from_persisted_policy_seller(self, enqueue):
+        self.request.encrypted_snapshot = encrypt(json.dumps({
+            "version": 1,
+            "policy": {"seller": "Fonconstruimos"},
+            "group": [],
+            "warnings": [],
+        }))
+        self.request.save(update_fields=("encrypted_snapshot",))
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{"record": str(self.record.public_key), "action": "RETIRAR", "fecha_retiro": "2026-09-01"}],
+            observations="",
+        )
+        submit_response(access=access, response=response, declaration=True)
+        payload = enqueue.call_args.kwargs["payload"]
+        self.assertEqual(payload.area, "Negocios Bienestar y Beneficios")
+        self.assertEqual(payload.analyst_request, "Si")
+        self.assertEqual(payload.seller, "Fonconstruimos")
+        self.assertEqual(payload.responsible, "")
+        self.assertEqual(payload.responsible_email, "")
+
     def test_explicit_no_changes_submits_empty_response_and_closes_access(self):
         access = self.verified_access()
         response = save_response(access=access, rows=[], observations="")

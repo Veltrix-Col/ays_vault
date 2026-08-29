@@ -34,7 +34,13 @@ from ..models import (
     SolicitudColectivo,
     RenovacionColectiva,
 )
-from .task_publisher import ColectivosTaskPayload, enqueue_task
+from .task_publisher import (
+    NOVELTIES_ANALYST_REQUEST,
+    NOVELTIES_TASK_AREA,
+    ColectivosTaskPayload,
+    enqueue_task,
+)
+from .requests import request_snapshot
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
@@ -605,6 +611,9 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
             kinds.add("INCLUSION")
         elif change.action == CambioSolicitudColectivo.Action.RETIRE:
             kinds.add("RETIRO")
+    snapshot = request_snapshot(request)
+    policy_snapshot = snapshot.get("policy") if isinstance(snapshot, dict) else {}
+    seller = str(policy_snapshot.get("seller") or "").strip() if isinstance(policy_snapshot, dict) else ""
     for kind in sorted(kinds):
         label = "Ingreso" if kind == "INCLUSION" else "Retiro"
         observations = [f"Solicitud de {label.lower()} de {request.branch_name or 'ramo no informado'}." ]
@@ -638,6 +647,9 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
                 branch_code=str(request.branch_code),
                 local_reference=str(request.public_id),
                 subject=f"{label} · {request.branch_name or 'Ramo'} · {request.client_label or 'Cliente'}"[:255],
+                area=NOVELTIES_TASK_AREA,
+                analyst_request=NOVELTIES_ANALYST_REQUEST,
+                seller=seller,
                 observations="\n".join(observations)[:2000],
             ),
             event_version=locked.version,

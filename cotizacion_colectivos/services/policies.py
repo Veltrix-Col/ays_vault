@@ -229,6 +229,7 @@ class PolicyService:
             payment_method=_text(policy.get("Medio_de_pago")),
             payment_periodicity=_text(policy.get("Periodicidad_de_pago")),
             commercial_email=_text(policy.get("Correo_gesti_n_comercial")),
+            seller=_text(policy.get("Vendedor")),
         )
 
     def group(self, token: str, *, source_kind: str | None = None, refresh: bool = False) -> tuple[PolicyDetail, tuple[GroupMember, ...]]:

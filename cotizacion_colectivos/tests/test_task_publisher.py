@@ -110,6 +110,31 @@ class TaskPublisherTests(TestCase):
             "Correo_responsable", "Fecha_de_solicitud_del_cliente",
         })
 
+    @patch("cotizacion_colectivos.services.task_publisher.colectivos_zoho")
+    @patch("cotizacion_colectivos.services.task_publisher.cached_metadata_fields")
+    def test_novelties_task_contract_includes_area_analyst_request_and_valid_seller(self, metadata, facade):
+        metadata.return_value = (SimpleNamespace(api_name="Vendedor", pick_list_values=(
+            {"actual_value": "Fonconstruimos", "display_value": "Fonconstruimos"},
+        )),)
+        record = build_task_record(ColectivosTaskPayload(
+            request_kind="RETIRO", source_kind="request", policy_context="", branch_code="40",
+            local_reference="COL-LOCAL", area="Negocios Bienestar y Beneficios",
+            analyst_request="Si", seller="Fonconstruimos",
+        ))
+        self.assertEqual(record["rea"], "Negocios Bienestar y Beneficios")
+        self.assertEqual(record["Solicitud_a_analista"], "Si")
+        self.assertEqual(record["Vendedor"], "Fonconstruimos")
+        self.assertNotIn("Responsable", record)
+        facade.assert_called_once()
+
+    @patch("cotizacion_colectivos.services.task_publisher.colectivos_zoho")
+    @patch("cotizacion_colectivos.services.task_publisher.cached_metadata_fields", return_value=())
+    def test_invalid_or_empty_novelties_seller_is_omitted(self, metadata, facade):
+        invalid = build_task_record(ColectivosTaskPayload("RETIRO", "request", "", "40", "COL", seller="No existe"))
+        empty = build_task_record(ColectivosTaskPayload("RETIRO", "request", "", "40", "COL", seller=""))
+        self.assertNotIn("Vendedor", invalid)
+        self.assertNotIn("Vendedor", empty)
+
     def test_responsible_options_use_metadata_actual_and_display_values(self):
         field = SimpleNamespace(api_name="Responsable", pick_list_values=(
             {"actual_value": "Sara Rua Vargas", "display_value": "Sara Rua Vargas · A&S"},

@@ -169,6 +169,7 @@ class PolicyDetail:
     payment_method: str = ""
     payment_periodicity: str = ""
     commercial_email: str = ""
+    seller: str = ""
 
 
 @dataclass(frozen=True)
