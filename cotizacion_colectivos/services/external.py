@@ -19,11 +19,11 @@ from vault.crypto import decrypt, encrypt
 from vault.notifications import send_notification
 from .otp_email import build_otp_email
 from .mappings import (
-    CONTACT_ID_TYPE_CHOICES,
     INSURED_STATE_CHOICES,
     RELATION_ROLE_CHOICES,
     RELATIONSHIP_CHOICES,
 )
+from .catalogs import CatalogUnavailable, identification_type_values
 
 from ..models import (
     AccesoExternoSolicitudColectivo,
@@ -465,6 +465,12 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
     scoped_policy_ids = None
     if policy_count == 1:
         scoped_policy_ids = set(request.policies.values_list("id", flat=True))
+    valid_id_types = None
+    if any(str(row.get("action", "")).strip().upper() == CambioSolicitudColectivo.Action.INCLUDE for row in rows):
+        try:
+            valid_id_types = identification_type_values()
+        except CatalogUnavailable as exc:
+            raise ExternalAccessError("No fue posible cargar los tipos de identificación vigentes.") from exc
     for position, row in enumerate(rows, 1):
         action = str(row.get("action", "")).strip().upper()
         if action not in ALLOWED_ACTIONS:
@@ -517,7 +523,7 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             raise ExternalAccessError("La fecha solicitada de ingreso es obligatoria.")
         if action == CambioSolicitudColectivo.Action.INCLUDE:
             if (
-                fields["tipo_id"] not in CONTACT_ID_TYPE_CHOICES
+                fields["tipo_id"] not in valid_id_types
                 or fields["rol"] not in RELATION_ROLE_CHOICES
                 or not fields["documento"].isdigit()
                 or not fields["nombres"]

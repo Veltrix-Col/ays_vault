@@ -27,7 +27,7 @@ from cotizacion_colectivos.models import (
     ColectivosTaskOutbox,
     NotificacionCotizacionIndividual,
 )
-from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema
+from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema, with_identification_choices
 from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
 from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
 from cotizacion_colectivos.services.individual_access import IndividualAccessError, generate_individual_access, issue_individual_otp
@@ -54,6 +54,9 @@ POLICY_TOKEN = sign_record_id(
     "policy",
     context={"source_id": "5234567890123456789", "source_kind": "company"},
 )
+
+TEST_IDENTIFICATION_CHOICES = (("PAS", "Pasaporte"), ("CC", "Cédula"))
+_BASE_GET_BRANCH_SCHEMA = get_branch_schema
 
 
 def valid_minimal_pdf_bytes():
@@ -156,6 +159,18 @@ class IndividualQuotationTests(TestCase):
         self.actor = get_user_model().objects.create_user(
             username="individual-owner", password="safe-test-password",
         )
+        # Direct form tests intentionally use the same explicit catalog
+        # injection as the production view.  This keeps their fixtures close
+        # to a request carrying Contacts.Tipo_ID metadata without making the
+        # form query Zoho or reintroducing a hardcoded production catalog.
+        self._schema_patch = patch(
+            "cotizacion_colectivos.tests.test_individual_quotation.get_branch_schema",
+            side_effect=lambda slug: with_identification_choices(
+                _BASE_GET_BRANCH_SCHEMA(slug), TEST_IDENTIFICATION_CHOICES,
+            ),
+        )
+        self._schema_patch.start()
+        self.addCleanup(self._schema_patch.stop)
 
     def context_token(self, *, schema_slug="salud"):
         schema = get_branch_schema(schema_slug)
@@ -305,7 +320,10 @@ class IndividualQuotationTests(TestCase):
 
     def workspace(self, schema_slug):
         schema = get_branch_schema(schema_slug)
-        return policy(), (affiliate(),), {"storage": "database"}, schema
+        return (
+            policy(), (affiliate(),), {"storage": "database"}, schema,
+            TEST_IDENTIFICATION_CHOICES,
+        )
 
     def test_mobility_vehicle_class_is_an_allowlisted_required_select_and_plate_stays_visible(self):
         schema = get_branch_schema("movilidad")
@@ -516,12 +534,16 @@ class IndividualQuotationTests(TestCase):
         )
         self.assertTrue(context["requires_declared_company"])
         data = {"items_payload": json.dumps({"people": [self.person()]})}
-        missing = IndividualQuotationForm(data, schema=schema, context=context)
+        missing = IndividualQuotationForm(
+            data, schema=schema, context=context,
+            identification_choices=TEST_IDENTIFICATION_CHOICES,
+        )
         self.assertFalse(missing.is_valid())
         self.assertIn("declared_company", missing.errors)
         valid = IndividualQuotationForm(
             {**data, "declared_company": "Constructora Ejemplo S.A.S."},
             schema=schema, context=context,
+            identification_choices=TEST_IDENTIFICATION_CHOICES,
         )
         self.assertTrue(valid.is_valid(), valid.errors)
         self.assertEqual(valid.cleaned_data["declared_company"], "Constructora Ejemplo S.A.S.")

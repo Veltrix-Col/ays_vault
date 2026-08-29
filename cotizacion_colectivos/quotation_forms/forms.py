@@ -43,10 +43,27 @@ class IndividualQuotationForm(forms.Form):
     items_payload = forms.CharField(widget=forms.HiddenInput)
     attachments = MultipleFileField(required=False, label="Documentos de soporte")
 
-    def __init__(self, *args, schema: BranchSchema, context=None, **kwargs):
+    def __init__(self, *args, schema: BranchSchema, context=None, identification_choices=None, **kwargs):
         self.schema = schema
         self.context = context or {}
         super().__init__(*args, **kwargs)
+        injected_choices = None if identification_choices is None else tuple(identification_choices)
+        self._identification_values = frozenset(
+            item[0] if isinstance(item, (tuple, list)) else item
+            for item in (injected_choices or ())
+        )
+        if injected_choices is None:
+            schema_id_fields = tuple(schema.fields) + tuple(
+                field for group in schema.repeatables for field in group.fields
+            )
+            self._identification_values = frozenset(
+                item[0] if isinstance(item, (tuple, list)) else item
+                for field in schema_id_fields
+                if field.kind == "choice" and (
+                    field.key == "id_type" or field.key.endswith("_id_type")
+                )
+                for item in field.choices
+            )
         locked_fields = set(self.context.get("locked_fields") or ())
         existing_person = bool(self.context.get("affiliate_key"))
         for definition in schema.fields:
@@ -68,10 +85,20 @@ class IndividualQuotationForm(forms.Form):
             elif definition.kind == "document":
                 self.fields[definition.key].widget = forms.TextInput(attrs={"autocomplete": "off"})
             elif definition.kind == "choice":
+                choices = (
+                    injected_choices
+                    if injected_choices is not None and (
+                        definition.key == "id_type" or definition.key.endswith("_id_type")
+                    )
+                    else definition.choices
+                )
                 self.fields[definition.key] = forms.ChoiceField(
                     label=definition.label,
                     required=required,
-                    choices=(("", "Seleccione"),) + tuple((item, item) for item in definition.choices),
+                    choices=(("", "Seleccione"),) + tuple(
+                        item if isinstance(item, (tuple, list)) else (item, item)
+                        for item in choices
+                    ),
                     initial=self.context.get(definition.key, ""),
                     disabled=definition.key in locked_fields,
                 )
@@ -87,8 +114,7 @@ class IndividualQuotationForm(forms.Form):
             )
             self.fields["declared_company"].widget.attrs["placeholder"] = PLACEHOLDERS["declared_company"]
 
-    @staticmethod
-    def _clean_value(definition: FieldSchema, raw, *, required=None):
+    def _clean_value(self, definition: FieldSchema, raw, *, required=None):
         if definition.kind == "checkbox":
             return raw in {True, 1, "1", "true", "True", "sí", "Sí", "si", "Si"}
         required = definition.required if required is None else required
@@ -105,7 +131,18 @@ class IndividualQuotationForm(forms.Form):
             raise forms.ValidationError("Ingrese un teléfono válido.")
         if value and definition.kind == "date" and parse_date(value) is None:
             raise forms.ValidationError("Ingrese una fecha válida.")
-        if value and definition.choices and value not in definition.choices:
+        if definition.kind == "choice":
+            allowed = (
+                self._identification_values
+                if definition.key == "id_type" or definition.key.endswith("_id_type")
+                else frozenset(
+                    item[0] if isinstance(item, (tuple, list)) else item
+                    for item in definition.choices
+                )
+            )
+            if value and allowed and value not in allowed:
+                raise forms.ValidationError("Seleccione una opción válida.")
+        elif value and definition.choices and value not in definition.choices:
             raise forms.ValidationError("Seleccione una opción válida.")
         return value
 

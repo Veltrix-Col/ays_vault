@@ -30,6 +30,7 @@ from django.template.loader import render_to_string
 from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, NoveltyEditForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
+from .services.catalogs import CatalogUnavailable, identification_choice_pairs
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
 from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
@@ -3042,7 +3043,12 @@ def individual_complete_person(request, token):
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
         _ensure_individual_can_operate_zoho(quotation)
-        form = PersonCompletionForm(request.POST)
+        try:
+            identification_choices = identification_choice_pairs()
+        except CatalogUnavailable as exc:
+            messages.warning(request, str(exc))
+            return redirect("cotizacion_colectivos:individual_expedient", token=token)
+        form = PersonCompletionForm(request.POST, identification_choices=identification_choices)
         if not form.is_valid():
             for error in form.errors.values():
                 messages.warning(request, " ".join(str(item) for item in error))

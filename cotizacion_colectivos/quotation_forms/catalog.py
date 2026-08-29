@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from django.http import Http404
 
@@ -42,7 +42,8 @@ class BranchSchema:
     version: int = 1
 
 
-IDENTIFICATION_CHOICES = ("CC", "CE", "TI", "RC", "Pasaporte", "NIT")
+# Populated per request from the authoritative Contacts.Tipo_ID metadata.
+IDENTIFICATION_CHOICES: tuple[str, ...] = ()
 GENDER_CHOICES = ("Femenino", "Masculino", "Otro", "Prefiero no indicar")
 ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro familiar")
 VEHICLE_CLASS_CHOICES = (
@@ -190,6 +191,31 @@ BRANCH_SCHEMAS = (
 )
 
 _BY_SLUG = {item.slug: item for item in BRANCH_SCHEMAS}
+
+
+def with_identification_choices(schema: BranchSchema, choices) -> BranchSchema:
+    """Clone a schema replacing every identification field's choices."""
+
+    normalized = tuple(
+        (item, item) if isinstance(item, str) else (item[0], item[1])
+        for item in (choices or ())
+    )
+    def update_field(field: FieldSchema) -> FieldSchema:
+        if field.kind == "choice" and (
+            field.key == "id_type" or field.key.endswith("_id_type")
+        ):
+            return replace(field, choices=normalized)
+        return field
+    return replace(
+        schema,
+        fields=tuple(update_field(field) for field in schema.fields),
+        repeatables=tuple(
+            replace(group, fields=tuple(update_field(field) for field in group.fields))
+            for group in schema.repeatables
+        ),
+    )
+
+
 def get_branch_schema(slug: str) -> BranchSchema:
     try:
         return _BY_SLUG[slug]

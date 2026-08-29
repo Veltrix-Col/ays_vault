@@ -65,8 +65,7 @@ INSURED_CONTACT_ROLES = (
     ("Beneficiario", "Beneficiario"),
 )
 
-# Catálogos cerrados tomados de fields.json. Plan permanece libre porque es text.
-CONTACT_ID_TYPE_CHOICES = ("CC", "CE", "RC", "TI", "PP", "PEP", "EX", "NUIP", "PPT", "NIT")
+# Tipo_ID is loaded per request from Contacts metadata; Plan remains free text.
 RELATIONSHIP_CHOICES = (
     "Afiliado", "Abuelo", "Cónyuge", "Compañero permanente", "Cuñado",
     "Exesposo", "Hermano", "Hijo", "Nieto", "Novio", "Primo",
