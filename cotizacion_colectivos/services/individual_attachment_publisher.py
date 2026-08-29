@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
 
 from vault.crypto import decrypt
+from ..filenames import build_attachment_filename
 from .write_guards import require_write_guard
 
 
@@ -142,7 +143,16 @@ def _publish_attachment(*, attachment, module: str, record_id: str, zoho=None):
     try:
         content = base64.b64decode(decrypt(target.read_bytes().decode()).encode())
         stream = BytesIO(content)
-        stream.name = Path(attachment.safe_original_name).name
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        stream.name = build_attachment_filename(
+            document_type=document_type,
+            original_filename=attachment.safe_original_name,
+            identification_type=metadata.get("identification_type", ""),
+            identification_number=metadata.get("identification_number", ""),
+            plate=metadata.get("plate", ""),
+            policy_number=metadata.get("policy_number", ""),
+            detail=metadata.get("filename_detail", ""),
+        )
         result = (zoho or _get_zoho()).attachments.upload(
             module=module, record_id=record_id, file=stream,
             filename=stream.name, content_type=attachment.detected_mime,

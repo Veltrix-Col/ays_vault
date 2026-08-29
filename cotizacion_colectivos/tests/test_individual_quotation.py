@@ -45,6 +45,7 @@ from cotizacion_colectivos.services.individual_attachment_publisher import (
     _validate_document_contract,
     publish_attachment,
 )
+from cotizacion_colectivos.filenames import build_attachment_filename
 from cotizacion_colectivos.views import _HIDDEN_RESPONSE_KEYS, _attachment_can_publish, _attachment_document_status, _human_response_value
 from cotizacion_colectivos.services.common import sign_record_id
 
@@ -1245,6 +1246,36 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(hashlib.sha256(restored).hexdigest(), hashlib.sha256(original).hexdigest())
         self.assertEqual(restored, original)
 
+    def test_zoho_attachment_filename_is_canonical_and_deterministic(self):
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="CC",
+                identification_number="1019059650", original_filename="original.PDF",
+            ),
+            "CEDULA_CC_1019059650.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="PAS",
+                identification_number="AB123456", original_filename="doc.pdf",
+            ),
+            "PASAPORTE_PAS_AB123456.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="vehicle_registration", plate="abc123",
+                original_filename="tarjeta.PdF",
+            ),
+            "TARJETA_PROPIEDAD_ABC123.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="CE",
+                identification_number="á/ 10:19", original_filename="x.JpG",
+            ),
+            "CEDULA_EXTRANJERIA_CE_A_10_19.jpg",
+        )
+
     def test_legacy_vehicle_document_contract_remains_controlled(self):
         self.assertEqual(
             _validate_document_contract(
@@ -1338,6 +1369,40 @@ class IndividualQuotationTests(TestCase):
             with self.assertRaises(IndividualAttachmentUncertain):
                 publish_attachment(attachment=attachment, module="Contacts", record_id="4991513000000000001")
         get_zoho.assert_not_called()
+
+    @override_settings(
+        COLECTIVOS_PRIVATE_ROOT=".",
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
+    )
+    def test_attachment_publisher_changes_only_zoho_filename(self):
+        from cotizacion_colectivos.services.individual_attachment_publisher import _publish_attachment
+
+        original = valid_minimal_pdf_bytes()
+        target = Path(self.private.name) / "individual_quotations" / "publisher-test.enc"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encrypt(base64.b64encode(original).decode()).encode())
+        attachment = SimpleNamespace(
+            stored_path="publisher-test.enc", safe_original_name="cliente.PDF",
+            detected_mime="application/pdf", safe_metadata={
+                "owner_type": "contact", "document_type": "identity_document",
+                "identification_type": "CC", "identification_number": "1019059650",
+            }, save=Mock(),
+        )
+        upload = Mock(return_value={"attachment_id": "4991513000000000002"})
+        zoho = SimpleNamespace(attachments=SimpleNamespace(upload=upload))
+        with patch("cotizacion_colectivos.services.individual_attachment_publisher.settings.COLECTIVOS_PRIVATE_ROOT", self.private.name):
+            result = _publish_attachment(
+                attachment=attachment, module="Contacts", record_id="4991513000000000001", zoho=zoho,
+            )
+        uploaded = upload.call_args.kwargs
+        self.assertEqual(uploaded["filename"], "CEDULA_CC_1019059650.pdf")
+        self.assertEqual(uploaded["file"].getvalue(), original)
+        self.assertEqual(uploaded["content_type"], "application/pdf")
+        self.assertEqual(uploaded["module"], "Contacts")
+        self.assertEqual(uploaded["record_id"], "4991513000000000001")
+        self.assertEqual(result["attachment_id"], "4991513000000000002")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):

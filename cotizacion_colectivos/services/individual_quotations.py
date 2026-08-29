@@ -220,7 +220,7 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
     return tuple(validated)
 
 
-def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key=""):
+def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key="", filename_context=None):
     """Encrypt and persist one file with an explicit local functional owner."""
     uploaded = item["uploaded"]
     content = uploaded.read()
@@ -256,6 +256,11 @@ def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="l
                 "document_type": str(document_type)[:32],
                 "field_key": str(field_key or document_type)[:64],
                 **({"risk_key": str(risk_key)[:80]} if risk_key else {}),
+                **({
+                    key: str(value)[:120]
+                    for key, value in (filename_context or {}).items()
+                    if key in {"identification_type", "identification_number", "plate", "policy_number", "filename_detail"} and value
+                }),
             },
         ), target
     except Exception:
@@ -271,6 +276,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     normalized_items = cleaned_data["normalized_items"]
     allowed_owners = {"affiliate"}
     row_owners = {}
+    row_contexts = {}
     for group_key, rows in normalized_items.items():
         for index, row in enumerate(rows or ()):
             if not isinstance(row, dict):
@@ -292,6 +298,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 "vehicle_registration" if group_key == "vehicles" else "identity_document",
                 same_person,
             )
+            row_contexts[entity_key] = row
             if group_key == "vehicles" or not same_person:
                 allowed_owners.add(entity_key)
             if group_key == "vehicles" and not row.get("insured_same_as_requester"):
@@ -354,6 +361,21 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
             role, document_type, duplicate = ("affiliate", "identity_document", False) if owner_key == "affiliate" else row_owners[owner_key]
             if duplicate:
                 continue
+            filename_context = {}
+            if owner_key == "affiliate":
+                filename_context = {
+                    "identification_type": captured_fields.get("requester_id_type", ""),
+                    "identification_number": captured_fields.get("requester_document", ""),
+                }
+            else:
+                source_row = row_contexts.get(owner_key) or row_contexts.get(owner_key.removesuffix("-insured")) or {}
+                if role == "risk":
+                    filename_context = {"plate": source_row.get("plate", "")}
+                else:
+                    filename_context = {
+                        "identification_type": source_row.get("insured_id_type", ""),
+                        "identification_number": source_row.get("insured_document", ""),
+                    }
             _, target = _store_individual_file(
                 quotation=quotation,
                 item=validated[0],
@@ -362,6 +384,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 document_type=document_type,
                 field_key=document_type,
                 risk_key=owner_key if role == "risk" else "",
+                filename_context=filename_context,
             )
             created_paths.append(target)
         if actor is not None:
