@@ -17,6 +17,7 @@
 .environment-badge, .state-chip { display: inline-flex; align-items: center; border-radius: 999px; background: #e7f6ef; color: #176347; padding: 7px 12px; font-size: .82rem; font-weight: 700; }
 .environment-badge--production { background: #fff0df; color: #8a3f00; border: 1px solid #e7b57d; }
 .colectivos-main { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: clamp(28px, 5vw, 64px) 0 72px; }
+.colectivos-main--novelties { width: min(1540px, calc(100% - 32px)); }
 .page-heading { max-width: 760px; margin-bottom: 32px; }
 .page-heading--compact { margin-bottom: 22px; }
 .eyebrow { display: block; margin-bottom: 8px; color: #0875b8; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -178,6 +179,7 @@
   .novelties-workspace-layout { grid-template-columns:1fr; }
   .result-card { align-items: flex-start; flex-direction: column; }
   .colectivos-main { width: min(100% - 24px, 1480px); }
+  .colectivos-main--novelties { width: min(100% - 24px, 1480px); }
   .relation-card, .results-section, .search-panel, .detail-hero { padding: 18px; }
   .search-panel--compact { max-width: none; margin-left: 0; }
   .tool-card { padding: 22px; }

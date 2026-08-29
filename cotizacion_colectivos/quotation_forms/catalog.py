@@ -126,7 +126,7 @@ VEHICLE_FIELDS = (
     # insured_name/insured_is_different se conservan para leer snapshots
     # históricos. Los registros nuevos usan una relación explícita y datos
     # estructurados cuando el asegurado no es el solicitante.
-    FieldSchema("insured_same_as_requester", "El asegurado del vehículo es el mismo solicitante", "checkbox", required=False),
+    FieldSchema("insured_same_as_requester", "El asegurado es el mismo afiliado", "checkbox", required=False),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),
     FieldSchema("insured_first_name", "Nombres del asegurado", required=False),

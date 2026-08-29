@@ -36,7 +36,7 @@ RENEWAL_SYNC_CACHE_KEY = "cotizacion_colectivos:renewals:last_sync:v2"
 POLICY_FIELDS = (
     "id", "Name", "Ramo", "L_nea_de_negocio", "Tomador_principal1",
     "Estado_de_la_p_liza", "Frecuencia", "Correo_gesti_n_comercial",
-    "P_liza_Fecha_fin_de_la_vigencia", "Aseguradora1",
+    "P_liza_Fecha_fin_de_la_vigencia", "Aseguradora1", "Vendedor",
 )
 ALLOWED_BRANCHES = {"vg deudores", "vg patronal", "ap colectivo"}
 ACTIVE_POLICY_VALUES = {"vigente"}
@@ -55,6 +55,7 @@ class RenewalPolicy:
     payment_frequency: str
     monthly_period: str
     scheduled_for: date
+    seller: str = ""
 
 
 def _date(value):
@@ -173,6 +174,7 @@ def _map_record(record: dict, *, today: date, window: int) -> RenewalPolicy | No
         payment_frequency=str(record.get("Frecuencia") or ""),
         monthly_period=period,
         scheduled_for=last_business_day(today.year, today.month),
+        seller=str(record.get("Vendedor") or "").strip(),
     )
 
 
@@ -238,6 +240,7 @@ def sync_renewal_cycles(*, zoho=None, today=None, window=None) -> tuple[Renovaci
                 "branch_name": item.branch, "line_of_business": "Colectivo",
                 "expiry_date": item.expiry_date, "monthly_period": item.monthly_period,
                 "policy_status": item.policy_status, "payment_frequency": item.payment_frequency,
+                "seller_label": item.seller,
                 "scheduled_for": item.scheduled_for,
             },
         )

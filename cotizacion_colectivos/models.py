@@ -249,6 +249,7 @@ class RenovacionColectiva(models.Model):
     monthly_period = models.CharField(max_length=7, blank=True, db_index=True)
     policy_status = models.CharField(max_length=40, blank=True)
     payment_frequency = models.CharField(max_length=40, blank=True)
+    seller_label = models.CharField(max_length=120, blank=True, default="")
     encrypted_recipient = models.TextField(blank=True, editable=False)
     recipient_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     selected = models.BooleanField(default=False, db_index=True)

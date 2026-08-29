@@ -14,7 +14,7 @@
   </a>
   <div class="header-actions"><div class="colectivos-header-tools">{% include "cotizacion_colectivos/_quick_tools_nav.html" %}</div><div class="environment-badge environment-badge--{{ zoho_environment.css_class }}" title="Perfil Zoho activo">Perfil Zoho activo: {{ zoho_environment.label|upper }} · Solo lectura</div></div>
 </header>
-<main id="main-content" class="colectivos-main" tabindex="-1">{% if messages %}<div class="toast-stack" aria-live="polite">{% for message in messages %}<div class="toast {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
+<main id="main-content" class="colectivos-main{% if colectivos_mode.code == 'novelties' %} colectivos-main--novelties{% endif %}" tabindex="-1">{% if messages %}<div class="toast-stack" aria-live="polite">{% for message in messages %}<div class="toast {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
 <script src="{% static 'js/colectivos-loading.js' %}" defer></script>
 {% block scripts %}{% endblock %}
 </body></html>

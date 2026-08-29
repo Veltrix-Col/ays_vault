@@ -82,6 +82,35 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn('{{ cycle.masked_policy }} / <span class="muted">{{ cycle.monthly_period_label }}</span>', content)
         self.assertNotIn("{{ cycle.monthly_period }}", content)
 
+    def test_upcoming_table_places_vendedor_between_branch_and_frequency(self):
+        content = Path("templates/cotizacion_colectivos/index.html").read_text(encoding="utf-8")
+        self.assertIn("<th scope=\"col\">Ramo</th><th scope=\"col\">Vendedor</th><th scope=\"col\">Periodicidad</th>", content)
+        html = render_to_string("cotizacion_colectivos/index.html", {
+            "colectivos_mode": TOOL_MODES[NOVELTIES_MODE],
+            "form": ClientSearchForm(), "zoho_environment": SimpleNamespace(css_class="sandbox", label="Sandbox"),
+            "colectivos_navigation": {}, "renewal_cycles": (SimpleNamespace(
+                policy_access_token="token", masked_policy="0400", client_label="Empresa",
+                branch_name="VG deudores", seller_label="Vendedor Uno", payment_frequency="Mensual",
+                recipient_email="qa@example.test", scheduled_for=None,
+                get_status_display=lambda: "Programado",
+            ),), "renewal_tab": "upcoming", "renewal_dashboard": {},
+            "renewal_target_period_label": "Septiembre 2026", "renewal_sync_error": "", "messages": (),
+        })
+        self.assertIn("Vendedor Uno", html)
+        empty_html = render_to_string("cotizacion_colectivos/index.html", {
+            "colectivos_mode": TOOL_MODES[NOVELTIES_MODE],
+            "form": ClientSearchForm(), "zoho_environment": SimpleNamespace(css_class="sandbox", label="Sandbox"),
+            "colectivos_navigation": {}, "renewal_cycles": (SimpleNamespace(
+                policy_access_token="token", masked_policy="0400", client_label="Empresa",
+                branch_name="VG deudores", seller_label="", payment_frequency="Mensual",
+                recipient_email="qa@example.test", scheduled_for=None,
+                get_status_display=lambda: "Programado",
+            ),), "renewal_tab": "upcoming", "renewal_dashboard": {},
+            "renewal_target_period_label": "Septiembre 2026", "renewal_sync_error": "", "messages": (),
+        })
+        self.assertIn("—", empty_html)
+        self.assertNotIn(">None<", empty_html)
+
     def test_monthly_switch_is_interactive_only_for_authorized_context(self):
         template = "cotizacion_colectivos/_renewal_panel_nav.html"
         base = {

@@ -14,7 +14,7 @@ from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
-from cotizacion_colectivos.services.renewals import RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
+from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
 
 
 class RenewalEmailCommandTests(SimpleTestCase):
@@ -64,6 +64,20 @@ class RenewalEmailCommandTests(SimpleTestCase):
 
 
 class RenewalReadContractTests(SimpleTestCase):
+    def test_policy_read_contract_includes_and_maps_vendedor(self):
+        self.assertIn("Vendedor", POLICY_FIELDS)
+        mapped = _map_record({
+            "id": "4991513000271000012", "Name": "0405", "Ramo": "VG patronal",
+            "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual",
+            "Vendedor": "  Vendedor Sandbox  ",
+        }, today=date(2026, 8, 24), window=30)
+        self.assertEqual(mapped.seller, "Vendedor Sandbox")
+        without = _map_record({
+            "id": "4991513000271000013", "Name": "0406", "Ramo": "VG patronal",
+            "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "Vendedor": None,
+        }, today=date(2026, 8, 24), window=30)
+        self.assertEqual(without.seller, "")
+
     def test_active_monthly_allowed_policy_is_eligible_even_with_annual_contract_term(self):
         included = _map_record({"id": "4991513000271000001", "Name": "0400", "Ramo": "VG patronal", "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "Modo_de_pago": "Fraccionado", "Periodicidad_de_pago": None, "P_liza_Fecha_de_inicio_vigencia": "2026-01-01", "P_liza_Fecha_fin_de_la_vigencia": "2026-12-31", "Tomador_principal1": "Empresa", "Correo_gesti_n_comercial": "empresa@example.test"}, today=date(2026, 8, 24), window=30)
         self.assertIsNotNone(included)
@@ -85,15 +99,19 @@ class RenewalReadContractTests(SimpleTestCase):
 
     def test_list_uses_server_side_collective_criteria(self):
         class Search:
-            def __init__(self): self.criteria = None
+            def __init__(self): self.criteria = None; self.calls = 0; self.fields = None
             def by_criteria(self, **kwargs):
+                self.calls += 1
                 self.criteria = kwargs["criteria"]
+                self.fields = kwargs["fields"]
                 return SimpleNamespace(records=[{"id": "4991513000271000001", "Name": "0400", "Ramo": "AP colectivo", "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "P_liza_Fecha_fin_de_la_vigencia": "2026-09-10"}], more_records=False)
         search = Search()
         fake = SimpleNamespace(search=search)
         rows = list_collective_renewals(zoho=fake, today=date(2026, 8, 24))
         self.assertEqual(len(rows), 1)
         self.assertIn("Ramo:equals:", search.criteria)
+        self.assertIn("Vendedor", search.fields)
+        self.assertEqual(search.calls, 3)
 
     def test_empty_exact_search_does_not_sweep_all_policies_in_interactive_read(self):
         class Search:
@@ -237,6 +255,25 @@ class RenewalSelectionTests(TestCase):
             sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
         cycle.refresh_from_db()
         self.assertEqual(cycle.recipient_email, "new@example.test")
+
+    @override_settings(COLECTIVOS_RENEWAL_READ_CACHE_SECONDS=0)
+    def test_sync_persists_seller_without_changing_operational_state(self):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000014:2026-09", policy_remote_id="4991513000271000014",
+            policy_token="protected", masked_policy="0407", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31), status=RenovacionColectiva.Status.PROGRAMMED,
+            automation_eligible=True, selected=False,
+        )
+        policy = RenewalPolicy(**{**self._policy("new@example.test").__dict__, "remote_id": cycle.policy_remote_id, "seller": "Vendedor Uno"})
+        with patch("cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.seller_label, "Vendedor Uno")
+        self.assertTrue(cycle.automation_eligible)
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.PROGRAMMED)
+        self.assertFalse(cycle.selected)
+        self.assertEqual(cycle.monthly_period, "2026-09")
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
 
     def test_new_cycle_records_automation_eligibility_at_sync_time(self):
         policy = self._policy("new@example.test")
