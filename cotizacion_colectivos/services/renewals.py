@@ -308,16 +308,21 @@ def _monthly_period_label(period):
         return str(period or "periodo solicitado")
 
 
-def _send_renewal_email(*, cycle, url: str, reminder: bool = False, expires_at=None, request_obj=None):
+def _send_renewal_email(
+    *, cycle, url: str, reminder: bool = False, expires_at=None,
+    request_obj=None, recipient: str | None = None, no_changes_url: str | None = None,
+):
     cfg = _renewal_email_settings()
     template = "cotizacion_colectivos/email/renewal_reminder.html" if reminder else "cotizacion_colectivos/email/renewal_initial.html"
-    no_changes_token = generate_no_changes_token(cycle=cycle, request_obj=request_obj)
-    no_changes_url = f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/sin-novedades/{no_changes_token}/"
+    if no_changes_url is None:
+        no_changes_token = generate_no_changes_token(cycle=cycle, request_obj=request_obj)
+        no_changes_url = f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/sin-novedades/{no_changes_token}/"
     html = render_to_string(template, {"cycle": cycle, "url": url, "no_changes_url": no_changes_url, "monthly_period_label": _monthly_period_label(cycle.monthly_period), "expires_at": expires_at or cycle.link_expires_at})
+    recipient_email = str(recipient if recipient is not None else cycle.recipient_email).strip()
     message = EmailMultiAlternatives(
         subject=f"A&S | {'Recordatorio de novedades' if reminder else 'Reporte mensual de novedades'} – {cycle.client_label} – {_monthly_period_label(cycle.monthly_period)}",
         body="A&S solicita reportar las novedades de su póliza colectiva.",
-        from_email=cfg["from_email"], to=[cycle.recipient_email],
+        from_email=cfg["from_email"], to=[recipient_email],
         connection=get_connection(
             backend="django.core.mail.backends.smtp.EmailBackend",
             host=cfg["host"], port=cfg["port"], username=cfg["username"],

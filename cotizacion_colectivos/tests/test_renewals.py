@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.core.management import call_command, CommandError
 from django.urls import reverse
 from django.utils import timezone
 
@@ -14,6 +15,52 @@ from vault.crypto import encrypt
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
 from cotizacion_colectivos.services.renewals import RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
+
+
+class RenewalEmailCommandTests(SimpleTestCase):
+    def _policy(self):
+        return RenewalPolicy(
+            remote_id="4991513000270954040", token="unused", policy="040006434488",
+            client="Cliente Sandbox", branch="VG deudores", expiry_date=date(2027, 8, 26),
+            email="zoho@example.test", policy_status="Vigente", payment_frequency="Mensual",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="production")
+    def test_email_command_rejects_production(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="SANDBOX_RENEWAL_EMAIL_TEST",
+            )
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
+    def test_email_command_requires_exact_confirmation(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="wrong",
+            )
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_RENEWAL_EMAIL_USER="gestionbeneficios@segurosays.com",
+        COLECTIVOS_RENEWAL_EMAIL_FROM="gestionbeneficios@segurosays.com",
+        COLECTIVOS_RENEWAL_EMAIL_PASSWORD="configured-only-in-test",
+    )
+    def test_email_command_sends_one_rendered_initial_message_without_persisting_cycles(self):
+        with patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email.list_collective_renewals", return_value=(self._policy(),)), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._renewal_email_settings", return_value={"host": "smtp.example.test", "port": 587, "username": "u", "password": "p", "use_tls": True, "from_email": "from@example.test"}), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_email") as send:
+            output = StringIO()
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="SANDBOX_RENEWAL_EMAIL_TEST", stdout=output,
+            )
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["recipient"], "qa@example.test")
+        self.assertEqual(send.call_args.kwargs["cycle"].monthly_period, "2026-09")
+        self.assertIn("Template: renewal_initial.html", output.getvalue())
 
 
 class RenewalReadContractTests(SimpleTestCase):
