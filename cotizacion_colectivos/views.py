@@ -2742,7 +2742,10 @@ def attachment_download(request, public_id, attachment_id):
     target = (root / attachment.stored_path).resolve()
     if root not in target.parents or not target.is_file():
         raise Http404("Adjunto no disponible")
-    response = FileResponse(target.open("rb"), content_type=attachment.detected_mime, as_attachment=True, filename=f"soporte{attachment.extension}")
+    response = FileResponse(
+        target.open("rb"), content_type=attachment.detected_mime,
+        as_attachment=True, filename=attachment.safe_original_name or f"soporte{attachment.extension}",
+    )
     response["Cache-Control"] = "no-store, private"
     return response
 

@@ -98,6 +98,58 @@ class ExternalWorkflowTests(TestCase):
             recipient="cliente@example.test",
         )
 
+    def _excel_response_with_original(self, name="Novedades Septiembre A&S.xlsx"):
+        access = self.verified_access()
+        response = save_response(
+            access=access, rows=[], observations="",
+            origin=RespuestaSolicitudColectivo.Origin.EXCEL,
+        )
+        workbook = io.BytesIO()
+        from openpyxl import Workbook
+        book = Workbook()
+        book.active["A1"] = "Novedades"
+        book.save(workbook)
+        workbook.seek(0)
+        uploaded = SimpleUploadedFile(
+            name, workbook.read(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        raw = uploaded.read()
+        uploaded.seek(0)
+        attachment = store_attachment(response=response, uploaded=uploaded, allow_excel=True)
+        return response, attachment, raw
+
+    def test_original_excel_download_preserves_name_mime_and_bytes(self):
+        _response_obj, attachment, raw = self._excel_response_with_original()
+        downloaded = self.client.get(reverse(
+            "cotizacion_colectivos:attachment_download",
+            args=[self.request.public_id, attachment.pk],
+        ))
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded["Content-Type"], attachment.detected_mime)
+        self.assertIn("Novedades Septiembre A&S.xlsx", downloaded["Content-Disposition"])
+        self.assertEqual(b"".join(downloaded.streaming_content), raw)
+
+    def test_original_excel_download_rejects_attachment_from_another_request(self):
+        _response_obj, attachment, _raw = self._excel_response_with_original()
+        other = SolicitudColectivo.objects.create(
+            source_kind="company", source_reference_hash="e" * 64,
+            policy_reference_hash="f" * 64,
+            encrypted_policy_token=encrypt("other-token"),
+            masked_policy_reference="Otra póliza", client_label="Otro cliente",
+            branch_code="91", branch_name="Salud colectivo",
+            request_type=SolicitudColectivo.RequestType.UPDATE,
+            status=SolicitudColectivo.Status.READY, assigned_to=self.admin,
+            deadline=timezone.localdate() + timedelta(days=10), zoho_profile="sandbox",
+            encrypted_snapshot=encrypt('{"version": 1, "policy": {}, "group": [], "warnings": []}'),
+            created_by=self.admin,
+        )
+        response = self.client.get(reverse(
+            "cotizacion_colectivos:attachment_download",
+            args=[other.public_id, attachment.pk],
+        ))
+        self.assertEqual(response.status_code, 404)
+
     def enter_with_otp(self, generated):
         with patch("cotizacion_colectivos.services.external.secrets.randbelow", return_value=123456):
             entry = self.client.get(
