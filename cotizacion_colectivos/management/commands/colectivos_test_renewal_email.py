@@ -70,6 +70,8 @@ class Command(BaseCommand):
             monthly_period=selected.monthly_period,
             recipient_email=recipient,
             link_expires_at=expires_at,
+            branch_name=selected.branch,
+            insurer=selected.insurer,
         )
         base = str(getattr(settings, "COLECTIVOS_EXTERNAL_BASE_URL", "")).rstrip("/")
         # These paths are intentionally inert and are not mapped to any

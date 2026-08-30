@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +14,7 @@ from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
-from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
+from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
 
 
 class RenewalEmailCommandTests(SimpleTestCase):
@@ -63,15 +63,72 @@ class RenewalEmailCommandTests(SimpleTestCase):
         self.assertIn("Template: renewal_initial.html", output.getvalue())
 
 
+class RenewalEmailContextTests(SimpleTestCase):
+    def _cycle(self):
+        return SimpleNamespace(
+            client_label='Empresa <QA>', masked_policy='040006434488', branch_name='VG deudores',
+            monthly_period='2026-09', recipient_email='cliente@example.test',
+            link_expires_at=timezone.now() + timedelta(days=8),
+        )
+
+    @patch('cotizacion_colectivos.services.renewals.request_snapshot', return_value={'policy': {'insurer': 'Aseguradora & QA'}})
+    @patch('cotizacion_colectivos.services.renewals.EmailMultiAlternatives')
+    @patch('cotizacion_colectivos.services.renewals._renewal_email_settings', return_value={'host': 'smtp.test', 'port': 587, 'username': 'u', 'password': 'p', 'use_tls': True, 'from_email': 'from@example.test'})
+    @override_settings(COLECTIVOS_EXTERNAL_BASE_URL='https://example.test')
+    def test_initial_email_contains_policy_context_and_absolute_logo(self, _settings, message_class, _snapshot):
+        message = message_class.return_value
+        message.send.return_value = 1
+        _send_renewal_email(
+            cycle=self._cycle(), request_obj=SimpleNamespace(), url='https://example.test/report/',
+            no_changes_url='https://example.test/no-changes/', expires_at=timezone.now(),
+        )
+        html = message.attach_alternative.call_args.args[0]
+        self.assertIn('VG deudores', html)
+        self.assertIn('Aseguradora &amp; QA', html)
+        self.assertIn('https://example.test/static/img/branding/logo-ays-azul.png', html)
+        self.assertIn('https://example.test/report/', html)
+        self.assertIn('¿No tiene movimientos para este mes?', html)
+        self.assertIn('No tengo novedades', html)
+        self.assertIn('href="https://example.test/no-changes/"', html)
+        self.assertNotIn('NO TENGO NOVEDADES PARA REPORTAR', html)
+        self.assertIn('https://example.test/no-changes/', html)
+        self.assertNotIn('Empresa <QA>', html)
+
+    @override_settings(COLECTIVOS_EXTERNAL_BASE_URL='https://example.test/')
+    def test_renewal_logo_url_normalizes_trailing_slash(self):
+        self.assertEqual(_renewal_logo_url(), 'https://example.test/static/img/branding/logo-ays-azul.png')
+
+    @patch('cotizacion_colectivos.services.renewals.request_snapshot', return_value={'policy': {'insurer': 'Aseguradora QA'}})
+    @patch('cotizacion_colectivos.services.renewals.EmailMultiAlternatives')
+    @patch('cotizacion_colectivos.services.renewals._renewal_email_settings', return_value={'host': 'smtp.test', 'port': 587, 'username': 'u', 'password': 'p', 'use_tls': True, 'from_email': 'from@example.test'})
+    def test_reminder_contains_same_policy_context(self, _settings, message_class, _snapshot):
+        message = message_class.return_value
+        message.send.return_value = 1
+        _send_renewal_email(
+            cycle=self._cycle(), request_obj=SimpleNamespace(), url='https://example.test/report/',
+            no_changes_url='https://example.test/no-changes/', reminder=True,
+        )
+        html = message.attach_alternative.call_args.args[0]
+        self.assertIn('Recordatorio de novedades', html)
+        self.assertIn('VG deudores', html)
+        self.assertIn('Aseguradora QA', html)
+        self.assertIn('logo-ays-azul.png', html)
+        self.assertIn('¿No tiene movimientos para este mes?', html)
+        self.assertIn('No tengo novedades', html)
+        self.assertIn('href="https://example.test/no-changes/"', html)
+        self.assertIn('https://example.test/no-changes/', html)
+
+
 class RenewalReadContractTests(SimpleTestCase):
     def test_policy_read_contract_includes_and_maps_vendedor(self):
         self.assertIn("Vendedor", POLICY_FIELDS)
         mapped = _map_record({
             "id": "4991513000271000012", "Name": "0405", "Ramo": "VG patronal",
             "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual",
-            "Vendedor": "  Vendedor Sandbox  ",
+            "Vendedor": "  Vendedor Sandbox  ", "Aseguradora1": "Aseguradora Sandbox",
         }, today=date(2026, 8, 24), window=30)
         self.assertEqual(mapped.seller, "Vendedor Sandbox")
+        self.assertEqual(mapped.insurer, "Aseguradora Sandbox")
         without = _map_record({
             "id": "4991513000271000013", "Name": "0406", "Ramo": "VG patronal",
             "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "Vendedor": None,

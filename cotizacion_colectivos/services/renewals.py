@@ -23,7 +23,7 @@ from vault.notifications import mask_email
 
 from .common import ColectivosServiceError, colectivos_zoho, sign_record_id, translate_zoho_error
 from .external import GeneratedAccess, generate_access, generate_no_changes_token
-from .requests import create_or_reuse_request_from_policy
+from .requests import create_or_reuse_request_from_policy, request_snapshot
 from .policies import PolicyService
 from ..models import RenovacionColectiva, SolicitudColectivo
 from .operational_settings import monthly_renewals_enabled
@@ -56,6 +56,7 @@ class RenewalPolicy:
     monthly_period: str
     scheduled_for: date
     seller: str = ""
+    insurer: str = ""
 
 
 def _date(value):
@@ -175,6 +176,7 @@ def _map_record(record: dict, *, today: date, window: int) -> RenewalPolicy | No
         monthly_period=period,
         scheduled_for=last_business_day(today.year, today.month),
         seller=str(record.get("Vendedor") or "").strip(),
+        insurer=str(record.get("Aseguradora1") or "").strip(),
     )
 
 
@@ -320,6 +322,42 @@ def _monthly_period_label(period):
         return str(period or "periodo solicitado")
 
 
+def _renewal_logo_url() -> str:
+    base = str(getattr(settings, "COLECTIVOS_EXTERNAL_BASE_URL", "") or "").strip().rstrip("/")
+    return f"{base}/static/img/branding/logo-ays-azul.png"
+
+
+def _renewal_insurer(cycle, request_obj=None) -> str:
+    """Read insurer from the persisted policy snapshot, without a Zoho read."""
+    request = request_obj
+    if request is None:
+        request = getattr(cycle, "request", None)
+    if request is None:
+        snapshot = {}
+    else:
+        try:
+            snapshot = request_snapshot(request)
+        except Exception:
+            snapshot = {}
+    policy = snapshot.get("policy") if isinstance(snapshot, dict) else {}
+    if isinstance(policy, dict):
+        value = str(policy.get("insurer") or "").strip()
+        if value:
+            return value
+    # Older requests may have been persisted before insurer was added to the
+    # aggregate snapshot. The per-policy snapshot/model remains authoritative
+    # and avoids a new Zoho read while preserving historical requests.
+    if request is not None:
+        try:
+            policy_row = request.policies.order_by("position").first()
+            value = str(getattr(policy_row, "insurer", "") or "").strip()
+            if value:
+                return value
+        except Exception:
+            pass
+    return str(getattr(cycle, "insurer", "") or "").strip()
+
+
 def _send_renewal_email(
     *, cycle, url: str, reminder: bool = False, expires_at=None,
     request_obj=None, recipient: str | None = None, no_changes_url: str | None = None,
@@ -329,7 +367,15 @@ def _send_renewal_email(
     if no_changes_url is None:
         no_changes_token = generate_no_changes_token(cycle=cycle, request_obj=request_obj)
         no_changes_url = f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/sin-novedades/{no_changes_token}/"
-    html = render_to_string(template, {"cycle": cycle, "url": url, "no_changes_url": no_changes_url, "monthly_period_label": _monthly_period_label(cycle.monthly_period), "expires_at": expires_at or cycle.link_expires_at})
+    html = render_to_string(template, {
+        "cycle": cycle,
+        "url": url,
+        "no_changes_url": no_changes_url,
+        "logo_url": _renewal_logo_url(),
+        "monthly_period_label": _monthly_period_label(cycle.monthly_period),
+        "cycle_insurer": _renewal_insurer(cycle, request_obj=request_obj),
+        "expires_at": expires_at or cycle.link_expires_at,
+    })
     recipient_email = str(recipient if recipient is not None else cycle.recipient_email).strip()
     message = EmailMultiAlternatives(
         subject=f"A&S | {'Recordatorio de novedades' if reminder else 'Reporte mensual de novedades'} – {cycle.client_label} – {_monthly_period_label(cycle.monthly_period)}",

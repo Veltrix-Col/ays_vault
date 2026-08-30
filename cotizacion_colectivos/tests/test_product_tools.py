@@ -117,13 +117,21 @@ class ProductToolsContractTests(SimpleTestCase):
             "renewal_tab": "upcoming",
             "monthly_renewals_enabled": False,
         }
-        authorized = render_to_string(template, {**base, "can_manage_notifications": True})
+        authorized = render_to_string(template, {
+            **base,
+            "can_manage_renewal_automation": True,
+            "can_manage_notifications": False,
+        })
         self.assertIn('method="post"', authorized)
         self.assertIn('name="enabled" value="1"', authorized)
         self.assertIn("OFF · Automatización desactivada", authorized)
         self.assertIn(f'action="{reverse("cotizacion_colectivos:monthly_renewals_toggle")}"', authorized)
 
-        unauthorized = render_to_string(template, {**base, "can_manage_notifications": False})
+        unauthorized = render_to_string(template, {
+            **base,
+            "can_manage_renewal_automation": False,
+            "can_manage_notifications": True,
+        })
         self.assertNotIn('method="post"', unauthorized)
         self.assertIn("Automatización: desactivada", unauthorized)
         self.assertIn("Activar automatización mensual", authorized)
