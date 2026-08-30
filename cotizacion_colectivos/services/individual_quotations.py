@@ -250,7 +250,12 @@ def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="l
             safe_metadata={
                 "encrypted": True,
                 "antivirus": "not_configured",
-                "owner_type": "risk" if owner_role == "risk" else "contact" if owner_role in {"affiliate", "insured"} else "legacy",
+                "owner_type": (
+                    "risk" if owner_role == "risk"
+                    else "contact" if owner_role in {"affiliate", "insured"}
+                    else "request" if owner_role == "request"
+                    else "legacy"
+                ),
                 "owner_role": str(owner_role)[:24],
                 "owner_key": str(owner_key)[:80],
                 "document_type": str(document_type)[:32],
@@ -353,8 +358,16 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     root.mkdir(parents=True, exist_ok=True)
     created_paths = []
     try:
+        basic_support = schema.slug in {"salud", "exequial", "soat"}
         for item in files:
-            _, target = _store_individual_file(quotation=quotation, item=item)
+            _, target = _store_individual_file(
+                quotation=quotation,
+                item=item,
+                owner_role="request" if basic_support else "legacy",
+                owner_key=str(quotation.public_id) if basic_support else "legacy",
+                document_type="support_document",
+                field_key="support_document",
+            )
             created_paths.append(target)
         for owner_key, uploaded in entity_files.items():
             validated = validate_attachments((uploaded,))

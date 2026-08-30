@@ -3486,8 +3486,12 @@ def individual_expedient(request, token):
         attachment.owner_label = {"affiliate": "Afiliado", "insured": "Asegurado", "risk": "Vehículo"}.get(str(metadata.get("owner_role") or ""), "Documento histórico")
         attachment.document_status = _attachment_document_status(attachment)
         attachment.structured_owner = (
-            str(metadata.get("owner_type") or "") in {"contact", "risk"}
+            str(metadata.get("owner_type") or "") in {"contact", "risk", "request"}
             and bool(str(metadata.get("owner_key") or "").strip())
+        )
+        attachment.is_request_support = (
+            str(metadata.get("owner_type") or "") == "request"
+            and str(metadata.get("document_type") or "") == "support_document"
         )
         documents_by_owner.setdefault(str(metadata.get("owner_key") or "legacy"), []).append(attachment)
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
@@ -3638,6 +3642,10 @@ def individual_expedient(request, token):
         attachment for attachment in individual_attachments
         if not getattr(attachment, "structured_owner", False)
     )
+    support_attachments = tuple(
+        attachment for attachment in individual_attachments
+        if getattr(attachment, "is_request_support", False)
+    )
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
@@ -3666,6 +3674,7 @@ def individual_expedient(request, token):
         "vehicle_class_choices": VEHICLE_CLASS_CHOICES,
         "vehicle_use_choices": VEHICLE_USE_CHOICES,
         "individual_attachments": individual_attachments,
+        "support_attachments": support_attachments,
         "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,

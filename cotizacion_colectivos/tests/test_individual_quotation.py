@@ -1128,6 +1128,40 @@ class IndividualQuotationTests(TestCase):
         stored = (Path(self.private.name) / "individual_quotations" / attachment.stored_path).read_bytes()
         self.assertNotIn(b"private-demo", stored)
 
+    def test_basic_branches_store_optional_support_documents_with_request_ownership(self):
+        cases = {
+            "salud": {"people": [self.person("support-health")]},
+            "exequial": {"people": [self.person("support-exequial")]},
+            "soat": {"vehicles": [self.vehicle("support-soat")]},
+        }
+        for slug, groups in cases.items():
+            with self.subTest(branch=slug):
+                schema = get_branch_schema(slug)
+                uploaded = SimpleUploadedFile(
+                    f"soporte-{slug}.pdf", valid_minimal_pdf_bytes(), content_type="application/pdf",
+                )
+                cleaned_data = {
+                    "attachments": [uploaded],
+                    "entity_attachments": {},
+                    "normalized_items": groups,
+                    **{field.key: "" for field in schema.fields},
+                }
+                quotation = create_individual_quotation(
+                    schema=schema, cleaned_data=cleaned_data, actor=self.actor,
+                    context={"affiliate_key": "", "branch_name": schema.name},
+                )
+                attachment = quotation.attachments.get()
+                metadata = attachment.safe_metadata
+                self.assertEqual(metadata["owner_type"], "request")
+                self.assertEqual(metadata["owner_role"], "request")
+                self.assertEqual(metadata["owner_key"], str(quotation.public_id))
+                self.assertEqual(metadata["document_type"], "support_document")
+                with self.assertRaises(ValidationError):
+                    _validate_document_contract(
+                        module="Contacts", owner_type=metadata["owner_type"],
+                        document_type=metadata["document_type"],
+                    )
+
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_vehicle_can_be_quoted_without_a_fictitious_plate(self, workspace):
         workspace.return_value = self.workspace("movilidad")

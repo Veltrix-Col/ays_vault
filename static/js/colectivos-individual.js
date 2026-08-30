@@ -71,6 +71,18 @@
     form.querySelector("[data-review-summary]").textContent = `${count} elemento${count === 1 ? "" : "s"} listo${count === 1 ? "" : "s"} para enviar.`;
   };
   const affiliateInput = form.querySelector('input[name="affiliate_document"]');
+  const supportInput = form.querySelector('input[name="attachments"]');
+  const supportSummary = form.querySelector('[data-attachments-summary]');
+  if (supportInput && supportSummary) {
+    const updateSupportSummary = () => {
+      const count = supportInput.files ? supportInput.files.length : 0;
+      supportSummary.textContent = count
+        ? `${count} archivo${count === 1 ? "" : "s"} seleccionado${count === 1 ? "" : "s"}.`
+        : "";
+    };
+    supportInput.addEventListener("change", updateSupportSummary);
+    updateSupportSummary();
+  }
   if (affiliateInput) {
     const clear = document.createElement("button");
     clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
