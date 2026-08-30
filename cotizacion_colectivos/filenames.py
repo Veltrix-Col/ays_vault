@@ -13,6 +13,7 @@ _ATTACHMENT_TYPE_LABELS = {
     "vehicle_registration": "TARJETA_PROPIEDAD",
     "risk_document": "TARJETA_PROPIEDAD",
     "support_document": "SOPORTE",
+    "invitation_document": "INVITACION",
 }
 _IDENTIFICATION_LABELS = {
     "CC": "CEDULA",

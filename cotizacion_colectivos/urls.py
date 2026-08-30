@@ -45,6 +45,7 @@ urlpatterns = [
     path("polizas/<str:token>/excel/", views.policy_excel, name="policy_excel"),
     path("polizas/<str:token>/plantillas-invitacion/", views.policy_invitation_preview, name="policy_invitation_preview"),
     path("polizas/<str:token>/plantillas-invitacion/descargar/", views.policy_invitation_download, name="policy_invitation_download"),
+    path("polizas/<str:token>/plantillas-invitacion/adjuntar/", views.policy_invitation_attach, name="policy_invitation_attach"),
     path("polizas/<str:token>/enlace/", views.policy_generate_access, name="policy_generate_access_simple"),
     path("polizas/<str:token>/enlace/revocar/", views.policy_revoke_access, name="policy_revoke_access"),
     path("polizas/<str:token>/enlace/<str:request_type>/", views.policy_generate_access, name="policy_generate_access"),

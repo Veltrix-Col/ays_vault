@@ -188,6 +188,35 @@ class AdjuntoCotizacionIndividual(models.Model):
     safe_metadata = models.JSONField(default=dict, blank=True)
 
 
+class InvitacionAseguradoraAdjunto(models.Model):
+    """Archivo de invitación preparado para una única póliza Zoho.
+
+    La relación se conserva por el Record ID obtenido del contexto firmado;
+    no representa un attachment genérico ni una entidad de persona/riesgo.
+    """
+    policy_record_id = models.CharField(max_length=24, db_index=True)
+    insurer_code = models.CharField(max_length=32)
+    template_code = models.CharField(max_length=64, blank=True)
+    safe_original_name = models.CharField(max_length=120)
+    internal_name = models.CharField(max_length=96, unique=True, editable=False)
+    extension = models.CharField(max_length=8)
+    detected_mime = models.CharField(max_length=80)
+    size = models.PositiveIntegerField()
+    checksum = models.CharField(max_length=64, db_index=True)
+    stored_path = models.CharField(max_length=255, editable=False)
+    safe_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = (
+            models.UniqueConstraint(
+                fields=("policy_record_id", "insurer_code", "template_code", "checksum"),
+                name="colect_invite_att_checksum",
+            ),
+        )
+
+
 class NotificacionCotizacionIndividual(models.Model):
     """Aviso local de respuesta; no representa una tarea ni se sincroniza con Zoho."""
 

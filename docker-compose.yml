@@ -86,6 +86,7 @@ services:
       COLECTIVOS_RISK_WRITE_CONFIRMATION: ${COLECTIVOS_RISK_WRITE_CONFIRMATION}
       COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED: ${COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED:-false}
       COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION: ${COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION}
+      COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED: ${COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED:-false}
       # Confirmaciones de escritura por perfil Zoho (sandbox/production), una
       # por recurso. Sin este passthrough quedan vacías dentro del contenedor
       # aunque Dokploy las tenga configuradas, porque docker-compose solo

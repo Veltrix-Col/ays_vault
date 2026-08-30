@@ -83,6 +83,7 @@ from .services.individual_entities import effective_candidate, promote_created_p
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
 from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
 from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
+from .services.invitation_attachment_publisher import prepare_invitation_attachment
 from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
@@ -632,6 +633,9 @@ def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
                 "insurer_name": preview.template.insurer_name,
                 "recipient": preview.template.recipient_email,
                 "previews": [], "missing_required": set(), "output_files": 0,
+                # Empty means the complete insurer output (XLSX or ZIP), not
+                # one arbitrarily selected template.
+                "template_code": "",
                 "mailto_url": _short_invitation_mailto(
                     branch_name=detail.branch_name, client_name=client_name,
                     insurer=preview.template.insurer_name,
@@ -3720,6 +3724,27 @@ def individual_attachment_download(request, token, attachment_id):
     response["Pragma"] = "no-cache"
     response["X-Content-Type-Options"] = "nosniff"
     return response
+
+
+@never_cache
+@require_http_methods(["POST"])
+def policy_invitation_attach(request, token):
+    """Attach a generated insurer invitation to this policy in Zoho."""
+    # Functional access follows the general Colectivos workspace permission;
+    # Zoho WRITE remains independently protected by the attachment guards.
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    try:
+        result = prepare_invitation_attachment(
+            token=token,
+            insurer_code=str(request.POST.get("insurer_code") or ""),
+            template_code=str(request.POST.get("template_code") or ""),
+        )
+    except (ColectivosServiceError, ValidationError, IndividualAttachmentBlocked, IndividualAttachmentUncertain) as exc:
+        messages.error(request, str(getattr(exc, "message", "No fue posible adjuntar el archivo.")))
+        return redirect("cotizacion_colectivos:policy_invitation_preview", token=token)
+    messages.success(request, "Archivo adjuntado a la póliza." if result.get("status") != "UPLOADED" else "El archivo ya estaba adjuntado.")
+    return redirect("cotizacion_colectivos:policy_invitation_preview", token=token)
 
 
 @never_cache
