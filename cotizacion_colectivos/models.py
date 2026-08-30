@@ -262,6 +262,7 @@ class RenovacionColectiva(models.Model):
     link_expires_at = models.DateTimeField(null=True, blank=True)
     reminder_due_at = models.DateTimeField(null=True, blank=True)
     reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    internal_alert_sent_at = models.DateTimeField(null=True, blank=True)
     encrypted_access_token = models.TextField(blank=True, editable=False)
     send_attempts = models.PositiveSmallIntegerField(default=0)
     last_sent_at = models.DateTimeField(null=True, blank=True)

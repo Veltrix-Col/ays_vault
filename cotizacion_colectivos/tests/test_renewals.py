@@ -14,7 +14,7 @@ from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
-from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
+from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, next_month_period, upcoming_cycles, tracking_cycles, set_renewal_selection
 
 
 class RenewalEmailCommandTests(SimpleTestCase):
@@ -226,6 +226,34 @@ class RenewalReadContractTests(SimpleTestCase):
 
 @override_settings(COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False)
 class RenewalSelectionTests(TestCase):
+    @patch("cotizacion_colectivos.services.renewals._send_renewal_internal_alert", side_effect=[RuntimeError("smtp"), None])
+    @patch("cotizacion_colectivos.services.renewals._send_renewal_email")
+    @patch("cotizacion_colectivos.services.renewals.decrypt", return_value="signed-token")
+    @patch("cotizacion_colectivos.services.renewals.monthly_renewals_enabled", return_value=True)
+    def test_internal_alert_retries_after_client_reminder_was_already_sent(self, _enabled, decrypt_mock, send_email, send_alert):
+        now = timezone.now()
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000200:2026-09", policy_remote_id="4991513000271000200",
+            policy_token="protected", masked_policy="0420", client_label="Empresa", branch_name="VG deudores",
+            monthly_period=next_month_period(now.date()), scheduled_for=now.date(), status=RenovacionColectiva.Status.SENT,
+            encrypted_recipient=encrypt("cliente@example.test"), encrypted_access_token="protected-access",
+            sent_at=now - timedelta(days=4), reminder_due_at=now - timedelta(hours=1),
+            link_expires_at=now + timedelta(days=4),
+        )
+
+        process_renewal_cycles(now=now)
+        cycle.refresh_from_db()
+        self.assertIsNotNone(cycle.reminder_sent_at)
+        self.assertIsNone(cycle.internal_alert_sent_at)
+        self.assertEqual(send_email.call_count, 1)
+        self.assertEqual(send_alert.call_count, 1)
+
+        process_renewal_cycles(now=now + timedelta(minutes=1))
+        cycle.refresh_from_db()
+        self.assertIsNotNone(cycle.internal_alert_sent_at)
+        self.assertEqual(send_email.call_count, 1)
+        self.assertEqual(send_alert.call_count, 2)
+
     def _notification_manager(self):
         user = get_user_model().objects.create_user("renewal-manager", password="Password123!")
         permissions = Permission.objects.filter(
