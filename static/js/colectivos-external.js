@@ -73,7 +73,7 @@
         if (recordChanged(record)) changedRows += 1;
       });
     });
-    changedRows += form.querySelectorAll("[data-include-action]:checked").length;
+    changedRows += [...form.querySelectorAll("[data-include-action]")].filter((control) => control.value === "INCLUIR").length;
     if (visible) visible.textContent = String(visibleRows);
     if (progress) progress.textContent = String(changedRows);
   }
@@ -153,13 +153,20 @@
     }
     if (event.target.closest("[data-drawer-done]")) {
       const dateInput = activeDrawer?.querySelector("input[name^='fecha_retiro_entity_']");
-      if (dateInput && !dateInput.value) {
-        dateInput.reportValidity?.();
-        dateInput.focus();
+      const includeDateInput = activeDrawer?.querySelector("input[name^='include_'][name$='_fecha_ingreso'], input[name='include_fecha_ingreso']");
+      const requiredDateInput = dateInput || includeDateInput;
+      if (requiredDateInput && !requiredDateInput.value) {
+        requiredDateInput.reportValidity?.();
+        requiredDateInput.focus();
         return;
       }
       const action = activeDrawer?.closest("[data-functional-entity]")?.querySelector("[data-row-action]");
-      if (action) action.value = "RETIRAR";
+      if (action) {
+        action.value = "RETIRAR";
+      } else {
+        const includeAction = activeDrawer?.querySelector("[data-include-action]");
+        if (includeAction) includeAction.value = "INCLUIR";
+      }
       closeDrawer();
       return;
     }

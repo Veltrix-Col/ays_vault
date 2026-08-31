@@ -274,6 +274,23 @@
       const input = fieldsHost.querySelector(`[name="${name}"]`);
       return Boolean(input && input.checked);
     };
+    const copyValue = (target, value) => {
+      const normalized = String(value ?? "").trim();
+      if (target.tagName === "SELECT") {
+        const option = [...target.options].find(item => item.value === normalized);
+        if (option) {
+          // Select by the option's actual value after the complete option
+          // list has been built.  Setting selectedIndex also keeps the
+          // visible control and its submitted value synchronized.
+          target.selectedIndex = option.index;
+          option.selected = true;
+        } else {
+          target.selectedIndex = 0;
+        }
+      } else {
+        target.value = normalized;
+      }
+    };
     const copyRequester = () => {
       const sameVehicle = key === "vehicles" && isChecked("insured_same_as_requester");
       const samePerson = key === "people" && (isChecked("is_requester") || fieldsHost.querySelector('[name="use_requester"]')?.value === "Sí");
@@ -294,10 +311,10 @@
         const targetInput = fieldsHost.querySelector(`[name="${target}"]`);
         if (!targetInput) return;
         if (source === "__full_name__") {
-          targetInput.value = [form.querySelector('[name="first_name"]')?.value, form.querySelector('[name="last_name"]')?.value].filter(Boolean).join(" ");
+          copyValue(targetInput, [form.querySelector('[name="first_name"]')?.value, form.querySelector('[name="last_name"]')?.value].filter(Boolean).join(" "));
         } else {
           const sourceInput = form.querySelector(`[name="${source}"]`);
-          if (sourceInput) targetInput.value = sourceInput.value;
+          if (sourceInput) copyValue(targetInput, sourceInput.value);
         }
         targetInput.dataset.requesterCopy = "true";
         targetInput.readOnly = true;
@@ -310,7 +327,18 @@
       const wrapper = document.createElement("div"); wrapper.className = "field";
       const label = document.createElement("label"); label.textContent = `${field.label}${field.required ? " *" : ""}`;
       let input;
-      if (field.kind === "choice") { input = document.createElement("select"); input.append(new Option("Seleccione", "")); field.choices.forEach(choice => input.append(new Option(choice, choice))); }
+      if (field.kind === "choice") {
+        input = document.createElement("select");
+        input.append(new Option("Seleccione", ""));
+        (field.choices || []).forEach(choice => {
+          // Schema choices are serialized as [value, label] pairs.  Keep
+          // those components separate so the browser never stringifies a
+          // pair as "CC,CC" (or "null,null").
+          const value = Array.isArray(choice) ? String(choice[0] ?? "").trim() : String(choice ?? "").trim();
+          const label = Array.isArray(choice) ? String(choice[1] ?? value).trim() : String(choice ?? "").trim();
+          if (value) input.append(new Option(label || value, value));
+        });
+      }
       else { input = document.createElement("input"); input.type = field.kind === "checkbox" ? "checkbox" : ({email:"email",date:"date",tel:"tel"}[field.kind] || "text"); }
       input.name = field.key; input.id = `dialog-${key}-${index === null ? "new" : index}-${field.key}`; label.htmlFor = input.id;
       input.required = field.required; input.maxLength = 180; input.value = row[field.key] || "";
@@ -325,6 +353,9 @@
         }
       }
       if (["first_name","last_name","id_type","document","birth_date","email","phone","insured_name","insured_id_type","insured_document","insured_first_name","insured_last_name","insured_birth_date","insured_email","insured_phone"].includes(field.key)) input.dataset.requesterCopy = "true";
+      if (field.kind === "checkbox" && field.help_text) {
+        const hint = document.createElement("small"); hint.textContent = field.help_text; wrapper.appendChild(hint);
+      }
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });
     fieldsHost.querySelectorAll("input,select").forEach(input => input.addEventListener("change", () => { copyRequester(); applyConditions(); }));

@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils.exceptions import InvalidFileException
 
 from vault.crypto import decrypt
@@ -22,8 +23,8 @@ from ..models import CambioSolicitudColectivo, RespuestaSolicitudColectivo, Soli
 from .external import ACTION_TO_ADJUSTMENT, response_checksum
 from ..filenames import safe_filename_part
 
-TEMPLATE_VERSION = 3
-SUPPORTED_TEMPLATE_VERSIONS = (1, 2, 3)
+TEMPLATE_VERSION = 4
+SUPPORTED_TEMPLATE_VERSIONS = (1, 2, 3, 4)
 MAX_ROWS = 5000
 LEGACY_HEADERS = ("Acción", "Tipo ID asociado", "ID asociado", "Nombre asociado", "Tipo ID asegurado", "ID asegurado", "Nombre asegurado", "Póliza", "Ramo", "Código de ramo", "Aseguradora", "Estado actual", "Estado solicitado", "Fecha de ingreso", "Fecha de retiro", "Fecha efectiva", "Parentesco", "Plan actual", "Plan solicitado", "Pago mensual con IVA actual", "Pago asegurado sin IVA actual", "Valor anterior", "Valor nuevo", "Tipo de novedad", "Motivo", "Observaciones", "Requiere adjunto", "Referencia de fila")
 V2_HEADERS = (
@@ -43,6 +44,17 @@ HEADERS = V2_HEADERS[:-1] + (
     "Principal", "Rol principal", "Persona relacionada", "Roles",
     "Tipo de relación", "Referencia funcional de fila", "Referencia de fila",
 )
+PERSON_COLUMNS = (
+    "Tipo de identificación", "Identificación", "Nombres", "Apellidos",
+    "Fecha de nacimiento", "Correo", "Teléfono", "Fecha de ingreso",
+    "Fecha de retiro", "Observaciones",
+)
+BRANCH_COLUMNS = {code: ("Acción", *PERSON_COLUMNS) for code in ("91", "86", "83", "28", "40")}
+
+
+def _compact_headers(branch_code: str) -> tuple[str, ...]:
+    """Columns mirror the currently rendered inclusion/retirement form."""
+    return BRANCH_COLUMNS.get(str(branch_code or ""), ("Acción", *PERSON_COLUMNS))
 
 
 def _safe(value):
@@ -78,12 +90,21 @@ def _policy_sheets(request: SolicitudColectivo):
     return tuple(result)
 
 
-def _style_novelties_sheet(sheet) -> None:
-    sheet.append(HEADERS)
+def _style_novelties_sheet(sheet, headers: tuple[str, ...]) -> None:
+    sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="155A96")
     sheet.freeze_panes = "A2"
+    widths = (15, 22, 18, 22, 22, 18, 30, 18, 18, 36)
+    for index, width in enumerate(widths, 1):
+        sheet.column_dimensions[chr(64 + index)].width = width
+    actions = DataValidation(type="list", formula1='"Ingreso,Retiro"', allow_blank=True)
+    actions.error = "Selecciona Ingreso o Retiro."
+    actions.errorTitle = "Acción no válida"
+    actions.prompt = "Selecciona la novedad que deseas reportar."
+    sheet.add_data_validation(actions)
+    actions.add("A2:A5000")
 
 
 def _record_payload(record) -> dict[str, object]:
@@ -129,13 +150,13 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
             sheet = book.create_sheet(sheet_name)
         else:
             sheet.title = sheet_name
-        _style_novelties_sheet(sheet)
         records = request.records.order_by("original_position")
         if policy_item is not None:
             records = records.filter(policy=policy_item)
         reference = policy_item.masked_policy_reference if policy_item else request.masked_policy_reference
         branch_name = policy_item.branch_name if policy_item else request.branch_name
         branch_code = policy_item.branch_code if policy_item else request.branch_code
+        _style_novelties_sheet(sheet, _compact_headers(branch_code))
         for functional in _functional_records(records[:MAX_ROWS]):
             record = functional["records"][0]
             current = functional["payload"]
@@ -156,23 +177,18 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
                 insured = legacy_person
             if not any(beneficiary) and role == "Beneficiario":
                 beneficiary = legacy_person
-            risk = current.get("risk_attributes", {}) if isinstance(current.get("risk_attributes"), dict) else {}
-            economics = dict(record.economic_values)
             roles = tuple(sorted(functional["roles"]))
             principal = current.get("associate_name") or current.get("insured_name") or current.get("display_name") or "Información protegida"
-            related = current.get("beneficiary_name") or current.get("insured_name") or current.get("display_name") or ""
             functional_reference = functional["key"]
             source_keys = tuple(str(item.public_key) for item in functional["records"])
             functional_row_map.append((sheet_name, functional_reference, source_keys))
+            person = associate if any(associate) else insured if any(insured) else beneficiary if any(beneficiary) else legacy_person
+            display_name = person[2] or principal
+            names = display_name.split(" ", 1)
             sheet.append(tuple(_safe(value) for value in (
-                "SIN_CAMBIOS",
-                *associate, *insured, *beneficiary,
-                reference, branch_name, branch_code, policy_item.insurer if policy_item else "", record.initial_status, "", record.entry_date, record.exit_date, "", current.get("relationship", ""), record.plan, "",
-                economics.get("Pago según forma de pago", ""), economics.get("Pago empleado sin IVA", ""), "", "", "", "", "",
-                risk.get("ciudad", ""), risk.get("direccion", ""), risk.get("tipo_uso", ""), risk.get("anio_construccion", ""), risk.get("vehiculo", ""), risk.get("placa", ""), risk.get("marca", ""), risk.get("modelo", ""), economics.get("Valor asegurado", ""),
-                "No", principal, roles[0] if roles else role, related,
-                ", ".join(roles), current.get("relationship", ""),
-                functional_reference, functional_reference,
+                "", person[0], person[1], names[0], names[1] if len(names) > 1 else "",
+                current.get("birth_date", ""), current.get("email", ""), current.get("phone", ""),
+                record.entry_date, record.exit_date, "",
             )))
         sheet.auto_filter.ref = sheet.dimensions
     policy = book.create_sheet("Póliza")
@@ -267,6 +283,12 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
         (sheet_name, reference): source_keys
         for sheet_name, reference, source_keys in metadata_rows
     }
+    compact_line_refs = {}
+    sheet_line_numbers = {}
+    for sheet_name, reference, _source_keys in metadata_rows:
+        line_number = sheet_line_numbers.get(sheet_name, 1) + 1
+        compact_line_refs[(sheet_name, line_number)] = reference
+        sheet_line_numbers[sheet_name] = line_number
     rows, seen, counts = [], set(), {action: 0 for action in CambioSolicitudColectivo.Action.values}
     zero_payments = negative_payments = 0
     total_rows = 0
@@ -278,7 +300,7 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
     for sheet_name in novelty_sheets:
         sheet = book[sheet_name]
         headers = tuple(cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1)))
-        if headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS}:
+        if headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS} and not (headers and headers[0] == "Acción" and headers[1:] == PERSON_COLUMNS):
             raise ValidationError("Los encabezados fueron alterados.")
         policy_position = int(meta.get(f"sheet:{sheet_name}", 0) or 0)
         policy_item = request.policies.filter(position=policy_position, active=True).first() if policy_position else None
@@ -292,6 +314,56 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
                 raise ValidationError("No se permiten fórmulas ni hipervínculos.")
             values = {headers[index]: _safe(cell.value).strip() for index, cell in enumerate(cells[:len(headers)])}
             if not any(values.values()):
+                continue
+            if headers and headers[0] == "Acción" and headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS}:
+                action_value = str(values.get("Acción", "")).strip().casefold()
+                line_reference = compact_line_refs.get((sheet_name, position), "")
+                has_data = any(values.get(header, "") for header in headers[1:])
+                if not action_value:
+                    if not has_data and not line_reference:
+                        continue
+                    if line_reference:
+                        action = "SIN_CAMBIOS"
+                    else:
+                        raise ValidationError(f"Fila {position + 1}: selecciona Ingreso o Retiro.")
+                elif action_value == "ingreso":
+                    action = "INCLUIR"
+                elif action_value == "retiro":
+                    action = "RETIRAR"
+                else:
+                    raise ValidationError(f"Fila {position + 1}: la Acción debe ser Ingreso o Retiro.")
+                source_references = functional_sources.get((sheet_name, line_reference), ()) if line_reference else ()
+                required = (
+                    (("Tipo de identificación", "Identificación", "Nombres", "Apellidos", "Fecha de ingreso") if action == "INCLUIR" else ("Fecha de retiro",)),
+                )
+                missing = [field for field in required[0] if not values.get(field, "").strip()]
+                if missing:
+                    raise ValidationError(f"Fila {position + 1}: falta {', '.join(missing)} para {action_value.title()}.")
+                if action == "RETIRAR":
+                    if not source_references:
+                        if not values.get("Identificación", "").strip():
+                            raise ValidationError(f"Fila {position + 1}: se requiere Identificación para un retiro nuevo.")
+                    if line_reference in seen:
+                        raise ValidationError(f"Fila {position + 1}: referencia duplicada.")
+                    seen.add(line_reference)
+                rows.append({
+                    "record": source_references[0] if source_references else "",
+                    "records": source_references,
+                    "functional_key": line_reference,
+                    "policy": str(policy_item.pk) if policy_item else "",
+                    "action": action,
+                    "tipo_id": values.get("Tipo de identificación", ""),
+                    "documento": values.get("Identificación", ""),
+                    "nombres": values.get("Nombres", ""),
+                    "apellidos": values.get("Apellidos", ""),
+                    "fecha_nacimiento": values.get("Fecha de nacimiento", ""),
+                    "email": values.get("Correo", ""),
+                    "phone": values.get("Teléfono", ""),
+                    "fecha_ingreso": values.get("Fecha de ingreso", ""),
+                    "fecha_retiro": values.get("Fecha de retiro", ""),
+                    "observaciones": values.get("Observaciones", ""),
+                })
+                counts[action] += 1
                 continue
             action = values["Acción"].upper()
             if action not in counts:

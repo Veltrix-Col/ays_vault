@@ -2486,21 +2486,22 @@ def request_publish_task(request, public_id, outbox_id):
         messages.info(request, "La Tarea ya fue publicada.")
     else:
         try:
-            options = task_responsible_options(collective_only=True)
-            selected = next(
-                (option for option in options if option.actual_value == str(request.POST.get("responsible") or "").strip()),
-                None,
-            )
-            if selected is None:
-                raise ValidationError("Seleccione un responsable válido del área Colectivos.")
-            responsible_email = resolve_task_responsible_email(selected)
-            record = json.loads(decrypt(outbox.encrypted_payload))
-            record["Responsable"] = selected.actual_value
-            record["Correo_responsable"] = responsible_email
-            serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            outbox.encrypted_payload = encrypt(serialized)
-            outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
-            outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
+            if item.request_type == "COTIZACION":
+                options = task_responsible_options(collective_only=True)
+                selected = next(
+                    (option for option in options if option.actual_value == str(request.POST.get("responsible") or "").strip()),
+                    None,
+                )
+                if selected is None:
+                    raise ValidationError("Seleccione un responsable válido del área Colectivos.")
+                responsible_email = resolve_task_responsible_email(selected)
+                record = json.loads(decrypt(outbox.encrypted_payload))
+                record["Responsable"] = selected.actual_value
+                record["Correo_responsable"] = responsible_email
+                serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                outbox.encrypted_payload = encrypt(serialized)
+                outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
+                outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
             publish_task_outbox(outbox.pk)
         except (ValidationError, ColectivosServiceError) as exc:
             messages.error(request, str(exc))
@@ -2510,6 +2511,8 @@ def request_publish_task(request, public_id, outbox_id):
             messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
         elif outbox.status == outbox.Status.RECONCILE:
             messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
+        elif not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
+            messages.warning(request, "La publicación de Tareas está deshabilitada por configuración.")
         else:
             messages.error(request, "La Tarea no pudo publicarse; revise el estado del expediente.")
     return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
@@ -3347,15 +3350,14 @@ def individual_update_responsible(request, token):
         try:
             email = resolve_task_responsible_email(option)
         except ValidationError:
-            # El correo del responsable es necesario para publicar la Task,
-            # pero no debe impedir corregir/guardar el responsable desde el
-            # expediente. El bloqueo queda explícito en el outbox.
+            # El correo es auxiliar de la Task; si no está disponible, se
+            # conserva el responsable y se publica sin fabricar ese dato.
             email = ""
         update_quotation_responsible(quotation=quotation, option=option, email=email)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
         publish_scheduled = False
         publish_result = "none"
-        if email and outbox is not None and outbox.status == outbox.Status.PENDING:
+        if outbox is not None and outbox.status == outbox.Status.PENDING:
             publish_scheduled = True
             publish_task_outbox(outbox.pk)
             outbox.refresh_from_db()
@@ -3379,8 +3381,6 @@ def individual_update_responsible(request, token):
         )
         if publish_result == "published":
             messages.success(request, "Responsable actualizado y Tarea publicada correctamente.")
-        elif not email:
-            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Tarea.")
         elif publish_result == "reconcile":
             messages.warning(request, "Responsable actualizado; la Tarea requiere conciliación y no se reintentará automáticamente.")
         elif publish_result == "blocked":

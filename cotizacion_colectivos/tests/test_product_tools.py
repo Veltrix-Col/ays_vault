@@ -146,7 +146,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn('data-dialog-open="task-create-dialog-{{ task.outbox_id }}"', content)
         self.assertIn("Buscar responsable", content)
         self.assertIn("data-task-responsible-select", content)
-        self.assertNotIn('form method="post" action="{% url \'cotizacion_colectivos:request_publish_task\' item.public_id task.outbox_id %}">{% csrf_token %}<button type="submit">Crear Tarea</button>', content)
+        self.assertIn("item.request_type != 'COTIZACION'", content)
 
     def test_published_task_uses_fresh_read_with_local_fallback(self):
         content = Path("cotizacion_colectivos/services/task_publisher.py").read_text(encoding="utf-8")

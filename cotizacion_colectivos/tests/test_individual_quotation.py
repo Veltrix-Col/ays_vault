@@ -353,6 +353,33 @@ class IndividualQuotationTests(TestCase):
         template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "form.html").read_text(encoding="utf-8")
         self.assertIn("entity_attachment_${row.entity_key}", javascript)
         self.assertIn('enctype="multipart/form-data"', template)
+        self.assertIn("colectivos-individual.js?v=20260831-id-type", template)
+
+    def test_identification_choices_keep_value_and_label_separate_in_dynamic_selects(self):
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn("Array.isArray(choice)", javascript)
+        self.assertIn("new Option(label || value, value)", javascript)
+        self.assertNotIn("new Option(choice, choice)", javascript)
+        for slug in ("salud", "exequial", "vida", "movilidad", "soat"):
+            form = IndividualQuotationForm(
+                schema=with_identification_choices(get_branch_schema(slug), TEST_IDENTIFICATION_CHOICES),
+                identification_choices=TEST_IDENTIFICATION_CHOICES,
+                context={},
+            )
+            id_fields = [
+                field for field in form.fields.values()
+                if field.label.startswith("Tipo de identificación")
+            ]
+            self.assertTrue(id_fields, slug)
+            for field in id_fields:
+                self.assertEqual(tuple(field.choices), (("", "Seleccione"), *TEST_IDENTIFICATION_CHOICES))
+
+    def test_same_requester_copy_preserves_identification_value_for_selects(self):
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn("const copyValue = (target, value)", javascript)
+        self.assertIn("item.value === normalized", javascript)
+        self.assertIn('id_type: "requester_id_type"', javascript)
+        self.assertIn('insured_id_type: "requester_id_type"', javascript)
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_rendered_mobility_form_exposes_canonical_vehicle_choices_without_fake_vehicle(self, workspace):
@@ -1018,6 +1045,11 @@ class IndividualQuotationTests(TestCase):
                 actor=self.actor, context=context,
             )
         publish.assert_called_once_with(quotation.task_outbox.get().pk)
+        task_record = json.loads(decrypt(quotation.task_outbox.get().encrypted_payload))
+        self.assertEqual(task_record["rea"], "Negocios Bienestar y Beneficios")
+        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
+        self.assertEqual(task_record["Responsable"], "Sara Rua Vargas")
+        self.assertEqual(task_record["Correo_responsable"], "sara@example.test")
 
     def _pending_responsible_quotation(self):
         schema = get_branch_schema("salud")
@@ -1054,7 +1086,7 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(outbox.safe_error_code, "")
         self.assertEqual(json.loads(decrypt(outbox.encrypted_payload))["Correo_responsable"], "ana@example.test")
 
-    def test_responsible_without_email_keeps_outbox_blocked_without_publish(self):
+    def test_responsible_without_email_remains_publishable_without_fabricating_email(self):
         quotation = self._pending_responsible_quotation()
         outbox = quotation.task_outbox.get(event_kind="COTIZACION")
         option = SimpleNamespace(actual_value="Sin Correo", display_value="Sin Correo")
@@ -1068,10 +1100,13 @@ class IndividualQuotationTests(TestCase):
                 {"responsible": option.actual_value},
             )
         self.assertEqual(response.status_code, 302)
-        publish.assert_not_called()
+        publish.assert_called_once_with(outbox.pk)
         outbox.refresh_from_db()
         self.assertEqual(outbox.status, outbox.Status.PENDING)
-        self.assertEqual(outbox.safe_error_code, "RESPONSIBLE_EMAIL_PENDING")
+        self.assertEqual(outbox.safe_error_code, "")
+        task_record = json.loads(decrypt(outbox.encrypted_payload))
+        self.assertNotIn("Correo_responsable", task_record)
+        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
 
     def test_published_outbox_is_not_republished_when_responsible_changes(self):
         quotation = self._pending_responsible_quotation()

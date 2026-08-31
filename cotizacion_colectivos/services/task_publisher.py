@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
@@ -19,6 +20,9 @@ from ..zoho import cached_metadata_fields
 from .common import colectivos_zoho
 
 from ..models import ColectivosTaskOutbox
+
+
+logger = logging.getLogger("cotizacion_colectivos")
 from .write_guards import configured_confirmation, require_write_guard
 
 
@@ -311,15 +315,20 @@ def get_task_publisher(
 def publish_task_outbox(outbox_id: int) -> None:
     """Publish one already-persisted intent, without retries or cross-profile writes."""
     if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
+        logger.warning("task_publish_skipped outbox_id=%s skip_reason=feature_disabled", outbox_id)
         return
     with transaction.atomic():
         item = ColectivosTaskOutbox.objects.select_for_update().get(pk=outbox_id)
         if item.status != item.Status.PENDING:
+            logger.info("task_publish_skipped outbox_id=%s skip_reason=status_%s", outbox_id, item.status)
             return
         item.attempts += 1
         item.save(update_fields=("attempts", "updated_at"))
         try:
             record = json.loads(decrypt(item.encrypted_payload))
+            analyst_request = str(record.get("Solicitud_a_analista") or "").strip()
+            if not analyst_request and item.request_id and item.request.request_type != "COTIZACION":
+                analyst_request = NOVELTIES_ANALYST_REQUEST
             payload = ColectivosTaskPayload(
                 request_kind=item.event_kind,
                 source_kind="quotation" if item.quotation_id else "request",
@@ -333,7 +342,12 @@ def publish_task_outbox(outbox_id: int) -> None:
                 responsible_email=str(record.get("Correo_responsable") or ""),
                 requested_date=str(record.get("Fecha_de_solicitud_del_cliente") or ""),
                 seller=str(record.get("Vendedor") or ""),
-                analyst_request=str(record.get("Solicitud_a_analista") or ""),
+                analyst_request=analyst_request,
+            )
+            logger.info(
+                "task_publish_payload outbox_id=%s source=%s has_analyst_request=%s has_area=%s",
+                outbox_id, "quotation" if item.quotation_id else "novelties",
+                bool(analyst_request), bool(str(record.get("rea") or "").strip()),
             )
             result = get_task_publisher(
                 profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),

@@ -22,7 +22,12 @@ from ..models import (
     CotizacionIndividual,
     NotificacionCotizacionIndividual,
 )
-from .task_publisher import ColectivosTaskPayload, enqueue_task, publish_task_outbox
+from .task_publisher import (
+    ColectivosTaskPayload,
+    NOVELTIES_ANALYST_REQUEST,
+    enqueue_task,
+    publish_task_outbox,
+)
 from .search import PersonSearchService
 from .person_contract import PersonCandidate, contact_missing_fields
 from ..quotation_forms.catalog import get_policy_branch_schema
@@ -431,6 +436,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 str(task_fields.get("placa") or task_fields.get("plate") or ""),
             ))),
             area=str(task_context.get("task_area") or ""),
+            analyst_request=NOVELTIES_ANALYST_REQUEST,
             observations=_individual_task_observations(task_context, task_fields, cleaned_data.get("normalized_items") or {}),
             responsible=str(task_context.get("task_responsible") or ""),
             responsible_email=str(task_context.get("task_responsible_email") or ""),
@@ -438,12 +444,11 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         ),
         event_version=1,
     )
-    # La respuesta siempre queda persistida. Una Task de Cotización no se
-    # publica con un contrato incompleto: el analista podrá resolver luego el
-    # responsable/correo desde el expediente y publicar de forma controlada.
-    if not (str(task_context.get("task_responsible") or "").strip() and
-            str(task_context.get("task_responsible_email") or "").strip()):
-        outbox.safe_error_code = "RESPONSIBLE_EMAIL_PENDING"
+    # El responsable es el único dato de asignación requerido para intentar
+    # publicar la Task. El correo es auxiliar: cuando no está disponible se
+    # omite del payload y Zoho puede crear la Task igualmente.
+    if not str(task_context.get("task_responsible") or "").strip():
+        outbox.safe_error_code = "RESPONSIBLE_PENDING"
         outbox.save(update_fields=("safe_error_code", "updated_at"))
     else:
         transaction.on_commit(lambda outbox_id=outbox.pk: publish_task_outbox(outbox_id))
@@ -474,7 +479,7 @@ def _individual_task_observations(context, fields, groups) -> str:
         "armored": "Blindado", "currently_insured": "Actualmente asegurado", "insured_name": "Asegurado",
         "insured_id_type": "Tipo de identificación del asegurado", "insured_document": "Documento del asegurado",
         "insured_is_different": "Asegurado diferente", "insured_same_as_requester": "El asegurado es el mismo solicitante",
-        "is_requester": "Esta persona es el solicitante", "displacement": "Cilindraje", "name": "Nombre",
+        "is_requester": "¿Los datos del afiliado son los mismos de esta persona?", "displacement": "Cilindraje", "name": "Nombre",
         "document": "Documento", "gender": "Género", "relationship": "Parentesco o relación",
         "employment_relationship": "Vínculo con el fondo", "currently_health_insured": "Cobertura de salud vigente",
         "current_health_insurer": "Aseguradora actual", "current_health_policy_end": "Fin de cobertura actual",
@@ -526,19 +531,24 @@ def update_quotation_responsible(*, quotation: CotizacionIndividual, option, ema
         locked.safe_metadata = metadata
         locked.save(update_fields=("safe_metadata",))
         outbox = locked.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
-        responsible_block = outbox is not None and outbox.safe_error_code == "RESPONSIBLE_EMAIL_PENDING"
+        responsible_block = outbox is not None and outbox.safe_error_code in {
+            "RESPONSIBLE_EMAIL_PENDING", "RESPONSIBLE_PENDING",
+        }
         if outbox is not None and (
             outbox.status == outbox.Status.PENDING
             or (outbox.status == outbox.Status.BLOCKED and responsible_block)
         ):
             record = json.loads(decrypt(outbox.encrypted_payload))
             record["Responsable"] = metadata["task_responsible"]
-            record["Correo_responsable"] = email
+            if email:
+                record["Correo_responsable"] = email
+            else:
+                record.pop("Correo_responsable", None)
             serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             outbox.encrypted_payload = encrypt(serialized)
             outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
             outbox.status = outbox.Status.PENDING
-            outbox.safe_error_code = "" if email else "RESPONSIBLE_EMAIL_PENDING"
+            outbox.safe_error_code = ""
             outbox.save(update_fields=("encrypted_payload", "payload_checksum", "status", "safe_error_code", "updated_at"))
         logger.info(
             "individual_responsible_updated quotation_id=%s outbox_existing=%s email_resolved=%s",

@@ -81,7 +81,7 @@ PERSON_FIELDS = (
 )
 
 HEALTH_PERSON_FIELDS = (
-    FieldSchema("is_requester", "Esta persona es el solicitante", "checkbox", required=False),
+    FieldSchema("is_requester", "¿Los datos del afiliado son los mismos de esta persona?", "checkbox", required=False, help_text="Sí, usar los mismos datos"),
     FieldSchema("first_name", "Nombres"),
     FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
@@ -99,7 +99,7 @@ HEALTH_PERSON_FIELDS = (
 )
 
 LIFE_PERSON_FIELDS = (
-    FieldSchema("is_requester", "¿El asegurado principal es el mismo afiliado?", "checkbox", required=False),
+    FieldSchema("is_requester", "¿Los datos del afiliado son los mismos de esta persona?", "checkbox", required=False, help_text="Sí, usar los mismos datos"),
     FieldSchema("first_name", "Nombres"),
     FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),

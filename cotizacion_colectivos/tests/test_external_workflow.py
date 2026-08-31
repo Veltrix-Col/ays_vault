@@ -210,6 +210,10 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal_response, "js/colectivos-external.js", html=False)
         self.assertContains(portal_response, "Mi póliza")
         self.assertContains(portal_response, "Mis pólizas y mi grupo")
+        self.assertContains(portal_response, "Póliza")
+        self.assertContains(portal_response, "Ramo")
+        self.assertNotContains(portal_response, "Fecha límite")
+        self.assertNotContains(portal_response, "Renovación")
         self.assertContains(portal_response, "Buscar dentro de mi información")
         self.assertNotContains(portal_response, "Riesgos1")
         self.assertNotContains(portal_response, "lookups")
@@ -405,6 +409,8 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, 'name="include_phone"', html=False)
         self.assertContains(portal, 'name="include_fecha_ingreso"', html=False)
         self.assertNotContains(portal, 'name="include_plan"', html=False)
+        self.assertNotContains(portal, "Quiero solicitar este ingreso")
+        self.assertNotContains(portal, "Enviar la respuesta no modifica automáticamente Zoho ni la póliza.")
 
     def test_external_entities_render_structured_rows_and_drawers(self):
         cases = {
