@@ -12,6 +12,7 @@ from django.utils import timezone
 from cotizacion_colectivos.services.renewals import (
     _renewal_email_settings,
     _send_renewal_email,
+    _send_renewal_internal_alert,
     list_collective_renewals,
 )
 
@@ -23,6 +24,7 @@ class Command(BaseCommand):
     help = "Envía un único correo de prueba del flujo mensual de renovaciones en Sandbox."
 
     def add_arguments(self, parser):
+        parser.add_argument("--type", choices=("initial", "reminder", "internal-alert"), default="initial")
         parser.add_argument("--to", required=True, help="Único destinatario del correo de prueba.")
         parser.add_argument("--policy", required=True, help="Número o ID de la póliza a leer en Sandbox.")
         parser.add_argument("--confirm", required=True)
@@ -72,6 +74,8 @@ class Command(BaseCommand):
             link_expires_at=expires_at,
             branch_name=selected.branch,
             insurer=selected.insurer,
+            sent_at=now,
+            get_status_display=lambda: "Enviado",
         )
         base = str(getattr(settings, "COLECTIVOS_EXTERNAL_BASE_URL", "")).rstrip("/")
         # These paths are intentionally inert and are not mapped to any
@@ -79,14 +83,21 @@ class Command(BaseCommand):
         # creating an access, request, OTP or NO_CHANGES response.
         report_url = f"{base}/sandbox-email-test/report/"
         no_changes_url = f"{base}/sandbox-email-test/no-changes/"
+        message_type = str(options.get("type") or "initial")
         try:
-            _send_renewal_email(
-                cycle=cycle,
-                url=report_url,
-                expires_at=expires_at,
-                recipient=recipient,
-                no_changes_url=no_changes_url,
-            )
+            if message_type == "internal-alert":
+                _send_renewal_internal_alert(
+                    cycle=cycle, reminder_at=now, recipient=recipient,
+                )
+            else:
+                _send_renewal_email(
+                    cycle=cycle,
+                    url=report_url,
+                    reminder=message_type == "reminder",
+                    expires_at=expires_at,
+                    recipient=recipient,
+                    no_changes_url=no_changes_url,
+                )
         except Exception as exc:
             raise CommandError("No fue posible enviar el correo de prueba SMTP.") from exc
 
@@ -94,5 +105,11 @@ class Command(BaseCommand):
         self.stdout.write(f"Destinatario: {recipient}")
         self.stdout.write(f"Remitente: {settings.COLECTIVOS_RENEWAL_EMAIL_FROM}")
         self.stdout.write(f"Póliza: {selected.policy}")
-        self.stdout.write("Template: renewal_initial.html")
+        self.stdout.write(
+            "Template: " + (
+                "renewal_internal_alert.html" if message_type == "internal-alert"
+                else "renewal_reminder.html" if message_type == "reminder"
+                else "renewal_initial.html"
+            )
+        )
         self.stdout.write(self.style.SUCCESS("Resultado: enviado"))

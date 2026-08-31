@@ -392,8 +392,12 @@ def _send_renewal_email(
         raise ColectivosServiceError("delivery", "No fue posible enviar la notificación.")
 
 
-def _send_renewal_internal_alert(*, cycle, reminder_at=None, request_obj=None):
-    recipient = str(getattr(settings, "COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL", "") or "").strip()
+def _send_renewal_internal_alert(*, cycle, reminder_at=None, request_obj=None, recipient: str | None = None):
+    recipient = str(
+        recipient if recipient is not None
+        else getattr(settings, "COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL", "")
+        or ""
+    ).strip()
     if not recipient:
         raise ColectivosServiceError("configuration", "El destinatario de alerta interna no está configurado.")
     try:

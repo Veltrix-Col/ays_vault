@@ -3,8 +3,14 @@
 {% block title %}{{ colectivos_mode.name }}{% endblock %}
 {% block content %}
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><span>{{ colectivos_mode.name }}</span></nav>
+{% if colectivos_mode.code == 'novelties' %}
+<div class="novelties-header-layout">
 <header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
-{% if colectivos_mode.code != 'novelties' %}<p class="profile-instruction">Perfil Zoho activo: <strong>{{ zoho_environment.label|upper }}</strong>. El perfil se cambia mediante <code>ZOHO_ACTIVE_PROFILE</code> y reinicio de la aplicación; no se cambia por sesión.</p>
+<section class="search-panel search-panel--compact novelties-search-utility" aria-labelledby="client-search-heading"><div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div><p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p><form method="post" action="{% url 'cotizacion_colectivos:novelties_client_search' %}" class="search-form unified-client-search" data-remote-zoho>{% csrf_token %}<div><label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}</div><button type="submit">Buscar</button></form></section>
+</div>
+{% else %}
+<header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
+<p class="profile-instruction">Perfil Zoho activo: <strong>{{ zoho_environment.label|upper }}</strong>. El perfil se cambia mediante <code>ZOHO_ACTIVE_PROFILE</code> y reinicio de la aplicación; no se cambia por sesión.</p>
 <section class="search-panel{% if colectivos_mode.code == 'novelties' %} search-panel--compact{% endif %}" aria-labelledby="client-search-heading">
   <div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div>
   <p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p>
@@ -41,7 +47,7 @@
     </tr>{% empty %}<tr><td colspan="9" class="muted">No hay pólizas Colectivo próximas a vencer.</td></tr>{% endfor %}
     </tbody></table>
   </div>
- </section></main><aside class="novelties-workspace-sidebar"><section class="search-panel search-panel--compact" aria-labelledby="client-search-heading"><div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div><p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p><form method="post" action="{% url 'cotizacion_colectivos:novelties_client_search' %}" class="search-form unified-client-search" data-remote-zoho>{% csrf_token %}<div><label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}</div><button type="submit">Buscar</button></form></section></aside></div>
+ </section></div>
 {% endif %}
 {% endblock %}
 {% block scripts %}<script src="{% static 'js/colectivos-detail.js' %}" defer></script>{% endblock %}

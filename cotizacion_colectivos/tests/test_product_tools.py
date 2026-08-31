@@ -41,8 +41,12 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertNotIn("Próximas a vencer", content)
         self.assertIn("Seguimiento de links", content)
         self.assertIn("renewal-panel-nav", content)
+        self.assertIn("novelties-header-layout", content)
+        self.assertIn("novelties-search-utility", content)
         self.assertIn("novelties-workspace-layout", content)
-        self.assertIn("novelties-workspace-sidebar", content)
+        self.assertIn("novelties-workspace-main", content)
+        self.assertIn("renewal-dashboard", content)
+        self.assertNotIn("novelties-workspace-sidebar", content)
         self.assertIn("novelties_client_search", content)
         self.assertIn("Periodo: {{ renewal_target_period_label }}", content)
         for label in ("Programadas", "Enviadas", "Respondidas", "En alerta", "Con error"):

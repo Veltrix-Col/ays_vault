@@ -45,7 +45,7 @@ RUN --mount=type=secret,id=gh_token,required=false \
 
 COPY . .
 
-RUN mkdir -p /app/staticfiles /app/media
+RUN mkdir -p /app/staticfiles /app/media /app/private_assets/colectivos
 
 EXPOSE 8000
 

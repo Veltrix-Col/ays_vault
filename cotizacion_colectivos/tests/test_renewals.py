@@ -14,6 +14,7 @@ from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
+from cotizacion_colectivos.management.commands.colectivos_test_renewal_email import CONFIRMATION
 from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, next_month_period, upcoming_cycles, tracking_cycles, set_renewal_selection
 
 
@@ -61,6 +62,18 @@ class RenewalEmailCommandTests(SimpleTestCase):
         self.assertEqual(send.call_args.kwargs["recipient"], "qa@example.test")
         self.assertEqual(send.call_args.kwargs["cycle"].monthly_period, "2026-09")
         self.assertIn("Template: renewal_initial.html", output.getvalue())
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox", COLECTIVOS_RENEWAL_EMAIL_PASSWORD="configured-only-in-test")
+    def test_email_command_supports_reminder_and_internal_alert_with_test_recipient(self):
+        with patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email.list_collective_renewals", return_value=(self._policy(),)), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._renewal_email_settings", return_value={"host": "smtp.example.test", "port": 587, "username": "u", "password": "p", "use_tls": True, "from_email": "from@example.test"}), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_email") as send_email, \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_internal_alert") as send_alert:
+            call_command("colectivos_test_renewal_email", type="reminder", to="qa@example.test", policy="040006434488", confirm=CONFIRMATION)
+            call_command("colectivos_test_renewal_email", type="internal-alert", to="qa@example.test", policy="040006434488", confirm=CONFIRMATION)
+        self.assertEqual(send_email.call_args.kwargs["recipient"], "qa@example.test")
+        self.assertTrue(send_email.call_args.kwargs["reminder"])
+        self.assertEqual(send_alert.call_args.kwargs["recipient"], "qa@example.test")
 
 
 class RenewalEmailContextTests(SimpleTestCase):
