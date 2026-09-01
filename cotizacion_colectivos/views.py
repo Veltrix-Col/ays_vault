@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django import forms as django_forms
 from django.contrib import messages
 from django.core import signing
 from django.db import OperationalError, transaction
@@ -30,6 +31,7 @@ from django.template.loader import render_to_string
 from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, NoveltyEditForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
+from .services.catalogs import CatalogUnavailable, identification_choice_pairs
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
 from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
@@ -81,6 +83,7 @@ from .services.individual_entities import effective_candidate, promote_created_p
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
 from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
 from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
+from .services.invitation_attachment_publisher import prepare_invitation_attachment
 from .services.write_guards import configured_confirmation
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
@@ -226,6 +229,8 @@ def index(request, mode=None):
             "renewal_sync_error": renewal_sync_error,
             "monthly_renewals_enabled": monthly_renewals_enabled(),
             "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
+            "can_edit_renewal_schedule": has_internal_permission(request, "view_requests"),
+            "can_manage_renewal_automation": has_internal_permission(request, "view_requests"),
         })
     return render(request, "cotizacion_colectivos/index.html", context)
 
@@ -233,7 +238,7 @@ def index(request, mode=None):
 @never_cache
 @require_http_methods(["POST"])
 def monthly_renewals_toggle(request):
-    if not has_internal_permission(request, "manage_notifications"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     enabled = str(request.POST.get("enabled") or "").lower() in {"1", "true", "on", "yes"}
     set_monthly_renewals_enabled(enabled=enabled, actor=get_internal_actor(request, create=True))
@@ -261,6 +266,43 @@ def renewal_toggle(request, cycle_id):
 
 
 @never_cache
+@require_http_methods(["POST"])
+def renewal_schedule_update(request, cycle_id):
+    """Update only the scheduled date of an unsent programmed cycle."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    date_field = django_forms.DateField(input_formats=["%Y-%m-%d"], required=True)
+    try:
+        scheduled_for = date_field.clean(request.POST.get("scheduled_for"))
+    except ValidationError:
+        messages.error(request, "Selecciona una fecha válida.")
+        return redirect("cotizacion_colectivos:novelties_index")
+    with transaction.atomic():
+        try:
+            cycle = RenovacionColectiva.objects.select_for_update().get(pk=cycle_id)
+        except RenovacionColectiva.DoesNotExist:
+            raise Http404("Programación no encontrada")
+        if (
+            cycle.status != RenovacionColectiva.Status.PROGRAMMED
+            or cycle.sent_at is not None
+            or cycle.responded_at is not None
+        ):
+            messages.error(request, "Este envío ya no puede reprogramarse.")
+            return redirect("cotizacion_colectivos:novelties_index")
+        previous_date = cycle.scheduled_for
+        cycle.scheduled_for = scheduled_for
+        cycle.save(update_fields=("scheduled_for", "updated_at"))
+    audit(
+        request,
+        "UPDATE",
+        reason="renewal_schedule_updated",
+        metadata={"cycle_id": cycle_id, "previous_date": str(previous_date), "scheduled_for": str(scheduled_for)},
+    )
+    messages.success(request, "Fecha de envío actualizada.")
+    return redirect("cotizacion_colectivos:novelties_index")
+
+
+@never_cache
 @require_http_methods(["GET"])
 def renewal_tracking(request):
     if not has_internal_permission(request, "view_requests"):
@@ -280,6 +322,7 @@ def renewal_tracking(request):
         "renewal_tab": "tracking",
         "monthly_renewals_enabled": monthly_renewals_enabled(),
         "can_manage_notifications": has_internal_permission(request, "manage_notifications"),
+        "can_manage_renewal_automation": has_internal_permission(request, "view_requests"),
         "colectivos_mode": resolve_tool_mode(request, NOVELTIES_MODE),
         **_environment_context(),
     })
@@ -590,6 +633,9 @@ def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
                 "insurer_name": preview.template.insurer_name,
                 "recipient": preview.template.recipient_email,
                 "previews": [], "missing_required": set(), "output_files": 0,
+                # Empty means the complete insurer output (XLSX or ZIP), not
+                # one arbitrarily selected template.
+                "template_code": "",
                 "mailto_url": _short_invitation_mailto(
                     branch_name=detail.branch_name, client_name=client_name,
                     insurer=preview.template.insurer_name,
@@ -2440,21 +2486,22 @@ def request_publish_task(request, public_id, outbox_id):
         messages.info(request, "La Tarea ya fue publicada.")
     else:
         try:
-            options = task_responsible_options(collective_only=True)
-            selected = next(
-                (option for option in options if option.actual_value == str(request.POST.get("responsible") or "").strip()),
-                None,
-            )
-            if selected is None:
-                raise ValidationError("Seleccione un responsable válido del área Colectivos.")
-            responsible_email = resolve_task_responsible_email(selected)
-            record = json.loads(decrypt(outbox.encrypted_payload))
-            record["Responsable"] = selected.actual_value
-            record["Correo_responsable"] = responsible_email
-            serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            outbox.encrypted_payload = encrypt(serialized)
-            outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
-            outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
+            if item.request_type == "COTIZACION":
+                options = task_responsible_options(collective_only=True)
+                selected = next(
+                    (option for option in options if option.actual_value == str(request.POST.get("responsible") or "").strip()),
+                    None,
+                )
+                if selected is None:
+                    raise ValidationError("Seleccione un responsable válido del área Colectivos.")
+                responsible_email = resolve_task_responsible_email(selected)
+                record = json.loads(decrypt(outbox.encrypted_payload))
+                record["Responsable"] = selected.actual_value
+                record["Correo_responsable"] = responsible_email
+                serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                outbox.encrypted_payload = encrypt(serialized)
+                outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
+                outbox.save(update_fields=("encrypted_payload", "payload_checksum", "updated_at"))
             publish_task_outbox(outbox.pk)
         except (ValidationError, ColectivosServiceError) as exc:
             messages.error(request, str(exc))
@@ -2464,6 +2511,8 @@ def request_publish_task(request, public_id, outbox_id):
             messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
         elif outbox.status == outbox.Status.RECONCILE:
             messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
+        elif not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
+            messages.warning(request, "La publicación de Tareas está deshabilitada por configuración.")
         else:
             messages.error(request, "La Tarea no pudo publicarse; revise el estado del expediente.")
     return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
@@ -2741,7 +2790,10 @@ def attachment_download(request, public_id, attachment_id):
     target = (root / attachment.stored_path).resolve()
     if root not in target.parents or not target.is_file():
         raise Http404("Adjunto no disponible")
-    response = FileResponse(target.open("rb"), content_type=attachment.detected_mime, as_attachment=True, filename=f"soporte{attachment.extension}")
+    response = FileResponse(
+        target.open("rb"), content_type=attachment.detected_mime,
+        as_attachment=True, filename=attachment.safe_original_name or f"soporte{attachment.extension}",
+    )
     response["Cache-Control"] = "no-store, private"
     return response
 
@@ -3042,7 +3094,12 @@ def individual_complete_person(request, token):
         public_id = unsign_receipt(token)
         quotation = CotizacionIndividual.objects.get(public_id=public_id)
         _ensure_individual_can_operate_zoho(quotation)
-        form = PersonCompletionForm(request.POST)
+        try:
+            identification_choices = identification_choice_pairs()
+        except CatalogUnavailable as exc:
+            messages.warning(request, str(exc))
+            return redirect("cotizacion_colectivos:individual_expedient", token=token)
+        form = PersonCompletionForm(request.POST, identification_choices=identification_choices)
         if not form.is_valid():
             for error in form.errors.values():
                 messages.warning(request, " ".join(str(item) for item in error))
@@ -3293,15 +3350,14 @@ def individual_update_responsible(request, token):
         try:
             email = resolve_task_responsible_email(option)
         except ValidationError:
-            # El correo del responsable es necesario para publicar la Task,
-            # pero no debe impedir corregir/guardar el responsable desde el
-            # expediente. El bloqueo queda explícito en el outbox.
+            # El correo es auxiliar de la Task; si no está disponible, se
+            # conserva el responsable y se publica sin fabricar ese dato.
             email = ""
         update_quotation_responsible(quotation=quotation, option=option, email=email)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
         publish_scheduled = False
         publish_result = "none"
-        if email and outbox is not None and outbox.status == outbox.Status.PENDING:
+        if outbox is not None and outbox.status == outbox.Status.PENDING:
             publish_scheduled = True
             publish_task_outbox(outbox.pk)
             outbox.refresh_from_db()
@@ -3325,8 +3381,6 @@ def individual_update_responsible(request, token):
         )
         if publish_result == "published":
             messages.success(request, "Responsable actualizado y Tarea publicada correctamente.")
-        elif not email:
-            messages.warning(request, "Responsable actualizado; falta resolver su correo para publicar la Tarea.")
         elif publish_result == "reconcile":
             messages.warning(request, "Responsable actualizado; la Tarea requiere conciliación y no se reintentará automáticamente.")
         elif publish_result == "blocked":
@@ -3436,8 +3490,12 @@ def individual_expedient(request, token):
         attachment.owner_label = {"affiliate": "Afiliado", "insured": "Asegurado", "risk": "Vehículo"}.get(str(metadata.get("owner_role") or ""), "Documento histórico")
         attachment.document_status = _attachment_document_status(attachment)
         attachment.structured_owner = (
-            str(metadata.get("owner_type") or "") in {"contact", "risk"}
+            str(metadata.get("owner_type") or "") in {"contact", "risk", "request"}
             and bool(str(metadata.get("owner_key") or "").strip())
+        )
+        attachment.is_request_support = (
+            str(metadata.get("owner_type") or "") == "request"
+            and str(metadata.get("document_type") or "") == "support_document"
         )
         documents_by_owner.setdefault(str(metadata.get("owner_key") or "legacy"), []).append(attachment)
     acceptance = safe_metadata.get("acceptance") if isinstance(safe_metadata.get("acceptance"), dict) else {}
@@ -3588,6 +3646,10 @@ def individual_expedient(request, token):
         attachment for attachment in individual_attachments
         if not getattr(attachment, "structured_owner", False)
     )
+    support_attachments = tuple(
+        attachment for attachment in individual_attachments
+        if getattr(attachment, "is_request_support", False)
+    )
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
@@ -3616,6 +3678,7 @@ def individual_expedient(request, token):
         "vehicle_class_choices": VEHICLE_CLASS_CHOICES,
         "vehicle_use_choices": VEHICLE_USE_CHOICES,
         "individual_attachments": individual_attachments,
+        "support_attachments": support_attachments,
         "task_responsibles": task_responsibles,
         "individual_token": token,
         "person_creation_blocked": True,
@@ -3661,6 +3724,27 @@ def individual_attachment_download(request, token, attachment_id):
     response["Pragma"] = "no-cache"
     response["X-Content-Type-Options"] = "nosniff"
     return response
+
+
+@never_cache
+@require_http_methods(["POST"])
+def policy_invitation_attach(request, token):
+    """Attach a generated insurer invitation to this policy in Zoho."""
+    # Functional access follows the general Colectivos workspace permission;
+    # Zoho WRITE remains independently protected by the attachment guards.
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    try:
+        result = prepare_invitation_attachment(
+            token=token,
+            insurer_code=str(request.POST.get("insurer_code") or ""),
+            template_code=str(request.POST.get("template_code") or ""),
+        )
+    except (ColectivosServiceError, ValidationError, IndividualAttachmentBlocked, IndividualAttachmentUncertain) as exc:
+        messages.error(request, str(getattr(exc, "message", "No fue posible adjuntar el archivo.")))
+        return redirect("cotizacion_colectivos:policy_invitation_preview", token=token)
+    messages.success(request, "Archivo adjuntado a la póliza." if result.get("status") != "UPLOADED" else "El archivo ya estaba adjuntado.")
+    return redirect("cotizacion_colectivos:policy_invitation_preview", token=token)
 
 
 @never_cache

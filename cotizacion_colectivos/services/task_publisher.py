@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
@@ -15,8 +16,13 @@ from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoAPIError, ZohoError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
 from vault.crypto import decrypt, encrypt
+from ..zoho import cached_metadata_fields
+from .common import colectivos_zoho
 
 from ..models import ColectivosTaskOutbox
+
+
+logger = logging.getLogger("cotizacion_colectivos")
 from .write_guards import configured_confirmation, require_write_guard
 
 
@@ -25,10 +31,12 @@ TASK_KIND = {
     "RETIRO": "Retiros",
     "COTIZACION": "Cotización",
 }
+NOVELTIES_TASK_AREA = "Negocios Bienestar y Beneficios"
+NOVELTIES_ANALYST_REQUEST = "Si"
 BASE_TASK_FIELDS = frozenset({"Subject", "tipo_de_solicitud"})
 CONFIRMED_TASK_FIELDS = frozenset({
     "Subject", "tipo_de_solicitud", "rea", "Observaciones", "Responsable",
-    "Correo_responsable", "Fecha_de_solicitud_del_cliente",
+    "Correo_responsable", "Fecha_de_solicitud_del_cliente", "Solicitud_a_analista", "Vendedor",
 })
 ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
 TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
@@ -95,6 +103,8 @@ class ColectivosTaskPayload:
     responsible: str = ""
     responsible_email: str = ""
     requested_date: str = ""
+    seller: str = ""
+    analyst_request: str = ""
 
 
 class ColectivosTaskPublisher(Protocol):
@@ -122,8 +132,31 @@ def build_task_record(payload: ColectivosTaskPayload) -> dict[str, str]:
         "Responsable": payload.responsible,
         "Correo_responsable": payload.responsible_email,
         "Fecha_de_solicitud_del_cliente": payload.requested_date,
+        "Solicitud_a_analista": payload.analyst_request,
     }
     record.update({key: str(value).strip() for key, value in optional.items() if str(value or "").strip()})
+    seller = str(payload.seller or "").strip()
+    if seller:
+        try:
+            fields = cached_metadata_fields(colectivos_zoho(), "Tasks")
+            task_field = next((
+                field for field in fields
+                if (field.get("api_name") if isinstance(field, dict) else getattr(field, "api_name", "")) == "Vendedor"
+            ), None)
+            values = set()
+            pick_values = (
+                task_field.get("pick_list_values") if isinstance(task_field, dict)
+                else getattr(task_field, "pick_list_values", ())
+            ) if task_field is not None else ()
+            for item in pick_values or ():
+                actual = item.get("actual_value") if isinstance(item, dict) else getattr(item, "actual_value", "")
+                actual = str(actual or "").strip()
+                if actual and actual not in {"None", "-None-"}:
+                    values.add(actual)
+            if seller in values:
+                record["Vendedor"] = seller
+        except Exception:
+            pass
     return record
 
 
@@ -282,15 +315,20 @@ def get_task_publisher(
 def publish_task_outbox(outbox_id: int) -> None:
     """Publish one already-persisted intent, without retries or cross-profile writes."""
     if not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
+        logger.warning("task_publish_skipped outbox_id=%s skip_reason=feature_disabled", outbox_id)
         return
     with transaction.atomic():
         item = ColectivosTaskOutbox.objects.select_for_update().get(pk=outbox_id)
         if item.status != item.Status.PENDING:
+            logger.info("task_publish_skipped outbox_id=%s skip_reason=status_%s", outbox_id, item.status)
             return
         item.attempts += 1
         item.save(update_fields=("attempts", "updated_at"))
         try:
             record = json.loads(decrypt(item.encrypted_payload))
+            analyst_request = str(record.get("Solicitud_a_analista") or "").strip()
+            if not analyst_request and item.request_id and item.request.request_type != "COTIZACION":
+                analyst_request = NOVELTIES_ANALYST_REQUEST
             payload = ColectivosTaskPayload(
                 request_kind=item.event_kind,
                 source_kind="quotation" if item.quotation_id else "request",
@@ -303,6 +341,13 @@ def publish_task_outbox(outbox_id: int) -> None:
                 responsible=str(record.get("Responsable") or ""),
                 responsible_email=str(record.get("Correo_responsable") or ""),
                 requested_date=str(record.get("Fecha_de_solicitud_del_cliente") or ""),
+                seller=str(record.get("Vendedor") or ""),
+                analyst_request=analyst_request,
+            )
+            logger.info(
+                "task_publish_payload outbox_id=%s source=%s has_analyst_request=%s has_area=%s",
+                outbox_id, "quotation" if item.quotation_id else "novelties",
+                bool(analyst_request), bool(str(record.get("rea") or "").strip()),
             )
             result = get_task_publisher(
                 profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),

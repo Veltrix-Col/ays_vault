@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from django.http import Http404
 
@@ -42,7 +42,8 @@ class BranchSchema:
     version: int = 1
 
 
-IDENTIFICATION_CHOICES = ("CC", "CE", "TI", "RC", "Pasaporte", "NIT")
+# Populated per request from the authoritative Contacts.Tipo_ID metadata.
+IDENTIFICATION_CHOICES: tuple[str, ...] = ()
 GENDER_CHOICES = ("Femenino", "Masculino", "Otro", "Prefiero no indicar")
 ROLE_CHOICES = ("Afiliado principal", "Asegurado", "Cónyuge", "Hijo(a)", "Otro familiar")
 VEHICLE_CLASS_CHOICES = (
@@ -80,7 +81,7 @@ PERSON_FIELDS = (
 )
 
 HEALTH_PERSON_FIELDS = (
-    FieldSchema("is_requester", "Esta persona es el solicitante", "checkbox", required=False),
+    FieldSchema("is_requester", "¿Los datos del afiliado son los mismos de esta persona?", "checkbox", required=False, help_text="Sí, usar los mismos datos"),
     FieldSchema("first_name", "Nombres"),
     FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
@@ -98,7 +99,7 @@ HEALTH_PERSON_FIELDS = (
 )
 
 LIFE_PERSON_FIELDS = (
-    FieldSchema("is_requester", "¿El asegurado principal es el mismo afiliado?", "checkbox", required=False),
+    FieldSchema("is_requester", "¿Los datos del afiliado son los mismos de esta persona?", "checkbox", required=False, help_text="Sí, usar los mismos datos"),
     FieldSchema("first_name", "Nombres"),
     FieldSchema("last_name", "Apellidos"),
     FieldSchema("id_type", "Tipo de identificación", "choice", choices=IDENTIFICATION_CHOICES),
@@ -126,7 +127,7 @@ VEHICLE_FIELDS = (
     # insured_name/insured_is_different se conservan para leer snapshots
     # históricos. Los registros nuevos usan una relación explícita y datos
     # estructurados cuando el asegurado no es el solicitante.
-    FieldSchema("insured_same_as_requester", "El asegurado del vehículo es el mismo solicitante", "checkbox", required=False),
+    FieldSchema("insured_same_as_requester", "El asegurado es el mismo afiliado", "checkbox", required=False),
     FieldSchema("insured_id_type", "Tipo de identificación del asegurado", "choice", choices=IDENTIFICATION_CHOICES),
     FieldSchema("insured_document", "Identificación del asegurado", "document"),
     FieldSchema("insured_first_name", "Nombres del asegurado", required=False),
@@ -190,6 +191,31 @@ BRANCH_SCHEMAS = (
 )
 
 _BY_SLUG = {item.slug: item for item in BRANCH_SCHEMAS}
+
+
+def with_identification_choices(schema: BranchSchema, choices) -> BranchSchema:
+    """Clone a schema replacing every identification field's choices."""
+
+    normalized = tuple(
+        (item, item) if isinstance(item, str) else (item[0], item[1])
+        for item in (choices or ())
+    )
+    def update_field(field: FieldSchema) -> FieldSchema:
+        if field.kind == "choice" and (
+            field.key == "id_type" or field.key.endswith("_id_type")
+        ):
+            return replace(field, choices=normalized)
+        return field
+    return replace(
+        schema,
+        fields=tuple(update_field(field) for field in schema.fields),
+        repeatables=tuple(
+            replace(group, fields=tuple(update_field(field) for field in group.fields))
+            for group in schema.repeatables
+        ),
+    )
+
+
 def get_branch_schema(slug: str) -> BranchSchema:
     try:
         return _BY_SLUG[slug]

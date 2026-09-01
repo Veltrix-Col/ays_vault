@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.core.management import call_command, CommandError
 from django.urls import reverse
 from django.utils import timezone
 
@@ -13,10 +14,140 @@ from vault.crypto import encrypt
 
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
-from cotizacion_colectivos.services.renewals import RenewalPolicy, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, upcoming_cycles, tracking_cycles, set_renewal_selection
+from cotizacion_colectivos.management.commands.colectivos_test_renewal_email import CONFIRMATION
+from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, next_month_period, upcoming_cycles, tracking_cycles, set_renewal_selection
+
+
+class RenewalEmailCommandTests(SimpleTestCase):
+    def _policy(self):
+        return RenewalPolicy(
+            remote_id="4991513000270954040", token="unused", policy="040006434488",
+            client="Cliente Sandbox", branch="VG deudores", expiry_date=date(2027, 8, 26),
+            email="zoho@example.test", policy_status="Vigente", payment_frequency="Mensual",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="production")
+    def test_email_command_rejects_production(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="SANDBOX_RENEWAL_EMAIL_TEST",
+            )
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
+    def test_email_command_requires_exact_confirmation(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="wrong",
+            )
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_RENEWAL_EMAIL_USER="gestionbeneficios@segurosays.com",
+        COLECTIVOS_RENEWAL_EMAIL_FROM="gestionbeneficios@segurosays.com",
+        COLECTIVOS_RENEWAL_EMAIL_PASSWORD="configured-only-in-test",
+    )
+    def test_email_command_sends_one_rendered_initial_message_without_persisting_cycles(self):
+        with patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email.list_collective_renewals", return_value=(self._policy(),)), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._renewal_email_settings", return_value={"host": "smtp.example.test", "port": 587, "username": "u", "password": "p", "use_tls": True, "from_email": "from@example.test"}), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_email") as send:
+            output = StringIO()
+            call_command(
+                "colectivos_test_renewal_email", to="qa@example.test",
+                policy="040006434488", confirm="SANDBOX_RENEWAL_EMAIL_TEST", stdout=output,
+            )
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["recipient"], "qa@example.test")
+        self.assertEqual(send.call_args.kwargs["cycle"].monthly_period, "2026-09")
+        self.assertIn("Template: renewal_initial.html", output.getvalue())
+
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox", COLECTIVOS_RENEWAL_EMAIL_PASSWORD="configured-only-in-test")
+    def test_email_command_supports_reminder_and_internal_alert_with_test_recipient(self):
+        with patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email.list_collective_renewals", return_value=(self._policy(),)), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._renewal_email_settings", return_value={"host": "smtp.example.test", "port": 587, "username": "u", "password": "p", "use_tls": True, "from_email": "from@example.test"}), \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_email") as send_email, \
+             patch("cotizacion_colectivos.management.commands.colectivos_test_renewal_email._send_renewal_internal_alert") as send_alert:
+            call_command("colectivos_test_renewal_email", type="reminder", to="qa@example.test", policy="040006434488", confirm=CONFIRMATION)
+            call_command("colectivos_test_renewal_email", type="internal-alert", to="qa@example.test", policy="040006434488", confirm=CONFIRMATION)
+        self.assertEqual(send_email.call_args.kwargs["recipient"], "qa@example.test")
+        self.assertTrue(send_email.call_args.kwargs["reminder"])
+        self.assertEqual(send_alert.call_args.kwargs["recipient"], "qa@example.test")
+
+
+class RenewalEmailContextTests(SimpleTestCase):
+    def _cycle(self):
+        return SimpleNamespace(
+            client_label='Empresa <QA>', masked_policy='040006434488', branch_name='VG deudores',
+            monthly_period='2026-09', recipient_email='cliente@example.test',
+            link_expires_at=timezone.now() + timedelta(days=8),
+        )
+
+    @patch('cotizacion_colectivos.services.renewals.request_snapshot', return_value={'policy': {'insurer': 'Aseguradora & QA'}})
+    @patch('cotizacion_colectivos.services.renewals.EmailMultiAlternatives')
+    @patch('cotizacion_colectivos.services.renewals._renewal_email_settings', return_value={'host': 'smtp.test', 'port': 587, 'username': 'u', 'password': 'p', 'use_tls': True, 'from_email': 'from@example.test'})
+    @override_settings(COLECTIVOS_EXTERNAL_BASE_URL='https://example.test')
+    def test_initial_email_contains_policy_context_and_absolute_logo(self, _settings, message_class, _snapshot):
+        message = message_class.return_value
+        message.send.return_value = 1
+        _send_renewal_email(
+            cycle=self._cycle(), request_obj=SimpleNamespace(), url='https://example.test/report/',
+            no_changes_url='https://example.test/no-changes/', expires_at=timezone.now(),
+        )
+        html = message.attach_alternative.call_args.args[0]
+        self.assertIn('VG deudores', html)
+        self.assertIn('Aseguradora &amp; QA', html)
+        self.assertIn('https://example.test/static/img/branding/logo-ays-azul.png', html)
+        self.assertIn('https://example.test/report/', html)
+        self.assertIn('¿No tiene movimientos para este mes?', html)
+        self.assertIn('No tengo novedades', html)
+        self.assertIn('href="https://example.test/no-changes/"', html)
+        self.assertNotIn('NO TENGO NOVEDADES PARA REPORTAR', html)
+        self.assertIn('https://example.test/no-changes/', html)
+        self.assertNotIn('Empresa <QA>', html)
+
+    @override_settings(COLECTIVOS_EXTERNAL_BASE_URL='https://example.test/')
+    def test_renewal_logo_url_normalizes_trailing_slash(self):
+        self.assertEqual(_renewal_logo_url(), 'https://example.test/static/img/branding/logo-ays-azul.png')
+
+    @patch('cotizacion_colectivos.services.renewals.request_snapshot', return_value={'policy': {'insurer': 'Aseguradora QA'}})
+    @patch('cotizacion_colectivos.services.renewals.EmailMultiAlternatives')
+    @patch('cotizacion_colectivos.services.renewals._renewal_email_settings', return_value={'host': 'smtp.test', 'port': 587, 'username': 'u', 'password': 'p', 'use_tls': True, 'from_email': 'from@example.test'})
+    def test_reminder_contains_same_policy_context(self, _settings, message_class, _snapshot):
+        message = message_class.return_value
+        message.send.return_value = 1
+        _send_renewal_email(
+            cycle=self._cycle(), request_obj=SimpleNamespace(), url='https://example.test/report/',
+            no_changes_url='https://example.test/no-changes/', reminder=True,
+        )
+        html = message.attach_alternative.call_args.args[0]
+        self.assertIn('Recordatorio de novedades', html)
+        self.assertIn('VG deudores', html)
+        self.assertIn('Aseguradora QA', html)
+        self.assertIn('logo-ays-azul.png', html)
+        self.assertIn('¿No tiene movimientos para este mes?', html)
+        self.assertIn('No tengo novedades', html)
+        self.assertIn('href="https://example.test/no-changes/"', html)
+        self.assertIn('https://example.test/no-changes/', html)
 
 
 class RenewalReadContractTests(SimpleTestCase):
+    def test_policy_read_contract_includes_and_maps_vendedor(self):
+        self.assertIn("Vendedor", POLICY_FIELDS)
+        mapped = _map_record({
+            "id": "4991513000271000012", "Name": "0405", "Ramo": "VG patronal",
+            "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual",
+            "Vendedor": "  Vendedor Sandbox  ", "Aseguradora1": "Aseguradora Sandbox",
+        }, today=date(2026, 8, 24), window=30)
+        self.assertEqual(mapped.seller, "Vendedor Sandbox")
+        self.assertEqual(mapped.insurer, "Aseguradora Sandbox")
+        without = _map_record({
+            "id": "4991513000271000013", "Name": "0406", "Ramo": "VG patronal",
+            "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "Vendedor": None,
+        }, today=date(2026, 8, 24), window=30)
+        self.assertEqual(without.seller, "")
+
     def test_active_monthly_allowed_policy_is_eligible_even_with_annual_contract_term(self):
         included = _map_record({"id": "4991513000271000001", "Name": "0400", "Ramo": "VG patronal", "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "Modo_de_pago": "Fraccionado", "Periodicidad_de_pago": None, "P_liza_Fecha_de_inicio_vigencia": "2026-01-01", "P_liza_Fecha_fin_de_la_vigencia": "2026-12-31", "Tomador_principal1": "Empresa", "Correo_gesti_n_comercial": "empresa@example.test"}, today=date(2026, 8, 24), window=30)
         self.assertIsNotNone(included)
@@ -38,15 +169,19 @@ class RenewalReadContractTests(SimpleTestCase):
 
     def test_list_uses_server_side_collective_criteria(self):
         class Search:
-            def __init__(self): self.criteria = None
+            def __init__(self): self.criteria = None; self.calls = 0; self.fields = None
             def by_criteria(self, **kwargs):
+                self.calls += 1
                 self.criteria = kwargs["criteria"]
+                self.fields = kwargs["fields"]
                 return SimpleNamespace(records=[{"id": "4991513000271000001", "Name": "0400", "Ramo": "AP colectivo", "Estado_de_la_p_liza": "Vigente", "Frecuencia": "Mensual", "P_liza_Fecha_fin_de_la_vigencia": "2026-09-10"}], more_records=False)
         search = Search()
         fake = SimpleNamespace(search=search)
         rows = list_collective_renewals(zoho=fake, today=date(2026, 8, 24))
         self.assertEqual(len(rows), 1)
         self.assertIn("Ramo:equals:", search.criteria)
+        self.assertIn("Vendedor", search.fields)
+        self.assertEqual(search.calls, 3)
 
     def test_empty_exact_search_does_not_sweep_all_policies_in_interactive_read(self):
         class Search:
@@ -104,15 +239,106 @@ class RenewalReadContractTests(SimpleTestCase):
 
 @override_settings(COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False)
 class RenewalSelectionTests(TestCase):
+    @patch("cotizacion_colectivos.services.renewals._send_renewal_internal_alert", side_effect=[RuntimeError("smtp"), None])
+    @patch("cotizacion_colectivos.services.renewals._send_renewal_email")
+    @patch("cotizacion_colectivos.services.renewals.decrypt", return_value="signed-token")
+    @patch("cotizacion_colectivos.services.renewals.monthly_renewals_enabled", return_value=True)
+    def test_internal_alert_retries_after_client_reminder_was_already_sent(self, _enabled, decrypt_mock, send_email, send_alert):
+        now = timezone.now()
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000200:2026-09", policy_remote_id="4991513000271000200",
+            policy_token="protected", masked_policy="0420", client_label="Empresa", branch_name="VG deudores",
+            monthly_period=next_month_period(now.date()), scheduled_for=now.date(), status=RenovacionColectiva.Status.SENT,
+            encrypted_recipient=encrypt("cliente@example.test"), encrypted_access_token="protected-access",
+            sent_at=now - timedelta(days=4), reminder_due_at=now - timedelta(hours=1),
+            link_expires_at=now + timedelta(days=4),
+        )
+
+        process_renewal_cycles(now=now)
+        cycle.refresh_from_db()
+        self.assertIsNotNone(cycle.reminder_sent_at)
+        self.assertIsNone(cycle.internal_alert_sent_at)
+        self.assertEqual(send_email.call_count, 1)
+        self.assertEqual(send_alert.call_count, 1)
+
+        process_renewal_cycles(now=now + timedelta(minutes=1))
+        cycle.refresh_from_db()
+        self.assertIsNotNone(cycle.internal_alert_sent_at)
+        self.assertEqual(send_email.call_count, 1)
+        self.assertEqual(send_alert.call_count, 2)
+
     def _notification_manager(self):
         user = get_user_model().objects.create_user("renewal-manager", password="Password123!")
-        permission = Permission.objects.get(
-            codename="manage_notifications",
+        permissions = Permission.objects.filter(
+            codename__in=("manage_notifications", "view_requests"),
             content_type__app_label="cotizacion_colectivos",
         )
-        user.user_permissions.add(permission)
+        user.user_permissions.add(*permissions)
         self.client.force_login(user)
         return user
+
+    def _scheduled_cycle(self, **overrides):
+        values = {
+            "cycle_key": "4991513000271000200:2026-09",
+            "policy_remote_id": "4991513000271000200",
+            "policy_token": "protected",
+            "masked_policy": "0400",
+            "client_label": "Empresa",
+            "branch_name": "VG deudores",
+            "monthly_period": "2026-09",
+            "scheduled_for": date(2026, 8, 31),
+            "status": RenovacionColectiva.Status.PROGRAMMED,
+            "automation_eligible": True,
+        }
+        values.update(overrides)
+        return RenovacionColectiva.objects.create(**values)
+
+    def test_authorized_can_edit_only_scheduled_date_with_master_switch_off(self):
+        self._notification_manager()
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
+        self.assertTrue(cycle.automation_eligible)
+        self.assertEqual(cycle.monthly_period, "2026-09")
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.PROGRAMMED)
+        self.assertIsNone(cycle.sent_at)
+
+    def test_schedule_edit_rejects_invalid_or_immutable_cycle(self):
+        self._notification_manager()
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "not-a-date"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+        cycle.status = RenovacionColectiva.Status.SENT
+        cycle.sent_at = timezone.now()
+        cycle.save(update_fields=("status", "sent_at", "updated_at"))
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    def test_schedule_edit_requires_internal_view_access_not_manage_notifications(self):
+        user = get_user_model().objects.create_user("renewal-viewer", password="Password123!")
+        self.client.force_login(user)
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 403)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    def test_internal_viewer_without_manage_notifications_can_edit_schedule(self):
+        user = get_user_model().objects.create_user("renewal-internal-viewer", password="Password123!")
+        permission = Permission.objects.get(codename="view_requests", content_type__app_label="cotizacion_colectivos")
+        user.user_permissions.add(permission)
+        self.client.force_login(user)
+        cycle = self._scheduled_cycle()
+        response = self.client.post(reverse("cotizacion_colectivos:renewal_schedule_update", args=[cycle.pk]), {"scheduled_for": "2026-09-02"})
+        self.assertEqual(response.status_code, 302)
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
 
     def test_monthly_switch_authorized_toggles_and_persists_on_get(self):
         self._notification_manager()
@@ -130,6 +356,19 @@ class RenewalSelectionTests(TestCase):
 
         response = self.client.post(endpoint, {"enabled": "0", "next": reverse("cotizacion_colectivos:renewal_tracking")})
         self.assertEqual(response["Location"], reverse("cotizacion_colectivos:renewal_tracking"))
+        self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+
+    def test_monthly_switch_internal_viewer_without_manage_notifications_can_toggle(self):
+        user = get_user_model().objects.create_user("renewal-internal-viewer", password="Password123!")
+        permission = Permission.objects.get(codename="view_requests", content_type__app_label="cotizacion_colectivos")
+        user.user_permissions.add(permission)
+        self.client.force_login(user)
+        endpoint = reverse("cotizacion_colectivos:monthly_renewals_toggle")
+        response = self.client.post(endpoint, {"enabled": "1"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
+        response = self.client.post(endpoint, {"enabled": "0"})
+        self.assertEqual(response.status_code, 302)
         self.assertFalse(ColectivosOperationalSetting.objects.get(key="monthly_renewals_enabled").enabled)
 
     def test_monthly_switch_unauthorized_cannot_change_and_get_is_read_only(self):
@@ -190,6 +429,38 @@ class RenewalSelectionTests(TestCase):
             sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
         cycle.refresh_from_db()
         self.assertEqual(cycle.recipient_email, "new@example.test")
+
+    @override_settings(COLECTIVOS_RENEWAL_READ_CACHE_SECONDS=0)
+    def test_sync_persists_seller_without_changing_operational_state(self):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000014:2026-09", policy_remote_id="4991513000271000014",
+            policy_token="protected", masked_policy="0407", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31), status=RenovacionColectiva.Status.PROGRAMMED,
+            automation_eligible=True, selected=False,
+        )
+        policy = RenewalPolicy(**{**self._policy("new@example.test").__dict__, "remote_id": cycle.policy_remote_id, "seller": "Vendedor Uno"})
+        with patch("cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.seller_label, "Vendedor Uno")
+        self.assertTrue(cycle.automation_eligible)
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.PROGRAMMED)
+        self.assertFalse(cycle.selected)
+        self.assertEqual(cycle.monthly_period, "2026-09")
+        self.assertEqual(cycle.scheduled_for, date(2026, 8, 31))
+
+    @override_settings(COLECTIVOS_RENEWAL_READ_CACHE_SECONDS=0)
+    def test_sync_does_not_overwrite_manually_rescheduled_date(self):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="4991513000271000015:2026-09", policy_remote_id="4991513000271000015",
+            policy_token="protected", masked_policy="0408", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 9, 2), status=RenovacionColectiva.Status.PROGRAMMED,
+        )
+        policy = RenewalPolicy(**{**self._policy("new@example.test").__dict__, "remote_id": cycle.policy_remote_id})
+        with patch("cotizacion_colectivos.services.renewals.list_collective_renewals", return_value=(policy,)):
+            sync_renewal_cycles(zoho=object(), today=date(2026, 8, 24))
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.scheduled_for, date(2026, 9, 2))
 
     def test_new_cycle_records_automation_eligibility_at_sync_time(self):
         policy = self._policy("new@example.test")

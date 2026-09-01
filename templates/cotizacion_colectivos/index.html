@@ -3,8 +3,14 @@
 {% block title %}{{ colectivos_mode.name }}{% endblock %}
 {% block content %}
 <nav class="breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><span>{{ colectivos_mode.name }}</span></nav>
+{% if colectivos_mode.code == 'novelties' %}
+<div class="novelties-header-layout">
 <header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
-{% if colectivos_mode.code != 'novelties' %}<p class="profile-instruction">Perfil Zoho activo: <strong>{{ zoho_environment.label|upper }}</strong>. El perfil se cambia mediante <code>ZOHO_ACTIVE_PROFILE</code> y reinicio de la aplicación; no se cambia por sesión.</p>
+<section class="search-panel search-panel--compact novelties-search-utility" aria-labelledby="client-search-heading"><div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div><p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p><form method="post" action="{% url 'cotizacion_colectivos:novelties_client_search' %}" class="search-form unified-client-search" data-remote-zoho>{% csrf_token %}<div><label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}</div><button type="submit">Buscar</button></form></section>
+</div>
+{% else %}
+<header class="page-heading"><span class="eyebrow">Colectivos</span><h1>{{ colectivos_mode.name }}</h1><p>{{ colectivos_mode.description }}</p></header>
+<p class="profile-instruction">Perfil Zoho activo: <strong>{{ zoho_environment.label|upper }}</strong>. El perfil se cambia mediante <code>ZOHO_ACTIVE_PROFILE</code> y reinicio de la aplicación; no se cambia por sesión.</p>
 <section class="search-panel{% if colectivos_mode.code == 'novelties' %} search-panel--compact{% endif %}" aria-labelledby="client-search-heading">
   <div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div>
   <p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p>
@@ -35,13 +41,13 @@
   <p class="muted">Periodo: {{ renewal_target_period_label }}</p>
   <form method="get" class="renewal-filter-form"><label>Buscar<input type="search" name="q" value="{{ renewal_query }}" placeholder="Póliza, cliente, ramo o correo"></label><button type="submit" class="button-link button-link--secondary">Filtrar</button></form>
   <div class="table-wrap renewal-table-wrap">
-     <table class="renewal-table renewal-table--upcoming"><thead><tr><th scope="col">Póliza</th><th scope="col">Cliente</th><th scope="col">Ramo</th><th scope="col">Periodicidad</th><th scope="col">Correo comercial</th><th scope="col">Próximo envío</th><th scope="col">Estado</th></tr></thead><tbody>
+     <table class="renewal-table renewal-table--upcoming"><thead><tr><th scope="col">Póliza</th><th scope="col">Cliente</th><th scope="col">Ramo</th><th scope="col">Vendedor</th><th scope="col">Periodicidad</th><th scope="col">Correo comercial</th><th scope="col">Próximo envío</th><th scope="col">Estado</th></tr></thead><tbody>
     {% for cycle in renewal_cycles %}<tr>
-       <td><a href="{% url 'cotizacion_colectivos:novelties_policy_detail' cycle.policy_access_token %}">{{ cycle.masked_policy }}</a></td><td title="{{ cycle.client_label }}">{{ cycle.client_label }}</td><td title="{{ cycle.branch_name }}">{{ cycle.branch_name }}</td><td>{{ cycle.payment_frequency|default:"Mensual" }}</td><td title="{{ cycle.recipient_email|default:"Sin correo comercial" }}">{{ cycle.recipient_email|default:"Sin correo comercial" }}</td><td>{{ cycle.scheduled_for|date:"d/m/Y" }}</td><td class="renewal-status-cell"><span class="status-badge">{% if not cycle.recipient_email %}Sin correo comercial{% else %}{{ cycle.get_status_display }}{% endif %}</span></td>
+       <td><a href="{% url 'cotizacion_colectivos:novelties_policy_detail' cycle.policy_access_token %}">{{ cycle.masked_policy }}</a></td><td title="{{ cycle.client_label }}">{{ cycle.client_label }}</td><td title="{{ cycle.branch_name }}">{{ cycle.branch_name }}</td><td title="{{ cycle.seller_label|default:"—" }}">{{ cycle.seller_label|default:"—" }}</td><td>{{ cycle.payment_frequency|default:"Mensual" }}</td><td title="{{ cycle.recipient_email|default:"Sin correo comercial" }}">{{ cycle.recipient_email|default:"Sin correo comercial" }}</td><td>{% if can_edit_renewal_schedule and cycle.status == 'PROGRAMMED' and not cycle.sent_at %}<form method="post" action="{% url 'cotizacion_colectivos:renewal_schedule_update' cycle.id %}" class="renewal-schedule-form">{% csrf_token %}<input type="date" name="scheduled_for" value="{{ cycle.scheduled_for|date:'Y-m-d' }}" aria-label="Fecha programada"><button type="submit" class="button-link button-link--secondary">Guardar</button></form>{% else %}{{ cycle.scheduled_for|date:"d/m/Y" }}{% endif %}</td><td class="renewal-status-cell"><span class="status-badge">{% if not cycle.recipient_email %}Sin correo comercial{% else %}{{ cycle.get_status_display }}{% endif %}</span></td>
     </tr>{% empty %}<tr><td colspan="9" class="muted">No hay pólizas Colectivo próximas a vencer.</td></tr>{% endfor %}
     </tbody></table>
   </div>
- </section></main><aside class="novelties-workspace-sidebar"><section class="search-panel search-panel--compact" aria-labelledby="client-search-heading"><div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="client-search-heading">Buscar cliente</h2></div></div><p>Consulte por NIT, cédula, razón social, nombre comercial o nombre de persona.</p><form method="post" action="{% url 'cotizacion_colectivos:novelties_client_search' %}" class="search-form unified-client-search" data-remote-zoho>{% csrf_token %}<div><label for="{{ form.query.id_for_label }}">{{ form.query.label }}</label>{{ form.query }}</div><button type="submit">Buscar</button></form></section></aside></div>
+ </section></div>
 {% endif %}
 {% endblock %}
 {% block scripts %}<script src="{% static 'js/colectivos-detail.js' %}" defer></script>{% endblock %}

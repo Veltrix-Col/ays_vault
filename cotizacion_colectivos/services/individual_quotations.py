@@ -22,7 +22,12 @@ from ..models import (
     CotizacionIndividual,
     NotificacionCotizacionIndividual,
 )
-from .task_publisher import ColectivosTaskPayload, enqueue_task, publish_task_outbox
+from .task_publisher import (
+    ColectivosTaskPayload,
+    NOVELTIES_ANALYST_REQUEST,
+    enqueue_task,
+    publish_task_outbox,
+)
 from .search import PersonSearchService
 from .person_contract import PersonCandidate, contact_missing_fields
 from ..quotation_forms.catalog import get_policy_branch_schema
@@ -220,7 +225,7 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
     return tuple(validated)
 
 
-def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key=""):
+def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key="", filename_context=None):
     """Encrypt and persist one file with an explicit local functional owner."""
     uploaded = item["uploaded"]
     content = uploaded.read()
@@ -250,12 +255,22 @@ def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="l
             safe_metadata={
                 "encrypted": True,
                 "antivirus": "not_configured",
-                "owner_type": "risk" if owner_role == "risk" else "contact" if owner_role in {"affiliate", "insured"} else "legacy",
+                "owner_type": (
+                    "risk" if owner_role == "risk"
+                    else "contact" if owner_role in {"affiliate", "insured"}
+                    else "request" if owner_role == "request"
+                    else "legacy"
+                ),
                 "owner_role": str(owner_role)[:24],
                 "owner_key": str(owner_key)[:80],
                 "document_type": str(document_type)[:32],
                 "field_key": str(field_key or document_type)[:64],
                 **({"risk_key": str(risk_key)[:80]} if risk_key else {}),
+                **({
+                    key: str(value)[:120]
+                    for key, value in (filename_context or {}).items()
+                    if key in {"identification_type", "identification_number", "plate", "policy_number", "filename_detail"} and value
+                }),
             },
         ), target
     except Exception:
@@ -271,6 +286,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     normalized_items = cleaned_data["normalized_items"]
     allowed_owners = {"affiliate"}
     row_owners = {}
+    row_contexts = {}
     for group_key, rows in normalized_items.items():
         for index, row in enumerate(rows or ()):
             if not isinstance(row, dict):
@@ -292,6 +308,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 "vehicle_registration" if group_key == "vehicles" else "identity_document",
                 same_person,
             )
+            row_contexts[entity_key] = row
             if group_key == "vehicles" or not same_person:
                 allowed_owners.add(entity_key)
             if group_key == "vehicles" and not row.get("insured_same_as_requester"):
@@ -346,14 +363,37 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     root.mkdir(parents=True, exist_ok=True)
     created_paths = []
     try:
+        basic_support = schema.slug in {"salud", "exequial", "soat"}
         for item in files:
-            _, target = _store_individual_file(quotation=quotation, item=item)
+            _, target = _store_individual_file(
+                quotation=quotation,
+                item=item,
+                owner_role="request" if basic_support else "legacy",
+                owner_key=str(quotation.public_id) if basic_support else "legacy",
+                document_type="support_document",
+                field_key="support_document",
+            )
             created_paths.append(target)
         for owner_key, uploaded in entity_files.items():
             validated = validate_attachments((uploaded,))
             role, document_type, duplicate = ("affiliate", "identity_document", False) if owner_key == "affiliate" else row_owners[owner_key]
             if duplicate:
                 continue
+            filename_context = {}
+            if owner_key == "affiliate":
+                filename_context = {
+                    "identification_type": captured_fields.get("requester_id_type", ""),
+                    "identification_number": captured_fields.get("requester_document", ""),
+                }
+            else:
+                source_row = row_contexts.get(owner_key) or row_contexts.get(owner_key.removesuffix("-insured")) or {}
+                if role == "risk":
+                    filename_context = {"plate": source_row.get("plate", "")}
+                else:
+                    filename_context = {
+                        "identification_type": source_row.get("insured_id_type", ""),
+                        "identification_number": source_row.get("insured_document", ""),
+                    }
             _, target = _store_individual_file(
                 quotation=quotation,
                 item=validated[0],
@@ -362,6 +402,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 document_type=document_type,
                 field_key=document_type,
                 risk_key=owner_key if role == "risk" else "",
+                filename_context=filename_context,
             )
             created_paths.append(target)
         if actor is not None:
@@ -395,6 +436,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 str(task_fields.get("placa") or task_fields.get("plate") or ""),
             ))),
             area=str(task_context.get("task_area") or ""),
+            analyst_request=NOVELTIES_ANALYST_REQUEST,
             observations=_individual_task_observations(task_context, task_fields, cleaned_data.get("normalized_items") or {}),
             responsible=str(task_context.get("task_responsible") or ""),
             responsible_email=str(task_context.get("task_responsible_email") or ""),
@@ -402,12 +444,11 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
         ),
         event_version=1,
     )
-    # La respuesta siempre queda persistida. Una Task de Cotización no se
-    # publica con un contrato incompleto: el analista podrá resolver luego el
-    # responsable/correo desde el expediente y publicar de forma controlada.
-    if not (str(task_context.get("task_responsible") or "").strip() and
-            str(task_context.get("task_responsible_email") or "").strip()):
-        outbox.safe_error_code = "RESPONSIBLE_EMAIL_PENDING"
+    # El responsable es el único dato de asignación requerido para intentar
+    # publicar la Task. El correo es auxiliar: cuando no está disponible se
+    # omite del payload y Zoho puede crear la Task igualmente.
+    if not str(task_context.get("task_responsible") or "").strip():
+        outbox.safe_error_code = "RESPONSIBLE_PENDING"
         outbox.save(update_fields=("safe_error_code", "updated_at"))
     else:
         transaction.on_commit(lambda outbox_id=outbox.pk: publish_task_outbox(outbox_id))
@@ -438,7 +479,7 @@ def _individual_task_observations(context, fields, groups) -> str:
         "armored": "Blindado", "currently_insured": "Actualmente asegurado", "insured_name": "Asegurado",
         "insured_id_type": "Tipo de identificación del asegurado", "insured_document": "Documento del asegurado",
         "insured_is_different": "Asegurado diferente", "insured_same_as_requester": "El asegurado es el mismo solicitante",
-        "is_requester": "Esta persona es el solicitante", "displacement": "Cilindraje", "name": "Nombre",
+        "is_requester": "¿Los datos del afiliado son los mismos de esta persona?", "displacement": "Cilindraje", "name": "Nombre",
         "document": "Documento", "gender": "Género", "relationship": "Parentesco o relación",
         "employment_relationship": "Vínculo con el fondo", "currently_health_insured": "Cobertura de salud vigente",
         "current_health_insurer": "Aseguradora actual", "current_health_policy_end": "Fin de cobertura actual",
@@ -490,19 +531,24 @@ def update_quotation_responsible(*, quotation: CotizacionIndividual, option, ema
         locked.safe_metadata = metadata
         locked.save(update_fields=("safe_metadata",))
         outbox = locked.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
-        responsible_block = outbox is not None and outbox.safe_error_code == "RESPONSIBLE_EMAIL_PENDING"
+        responsible_block = outbox is not None and outbox.safe_error_code in {
+            "RESPONSIBLE_EMAIL_PENDING", "RESPONSIBLE_PENDING",
+        }
         if outbox is not None and (
             outbox.status == outbox.Status.PENDING
             or (outbox.status == outbox.Status.BLOCKED and responsible_block)
         ):
             record = json.loads(decrypt(outbox.encrypted_payload))
             record["Responsable"] = metadata["task_responsible"]
-            record["Correo_responsable"] = email
+            if email:
+                record["Correo_responsable"] = email
+            else:
+                record.pop("Correo_responsable", None)
             serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             outbox.encrypted_payload = encrypt(serialized)
             outbox.payload_checksum = hashlib.sha256(serialized.encode()).hexdigest()
             outbox.status = outbox.Status.PENDING
-            outbox.safe_error_code = "" if email else "RESPONSIBLE_EMAIL_PENDING"
+            outbox.safe_error_code = ""
             outbox.save(update_fields=("encrypted_payload", "payload_checksum", "status", "safe_error_code", "updated_at"))
         logger.info(
             "individual_responsible_updated quotation_id=%s outbox_existing=%s email_resolved=%s",

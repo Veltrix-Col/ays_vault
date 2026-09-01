@@ -23,7 +23,7 @@ from vault.notifications import mask_email
 
 from .common import ColectivosServiceError, colectivos_zoho, sign_record_id, translate_zoho_error
 from .external import GeneratedAccess, generate_access, generate_no_changes_token
-from .requests import create_or_reuse_request_from_policy
+from .requests import create_or_reuse_request_from_policy, request_snapshot
 from .policies import PolicyService
 from ..models import RenovacionColectiva, SolicitudColectivo
 from .operational_settings import monthly_renewals_enabled
@@ -36,7 +36,7 @@ RENEWAL_SYNC_CACHE_KEY = "cotizacion_colectivos:renewals:last_sync:v2"
 POLICY_FIELDS = (
     "id", "Name", "Ramo", "L_nea_de_negocio", "Tomador_principal1",
     "Estado_de_la_p_liza", "Frecuencia", "Correo_gesti_n_comercial",
-    "P_liza_Fecha_fin_de_la_vigencia", "Aseguradora1",
+    "P_liza_Fecha_fin_de_la_vigencia", "Aseguradora1", "Vendedor",
 )
 ALLOWED_BRANCHES = {"vg deudores", "vg patronal", "ap colectivo"}
 ACTIVE_POLICY_VALUES = {"vigente"}
@@ -55,6 +55,8 @@ class RenewalPolicy:
     payment_frequency: str
     monthly_period: str
     scheduled_for: date
+    seller: str = ""
+    insurer: str = ""
 
 
 def _date(value):
@@ -173,6 +175,8 @@ def _map_record(record: dict, *, today: date, window: int) -> RenewalPolicy | No
         payment_frequency=str(record.get("Frecuencia") or ""),
         monthly_period=period,
         scheduled_for=last_business_day(today.year, today.month),
+        seller=str(record.get("Vendedor") or "").strip(),
+        insurer=str(record.get("Aseguradora1") or "").strip(),
     )
 
 
@@ -230,17 +234,27 @@ def sync_renewal_cycles(*, zoho=None, today=None, window=None) -> tuple[Renovaci
     cycles = []
     automation_enabled = monthly_renewals_enabled()
     for item in list_collective_renewals(zoho=zoho, today=today, window=window):
-        cycle, created = RenovacionColectiva.objects.update_or_create(
-            cycle_key=_cycle_key(item),
-            defaults={
-                "policy_remote_id": item.remote_id, "policy_token": encrypt(item.token),
-                "masked_policy": item.policy, "client_label": item.client,
-                "branch_name": item.branch, "line_of_business": "Colectivo",
-                "expiry_date": item.expiry_date, "monthly_period": item.monthly_period,
-                "policy_status": item.policy_status, "payment_frequency": item.payment_frequency,
-                "scheduled_for": item.scheduled_for,
-            },
-        )
+        cycle_key = _cycle_key(item)
+        defaults = {
+            "policy_remote_id": item.remote_id, "policy_token": encrypt(item.token),
+            "masked_policy": item.policy, "client_label": item.client,
+            "branch_name": item.branch, "line_of_business": "Colectivo",
+            "expiry_date": item.expiry_date, "monthly_period": item.monthly_period,
+            "policy_status": item.policy_status, "payment_frequency": item.payment_frequency,
+            "seller_label": item.seller,
+        }
+        with transaction.atomic():
+            cycle = RenovacionColectiva.objects.select_for_update().filter(cycle_key=cycle_key).first()
+            if cycle is None:
+                cycle = RenovacionColectiva.objects.create(
+                    cycle_key=cycle_key, scheduled_for=item.scheduled_for, **defaults,
+                )
+                created = True
+            else:
+                for field, value in defaults.items():
+                    setattr(cycle, field, value)
+                cycle.save(update_fields=tuple(defaults) + ("updated_at",))
+                created = False
         if created:
             cycle.automation_eligible = automation_enabled
             cycle.save(update_fields=("automation_eligible", "updated_at"))
@@ -308,16 +322,65 @@ def _monthly_period_label(period):
         return str(period or "periodo solicitado")
 
 
-def _send_renewal_email(*, cycle, url: str, reminder: bool = False, expires_at=None, request_obj=None):
+def _renewal_logo_url() -> str:
+    base = str(getattr(settings, "COLECTIVOS_EXTERNAL_BASE_URL", "") or "").strip().rstrip("/")
+    return f"{base}/static/img/branding/logo-ays-azul.png"
+
+
+def _renewal_insurer(cycle, request_obj=None) -> str:
+    """Read insurer from the persisted policy snapshot, without a Zoho read."""
+    request = request_obj
+    if request is None:
+        request = getattr(cycle, "request", None)
+    if request is None:
+        snapshot = {}
+    else:
+        try:
+            snapshot = request_snapshot(request)
+        except Exception:
+            snapshot = {}
+    policy = snapshot.get("policy") if isinstance(snapshot, dict) else {}
+    if isinstance(policy, dict):
+        value = str(policy.get("insurer") or "").strip()
+        if value:
+            return value
+    # Older requests may have been persisted before insurer was added to the
+    # aggregate snapshot. The per-policy snapshot/model remains authoritative
+    # and avoids a new Zoho read while preserving historical requests.
+    if request is not None:
+        try:
+            policy_row = request.policies.order_by("position").first()
+            value = str(getattr(policy_row, "insurer", "") or "").strip()
+            if value:
+                return value
+        except Exception:
+            pass
+    return str(getattr(cycle, "insurer", "") or "").strip()
+
+
+def _send_renewal_email(
+    *, cycle, url: str, reminder: bool = False, expires_at=None,
+    request_obj=None, recipient: str | None = None, no_changes_url: str | None = None,
+):
     cfg = _renewal_email_settings()
     template = "cotizacion_colectivos/email/renewal_reminder.html" if reminder else "cotizacion_colectivos/email/renewal_initial.html"
-    no_changes_token = generate_no_changes_token(cycle=cycle, request_obj=request_obj)
-    no_changes_url = f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/sin-novedades/{no_changes_token}/"
-    html = render_to_string(template, {"cycle": cycle, "url": url, "no_changes_url": no_changes_url, "monthly_period_label": _monthly_period_label(cycle.monthly_period), "expires_at": expires_at or cycle.link_expires_at})
+    if no_changes_url is None:
+        no_changes_token = generate_no_changes_token(cycle=cycle, request_obj=request_obj)
+        no_changes_url = f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/sin-novedades/{no_changes_token}/"
+    html = render_to_string(template, {
+        "cycle": cycle,
+        "url": url,
+        "no_changes_url": no_changes_url,
+        "logo_url": _renewal_logo_url(),
+        "monthly_period_label": _monthly_period_label(cycle.monthly_period),
+        "cycle_insurer": _renewal_insurer(cycle, request_obj=request_obj),
+        "expires_at": expires_at or cycle.link_expires_at,
+    })
+    recipient_email = str(recipient if recipient is not None else cycle.recipient_email).strip()
     message = EmailMultiAlternatives(
         subject=f"A&S | {'Recordatorio de novedades' if reminder else 'Reporte mensual de novedades'} – {cycle.client_label} – {_monthly_period_label(cycle.monthly_period)}",
         body="A&S solicita reportar las novedades de su póliza colectiva.",
-        from_email=cfg["from_email"], to=[cycle.recipient_email],
+        from_email=cfg["from_email"], to=[recipient_email],
         connection=get_connection(
             backend="django.core.mail.backends.smtp.EmailBackend",
             host=cfg["host"], port=cfg["port"], username=cfg["username"],
@@ -327,6 +390,41 @@ def _send_renewal_email(*, cycle, url: str, reminder: bool = False, expires_at=N
     message.attach_alternative(html, "text/html")
     if message.send(fail_silently=False) != 1:
         raise ColectivosServiceError("delivery", "No fue posible enviar la notificación.")
+
+
+def _send_renewal_internal_alert(*, cycle, reminder_at=None, request_obj=None, recipient: str | None = None):
+    recipient = str(
+        recipient if recipient is not None
+        else getattr(settings, "COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL", "")
+        or ""
+    ).strip()
+    if not recipient:
+        raise ColectivosServiceError("configuration", "El destinatario de alerta interna no está configurado.")
+    try:
+        validate_email(recipient)
+    except ValidationError as exc:
+        raise ColectivosServiceError("configuration", "El destinatario de alerta interna no es válido.") from exc
+    cfg = _renewal_email_settings()
+    html = render_to_string("cotizacion_colectivos/email/renewal_internal_alert.html", {
+        "cycle": cycle,
+        "cycle_insurer": _renewal_insurer(cycle, request_obj=request_obj),
+        "monthly_period_label": _monthly_period_label(cycle.monthly_period),
+        "reminder_at": reminder_at,
+    })
+    message = EmailMultiAlternatives(
+        subject=f"Renovación sin respuesta · {cycle.client_label} · {cycle.masked_policy}",
+        body="Una renovación mensual continúa sin respuesta.",
+        from_email=cfg["from_email"],
+        to=[recipient],
+        connection=get_connection(
+            backend="django.core.mail.backends.smtp.EmailBackend",
+            host=cfg["host"], port=cfg["port"], username=cfg["username"],
+            password=cfg["password"], use_tls=cfg["use_tls"], fail_silently=False,
+        ),
+    )
+    message.attach_alternative(html, "text/html")
+    if message.send(fail_silently=False) != 1:
+        raise ColectivosServiceError("delivery", "No fue posible enviar la alerta interna.")
 
 
 def _valid_recipient(value):
@@ -365,8 +463,9 @@ def process_renewal_cycles(*, now=None, limit=None, dry_run=False, cycle_id=None
             scheduled_for__lte=today,
         ).order_by("scheduled_for", "pk")[:limit])
         reminders = list(RenovacionColectiva.objects.filter(
+            Q(reminder_sent_at__isnull=True) | Q(internal_alert_sent_at__isnull=True),
             status__in=(RenovacionColectiva.Status.SENT, RenovacionColectiva.Status.ALERT),
-            reminder_due_at__lte=now, reminder_sent_at__isnull=True,
+            reminder_due_at__lte=now,
             link_expires_at__gt=now, responded_at__isnull=True,
         ).order_by("reminder_due_at", "pk")[:limit])
     result = {"processed": 0, "sent": 0, "reminders": 0, "errors": 0, "no_email": 0}
@@ -380,7 +479,7 @@ def process_renewal_cycles(*, now=None, limit=None, dry_run=False, cycle_id=None
         with transaction.atomic():
             cycle = RenovacionColectiva.objects.select_for_update().get(pk=candidate.pk)
             expected = (RenovacionColectiva.Status.SENT, RenovacionColectiva.Status.ALERT) if reminder else (RenovacionColectiva.Status.PROGRAMMED,)
-            if cycle.status not in expected or (reminder and (cycle.reminder_sent_at or not cycle.link_expires_at or cycle.link_expires_at <= now)):
+            if cycle.status not in expected or (reminder and ((cycle.reminder_sent_at and cycle.internal_alert_sent_at) or not cycle.link_expires_at or cycle.link_expires_at <= now)):
                 continue
             if not _valid_recipient(cycle.recipient_email):
                 cycle.status = RenovacionColectiva.Status.ERROR
@@ -398,9 +497,23 @@ def process_renewal_cycles(*, now=None, limit=None, dry_run=False, cycle_id=None
         try:
             if reminder:
                 token = decrypt(cycle.encrypted_access_token)
-                _send_renewal_email(cycle=cycle, url=f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/{token}/", reminder=True, expires_at=cycle.link_expires_at)
-                RenovacionColectiva.objects.filter(pk=cycle.pk).update(status=previous_status, reminder_sent_at=timezone.now(), last_activity_at=timezone.now(), updated_at=timezone.now())
-                result["reminders"] += 1
+                reminder_sent_at = cycle.reminder_sent_at
+                if reminder_sent_at is None:
+                    _send_renewal_email(cycle=cycle, url=f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/{token}/", reminder=True, expires_at=cycle.link_expires_at)
+                    reminder_sent_at = timezone.now()
+                    RenovacionColectiva.objects.filter(pk=cycle.pk).update(status=previous_status, reminder_sent_at=reminder_sent_at, last_activity_at=reminder_sent_at, updated_at=reminder_sent_at)
+                    cycle.status = previous_status
+                    cycle.reminder_sent_at = reminder_sent_at
+                    result["reminders"] += 1
+                if cycle.internal_alert_sent_at is None:
+                    try:
+                        _send_renewal_internal_alert(cycle=cycle, reminder_at=reminder_sent_at)
+                    except Exception:
+                        logger.warning("renewal_internal_alert_failed cycle_id=%s", cycle.pk, exc_info=False)
+                    else:
+                        sent_at = timezone.now()
+                        RenovacionColectiva.objects.filter(pk=cycle.pk, internal_alert_sent_at__isnull=True).update(internal_alert_sent_at=sent_at, last_activity_at=sent_at, updated_at=sent_at)
+                RenovacionColectiva.objects.filter(pk=cycle.pk, status=RenovacionColectiva.Status.PROCESSING).update(status=previous_status, updated_at=timezone.now())
             else:
                 actor = _actor_for_batch()
                 token = decrypt(cycle.policy_token)

@@ -16,7 +16,7 @@ from vault.crypto import decrypt, encrypt
 
 from ..models import RespuestaSolicitudColectivo, VistaPreviaExcelSolicitudColectivo
 from .excel_roundtrip import TEMPLATE_VERSION, parse_novelties
-from .attachments import store_attachment
+from .attachments import _safe_original_name, store_attachment
 from .external import ExternalAccessError, save_response
 
 
@@ -71,6 +71,13 @@ def create_preview(*, access, session_cookie: str, uploaded) -> tuple[VistaPrevi
     temporary.replace(target)
     summary = dict(preview.counts)
     summary["ADVERTENCIAS"] = len(preview.warnings)
+    summary["original_filename"] = _safe_original_name(
+        str(getattr(uploaded, "name", "") or ""), ".xlsx",
+    )
+    summary["content_type"] = str(
+        getattr(uploaded, "content_type", "")
+        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     try:
         with transaction.atomic():
             stale = list(access.excel_previews.select_for_update().filter(status=VistaPreviaExcelSolicitudColectivo.Status.PENDING))
@@ -140,8 +147,13 @@ def confirm_preview(*, token: str, access, session_cookie: str):
     except (TypeError, ValueError) as exc:
         raise ExternalAccessError("No fue posible verificar la vista previa.") from exc
     response = save_response(access=access, rows=rows, observations="", origin=RespuestaSolicitudColectivo.Origin.EXCEL)
-    workbook = ContentFile(raw, name="novedades.xlsx")
-    workbook.content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    workbook = ContentFile(raw, name=str(
+        (item.summary or {}).get("original_filename") or "novedades.xlsx"
+    ))
+    workbook.content_type = str(
+        (item.summary or {}).get("content_type")
+        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     store_attachment(response=response, uploaded=workbook, allow_excel=True)
     item.response = response
     item.status = item.Status.IMPORTED

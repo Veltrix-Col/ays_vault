@@ -231,7 +231,7 @@ class MultiPolicyRequestTests(TestCase):
         workbook = load_workbook(io.BytesIO(build_novelties_template(self.request)))
         sheet = workbook["Salud_colectivo_1814"]
         values = tuple(cell.value for cell in sheet[2])
-        self.assertEqual(values[1:10], ("CC", "100", "Asociado", "CC", "200", "Asegurado", "TI", "300", "Beneficiario"))
+        self.assertEqual(values[1:4], ("CC", "100", "Asociado"))
         self.assertNotIn("No determinada", tuple(cell.value for row in workbook["Póliza"] for cell in row))
 
     def test_policy_sheet_mapping_is_tamper_evident(self):

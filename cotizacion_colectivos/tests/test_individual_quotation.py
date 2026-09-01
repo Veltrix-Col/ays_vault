@@ -27,7 +27,7 @@ from cotizacion_colectivos.models import (
     ColectivosTaskOutbox,
     NotificacionCotizacionIndividual,
 )
-from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema
+from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema, with_identification_choices
 from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
 from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
 from cotizacion_colectivos.services.individual_access import IndividualAccessError, generate_individual_access, issue_individual_otp
@@ -45,6 +45,7 @@ from cotizacion_colectivos.services.individual_attachment_publisher import (
     _validate_document_contract,
     publish_attachment,
 )
+from cotizacion_colectivos.filenames import build_attachment_filename
 from cotizacion_colectivos.views import _HIDDEN_RESPONSE_KEYS, _attachment_can_publish, _attachment_document_status, _human_response_value
 from cotizacion_colectivos.services.common import sign_record_id
 
@@ -54,6 +55,9 @@ POLICY_TOKEN = sign_record_id(
     "policy",
     context={"source_id": "5234567890123456789", "source_kind": "company"},
 )
+
+TEST_IDENTIFICATION_CHOICES = (("PAS", "Pasaporte"), ("CC", "Cédula"))
+_BASE_GET_BRANCH_SCHEMA = get_branch_schema
 
 
 def valid_minimal_pdf_bytes():
@@ -156,6 +160,18 @@ class IndividualQuotationTests(TestCase):
         self.actor = get_user_model().objects.create_user(
             username="individual-owner", password="safe-test-password",
         )
+        # Direct form tests intentionally use the same explicit catalog
+        # injection as the production view.  This keeps their fixtures close
+        # to a request carrying Contacts.Tipo_ID metadata without making the
+        # form query Zoho or reintroducing a hardcoded production catalog.
+        self._schema_patch = patch(
+            "cotizacion_colectivos.tests.test_individual_quotation.get_branch_schema",
+            side_effect=lambda slug: with_identification_choices(
+                _BASE_GET_BRANCH_SCHEMA(slug), TEST_IDENTIFICATION_CHOICES,
+            ),
+        )
+        self._schema_patch.start()
+        self.addCleanup(self._schema_patch.stop)
 
     def context_token(self, *, schema_slug="salud"):
         schema = get_branch_schema(schema_slug)
@@ -305,7 +321,10 @@ class IndividualQuotationTests(TestCase):
 
     def workspace(self, schema_slug):
         schema = get_branch_schema(schema_slug)
-        return policy(), (affiliate(),), {"storage": "database"}, schema
+        return (
+            policy(), (affiliate(),), {"storage": "database"}, schema,
+            TEST_IDENTIFICATION_CHOICES,
+        )
 
     def test_mobility_vehicle_class_is_an_allowlisted_required_select_and_plate_stays_visible(self):
         schema = get_branch_schema("movilidad")
@@ -334,6 +353,33 @@ class IndividualQuotationTests(TestCase):
         template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "form.html").read_text(encoding="utf-8")
         self.assertIn("entity_attachment_${row.entity_key}", javascript)
         self.assertIn('enctype="multipart/form-data"', template)
+        self.assertIn("colectivos-individual.js?v=20260831-id-type", template)
+
+    def test_identification_choices_keep_value_and_label_separate_in_dynamic_selects(self):
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn("Array.isArray(choice)", javascript)
+        self.assertIn("new Option(label || value, value)", javascript)
+        self.assertNotIn("new Option(choice, choice)", javascript)
+        for slug in ("salud", "exequial", "vida", "movilidad", "soat"):
+            form = IndividualQuotationForm(
+                schema=with_identification_choices(get_branch_schema(slug), TEST_IDENTIFICATION_CHOICES),
+                identification_choices=TEST_IDENTIFICATION_CHOICES,
+                context={},
+            )
+            id_fields = [
+                field for field in form.fields.values()
+                if field.label.startswith("Tipo de identificación")
+            ]
+            self.assertTrue(id_fields, slug)
+            for field in id_fields:
+                self.assertEqual(tuple(field.choices), (("", "Seleccione"), *TEST_IDENTIFICATION_CHOICES))
+
+    def test_same_requester_copy_preserves_identification_value_for_selects(self):
+        javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
+        self.assertIn("const copyValue = (target, value)", javascript)
+        self.assertIn("item.value === normalized", javascript)
+        self.assertIn('id_type: "requester_id_type"', javascript)
+        self.assertIn('insured_id_type: "requester_id_type"', javascript)
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_rendered_mobility_form_exposes_canonical_vehicle_choices_without_fake_vehicle(self, workspace):
@@ -516,12 +562,16 @@ class IndividualQuotationTests(TestCase):
         )
         self.assertTrue(context["requires_declared_company"])
         data = {"items_payload": json.dumps({"people": [self.person()]})}
-        missing = IndividualQuotationForm(data, schema=schema, context=context)
+        missing = IndividualQuotationForm(
+            data, schema=schema, context=context,
+            identification_choices=TEST_IDENTIFICATION_CHOICES,
+        )
         self.assertFalse(missing.is_valid())
         self.assertIn("declared_company", missing.errors)
         valid = IndividualQuotationForm(
             {**data, "declared_company": "Constructora Ejemplo S.A.S."},
             schema=schema, context=context,
+            identification_choices=TEST_IDENTIFICATION_CHOICES,
         )
         self.assertTrue(valid.is_valid(), valid.errors)
         self.assertEqual(valid.cleaned_data["declared_company"], "Constructora Ejemplo S.A.S.")
@@ -995,6 +1045,11 @@ class IndividualQuotationTests(TestCase):
                 actor=self.actor, context=context,
             )
         publish.assert_called_once_with(quotation.task_outbox.get().pk)
+        task_record = json.loads(decrypt(quotation.task_outbox.get().encrypted_payload))
+        self.assertEqual(task_record["rea"], "Negocios Bienestar y Beneficios")
+        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
+        self.assertEqual(task_record["Responsable"], "Sara Rua Vargas")
+        self.assertEqual(task_record["Correo_responsable"], "sara@example.test")
 
     def _pending_responsible_quotation(self):
         schema = get_branch_schema("salud")
@@ -1031,7 +1086,7 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(outbox.safe_error_code, "")
         self.assertEqual(json.loads(decrypt(outbox.encrypted_payload))["Correo_responsable"], "ana@example.test")
 
-    def test_responsible_without_email_keeps_outbox_blocked_without_publish(self):
+    def test_responsible_without_email_remains_publishable_without_fabricating_email(self):
         quotation = self._pending_responsible_quotation()
         outbox = quotation.task_outbox.get(event_kind="COTIZACION")
         option = SimpleNamespace(actual_value="Sin Correo", display_value="Sin Correo")
@@ -1045,10 +1100,13 @@ class IndividualQuotationTests(TestCase):
                 {"responsible": option.actual_value},
             )
         self.assertEqual(response.status_code, 302)
-        publish.assert_not_called()
+        publish.assert_called_once_with(outbox.pk)
         outbox.refresh_from_db()
         self.assertEqual(outbox.status, outbox.Status.PENDING)
-        self.assertEqual(outbox.safe_error_code, "RESPONSIBLE_EMAIL_PENDING")
+        self.assertEqual(outbox.safe_error_code, "")
+        task_record = json.loads(decrypt(outbox.encrypted_payload))
+        self.assertNotIn("Correo_responsable", task_record)
+        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
 
     def test_published_outbox_is_not_republished_when_responsible_changes(self):
         quotation = self._pending_responsible_quotation()
@@ -1104,6 +1162,40 @@ class IndividualQuotationTests(TestCase):
         attachment = AdjuntoCotizacionIndividual.objects.get()
         stored = (Path(self.private.name) / "individual_quotations" / attachment.stored_path).read_bytes()
         self.assertNotIn(b"private-demo", stored)
+
+    def test_basic_branches_store_optional_support_documents_with_request_ownership(self):
+        cases = {
+            "salud": {"people": [self.person("support-health")]},
+            "exequial": {"people": [self.person("support-exequial")]},
+            "soat": {"vehicles": [self.vehicle("support-soat")]},
+        }
+        for slug, groups in cases.items():
+            with self.subTest(branch=slug):
+                schema = get_branch_schema(slug)
+                uploaded = SimpleUploadedFile(
+                    f"soporte-{slug}.pdf", valid_minimal_pdf_bytes(), content_type="application/pdf",
+                )
+                cleaned_data = {
+                    "attachments": [uploaded],
+                    "entity_attachments": {},
+                    "normalized_items": groups,
+                    **{field.key: "" for field in schema.fields},
+                }
+                quotation = create_individual_quotation(
+                    schema=schema, cleaned_data=cleaned_data, actor=self.actor,
+                    context={"affiliate_key": "", "branch_name": schema.name},
+                )
+                attachment = quotation.attachments.get()
+                metadata = attachment.safe_metadata
+                self.assertEqual(metadata["owner_type"], "request")
+                self.assertEqual(metadata["owner_role"], "request")
+                self.assertEqual(metadata["owner_key"], str(quotation.public_id))
+                self.assertEqual(metadata["document_type"], "support_document")
+                with self.assertRaises(ValidationError):
+                    _validate_document_contract(
+                        module="Contacts", owner_type=metadata["owner_type"],
+                        document_type=metadata["document_type"],
+                    )
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_vehicle_can_be_quoted_without_a_fictitious_plate(self, workspace):
@@ -1223,6 +1315,36 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(hashlib.sha256(restored).hexdigest(), hashlib.sha256(original).hexdigest())
         self.assertEqual(restored, original)
 
+    def test_zoho_attachment_filename_is_canonical_and_deterministic(self):
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="CC",
+                identification_number="1019059650", original_filename="original.PDF",
+            ),
+            "CEDULA_CC_1019059650.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="PAS",
+                identification_number="AB123456", original_filename="doc.pdf",
+            ),
+            "PASAPORTE_PAS_AB123456.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="vehicle_registration", plate="abc123",
+                original_filename="tarjeta.PdF",
+            ),
+            "TARJETA_PROPIEDAD_ABC123.pdf",
+        )
+        self.assertEqual(
+            build_attachment_filename(
+                document_type="identity_document", identification_type="CE",
+                identification_number="á/ 10:19", original_filename="x.JpG",
+            ),
+            "CEDULA_EXTRANJERIA_CE_A_10_19.jpg",
+        )
+
     def test_legacy_vehicle_document_contract_remains_controlled(self):
         self.assertEqual(
             _validate_document_contract(
@@ -1316,6 +1438,40 @@ class IndividualQuotationTests(TestCase):
             with self.assertRaises(IndividualAttachmentUncertain):
                 publish_attachment(attachment=attachment, module="Contacts", record_id="4991513000000000001")
         get_zoho.assert_not_called()
+
+    @override_settings(
+        COLECTIVOS_PRIVATE_ROOT=".",
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
+    )
+    def test_attachment_publisher_changes_only_zoho_filename(self):
+        from cotizacion_colectivos.services.individual_attachment_publisher import _publish_attachment
+
+        original = valid_minimal_pdf_bytes()
+        target = Path(self.private.name) / "individual_quotations" / "publisher-test.enc"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encrypt(base64.b64encode(original).decode()).encode())
+        attachment = SimpleNamespace(
+            stored_path="publisher-test.enc", safe_original_name="cliente.PDF",
+            detected_mime="application/pdf", safe_metadata={
+                "owner_type": "contact", "document_type": "identity_document",
+                "identification_type": "CC", "identification_number": "1019059650",
+            }, save=Mock(),
+        )
+        upload = Mock(return_value={"attachment_id": "4991513000000000002"})
+        zoho = SimpleNamespace(attachments=SimpleNamespace(upload=upload))
+        with patch("cotizacion_colectivos.services.individual_attachment_publisher.settings.COLECTIVOS_PRIVATE_ROOT", self.private.name):
+            result = _publish_attachment(
+                attachment=attachment, module="Contacts", record_id="4991513000000000001", zoho=zoho,
+            )
+        uploaded = upload.call_args.kwargs
+        self.assertEqual(uploaded["filename"], "CEDULA_CC_1019059650.pdf")
+        self.assertEqual(uploaded["file"].getvalue(), original)
+        self.assertEqual(uploaded["content_type"], "application/pdf")
+        self.assertEqual(uploaded["module"], "Contacts")
+        self.assertEqual(uploaded["record_id"], "4991513000000000001")
+        self.assertEqual(result["attachment_id"], "4991513000000000002")
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):
