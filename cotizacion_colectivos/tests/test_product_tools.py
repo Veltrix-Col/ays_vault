@@ -41,8 +41,12 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertNotIn("Próximas a vencer", content)
         self.assertIn("Seguimiento de links", content)
         self.assertIn("renewal-panel-nav", content)
+        self.assertIn("novelties-header-layout", content)
+        self.assertIn("novelties-search-utility", content)
         self.assertIn("novelties-workspace-layout", content)
-        self.assertIn("novelties-workspace-sidebar", content)
+        self.assertIn("novelties-workspace-main", content)
+        self.assertIn("renewal-dashboard", content)
+        self.assertNotIn("novelties-workspace-sidebar", content)
         self.assertIn("novelties_client_search", content)
         self.assertIn("Periodo: {{ renewal_target_period_label }}", content)
         for label in ("Programadas", "Enviadas", "Respondidas", "En alerta", "Con error"):
@@ -82,19 +86,56 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn('{{ cycle.masked_policy }} / <span class="muted">{{ cycle.monthly_period_label }}</span>', content)
         self.assertNotIn("{{ cycle.monthly_period }}", content)
 
+    def test_upcoming_table_places_vendedor_between_branch_and_frequency(self):
+        content = Path("templates/cotizacion_colectivos/index.html").read_text(encoding="utf-8")
+        self.assertIn("<th scope=\"col\">Ramo</th><th scope=\"col\">Vendedor</th><th scope=\"col\">Periodicidad</th>", content)
+        html = render_to_string("cotizacion_colectivos/index.html", {
+            "colectivos_mode": TOOL_MODES[NOVELTIES_MODE],
+            "form": ClientSearchForm(), "zoho_environment": SimpleNamespace(css_class="sandbox", label="Sandbox"),
+            "colectivos_navigation": {}, "renewal_cycles": (SimpleNamespace(
+                policy_access_token="token", masked_policy="0400", client_label="Empresa",
+                branch_name="VG deudores", seller_label="Vendedor Uno", payment_frequency="Mensual",
+                recipient_email="qa@example.test", scheduled_for=None,
+                get_status_display=lambda: "Programado",
+            ),), "renewal_tab": "upcoming", "renewal_dashboard": {},
+            "renewal_target_period_label": "Septiembre 2026", "renewal_sync_error": "", "messages": (),
+        })
+        self.assertIn("Vendedor Uno", html)
+        empty_html = render_to_string("cotizacion_colectivos/index.html", {
+            "colectivos_mode": TOOL_MODES[NOVELTIES_MODE],
+            "form": ClientSearchForm(), "zoho_environment": SimpleNamespace(css_class="sandbox", label="Sandbox"),
+            "colectivos_navigation": {}, "renewal_cycles": (SimpleNamespace(
+                policy_access_token="token", masked_policy="0400", client_label="Empresa",
+                branch_name="VG deudores", seller_label="", payment_frequency="Mensual",
+                recipient_email="qa@example.test", scheduled_for=None,
+                get_status_display=lambda: "Programado",
+            ),), "renewal_tab": "upcoming", "renewal_dashboard": {},
+            "renewal_target_period_label": "Septiembre 2026", "renewal_sync_error": "", "messages": (),
+        })
+        self.assertIn("—", empty_html)
+        self.assertNotIn(">None<", empty_html)
+
     def test_monthly_switch_is_interactive_only_for_authorized_context(self):
         template = "cotizacion_colectivos/_renewal_panel_nav.html"
         base = {
             "renewal_tab": "upcoming",
             "monthly_renewals_enabled": False,
         }
-        authorized = render_to_string(template, {**base, "can_manage_notifications": True})
+        authorized = render_to_string(template, {
+            **base,
+            "can_manage_renewal_automation": True,
+            "can_manage_notifications": False,
+        })
         self.assertIn('method="post"', authorized)
         self.assertIn('name="enabled" value="1"', authorized)
         self.assertIn("OFF · Automatización desactivada", authorized)
         self.assertIn(f'action="{reverse("cotizacion_colectivos:monthly_renewals_toggle")}"', authorized)
 
-        unauthorized = render_to_string(template, {**base, "can_manage_notifications": False})
+        unauthorized = render_to_string(template, {
+            **base,
+            "can_manage_renewal_automation": False,
+            "can_manage_notifications": True,
+        })
         self.assertNotIn('method="post"', unauthorized)
         self.assertIn("Automatización: desactivada", unauthorized)
         self.assertIn("Activar automatización mensual", authorized)
@@ -105,7 +146,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn('data-dialog-open="task-create-dialog-{{ task.outbox_id }}"', content)
         self.assertIn("Buscar responsable", content)
         self.assertIn("data-task-responsible-select", content)
-        self.assertNotIn('form method="post" action="{% url \'cotizacion_colectivos:request_publish_task\' item.public_id task.outbox_id %}">{% csrf_token %}<button type="submit">Crear Tarea</button>', content)
+        self.assertIn("item.request_type != 'COTIZACION'", content)
 
     def test_published_task_uses_fresh_read_with_local_fallback(self):
         content = Path("cotizacion_colectivos/services/task_publisher.py").read_text(encoding="utf-8")

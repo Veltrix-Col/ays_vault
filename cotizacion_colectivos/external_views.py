@@ -44,13 +44,13 @@ from .services.requests import request_snapshot
 from .services.functional_groups import consolidate_functional_groups
 from .services.renewals import _monthly_period_label
 from .services.mappings import (
-    CONTACT_ID_TYPE_CHOICES,
     INSURED_STATE_CHOICES,
     RELATION_ROLE_CHOICES,
     RELATIONSHIP_CHOICES,
 )
+from .services.catalogs import CatalogUnavailable, identification_choice_pairs
 from .filenames import download_filename
-from .quotation_forms.catalog import get_branch_schema, get_policy_branch_schema
+from .quotation_forms.catalog import get_branch_schema, get_policy_branch_schema, with_identification_choices
 from .quotation_forms.forms import IndividualQuotationForm
 from .quotation_forms.security import (
     sign_receipt,
@@ -90,7 +90,14 @@ def _individual_workspace(context):
     if loaded is None:
         raise signing.BadSignature("El Workspace ya no está disponible.")
     detail, members, metadata = loaded
-    schema = get_policy_branch_schema(detail.branch_code, detail.branch_name)
+    try:
+        identification_choices = identification_choice_pairs()
+    except CatalogUnavailable as exc:
+        raise signing.BadSignature(str(exc)) from exc
+    schema = with_identification_choices(
+        get_policy_branch_schema(detail.branch_code, detail.branch_name),
+        identification_choices,
+    )
     if schema.slug != context.get("branch_slug") or schema.version != context.get("schema_version"):
         raise signing.BadSignature("El formulario ya no corresponde a la póliza.")
     affiliate_key = str(context.get("affiliate_key") or "")
@@ -98,7 +105,7 @@ def _individual_workspace(context):
         option.key for option in affiliate_options(members)
     }:
         raise signing.BadSignature("El afiliado ya no pertenece al contexto.")
-    return detail, members, metadata, schema
+    return detail, members, metadata, schema, identification_choices
 
 
 @never_cache
@@ -111,7 +118,7 @@ def individual_quotation(request, token):
         else:
             record_individual_direct_access(access)
         context = access_context(access)
-        detail, _members, metadata, schema = _individual_workspace(context)
+        detail, _members, metadata, schema, identification_choices = _individual_workspace(context)
     except IndividualAccessError:
         if request.method != "GET":
             return render(request, "cotizacion_colectivos/external/unavailable.html", status=410)
@@ -143,6 +150,7 @@ def individual_quotation(request, token):
         request.FILES or None,
         schema=schema,
         context=context,
+        identification_choices=identification_choices,
         initial={"items_payload": json.dumps(initial_items)},
     )
     if request.method == "POST" and form.is_valid():
@@ -514,6 +522,16 @@ def portal(request):
             "profile=%s correlation=%s",
             warning_count, access.request.zoho_profile, correlation,
         )
+    # A read-only snapshot without policy-scoped inclusion controls must stay
+    # renderable even when Zoho metadata is unavailable.  Load the catalog
+    # only when this portal actually exposes a policy inclusion form.
+    if access.request.policies.exists():
+        try:
+            identification_choices = identification_choice_pairs()
+        except CatalogUnavailable:
+            return _clear_external_cookie(render(request, "cotizacion_colectivos/external/unavailable.html", status=503))
+    else:
+        identification_choices = ()
     context = {
         "item": access.request,
         "snapshot": snapshot,
@@ -525,7 +543,7 @@ def portal(request):
         "branch": branch,
         "editable_branch": branch is not None,
         "contact_channel": settings.COLECTIVOS_EXTERNAL_CONTACT_CHANNEL,
-        "contact_id_types": CONTACT_ID_TYPE_CHOICES,
+        "contact_id_types": identification_choices,
         "relation_roles": RELATION_ROLE_CHOICES,
         "relationship_choices": RELATIONSHIP_CHOICES,
         "insured_state_choices": INSURED_STATE_CHOICES,

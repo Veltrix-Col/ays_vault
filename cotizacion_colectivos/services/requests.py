@@ -124,6 +124,7 @@ def _snapshot_payload(detail, members, profile: str, adjustments=()) -> dict[str
             "end_date": detail.end_date,
             "payment_mode": detail.payment_mode,
             "frequency": detail.frequency,
+            "seller": detail.seller,
         },
         "group": [
             {

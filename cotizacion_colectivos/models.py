@@ -188,6 +188,35 @@ class AdjuntoCotizacionIndividual(models.Model):
     safe_metadata = models.JSONField(default=dict, blank=True)
 
 
+class InvitacionAseguradoraAdjunto(models.Model):
+    """Archivo de invitación preparado para una única póliza Zoho.
+
+    La relación se conserva por el Record ID obtenido del contexto firmado;
+    no representa un attachment genérico ni una entidad de persona/riesgo.
+    """
+    policy_record_id = models.CharField(max_length=24, db_index=True)
+    insurer_code = models.CharField(max_length=32)
+    template_code = models.CharField(max_length=64, blank=True)
+    safe_original_name = models.CharField(max_length=120)
+    internal_name = models.CharField(max_length=96, unique=True, editable=False)
+    extension = models.CharField(max_length=8)
+    detected_mime = models.CharField(max_length=80)
+    size = models.PositiveIntegerField()
+    checksum = models.CharField(max_length=64, db_index=True)
+    stored_path = models.CharField(max_length=255, editable=False)
+    safe_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = (
+            models.UniqueConstraint(
+                fields=("policy_record_id", "insurer_code", "template_code", "checksum"),
+                name="colect_invite_att_checksum",
+            ),
+        )
+
+
 class NotificacionCotizacionIndividual(models.Model):
     """Aviso local de respuesta; no representa una tarea ni se sincroniza con Zoho."""
 
@@ -249,6 +278,7 @@ class RenovacionColectiva(models.Model):
     monthly_period = models.CharField(max_length=7, blank=True, db_index=True)
     policy_status = models.CharField(max_length=40, blank=True)
     payment_frequency = models.CharField(max_length=40, blank=True)
+    seller_label = models.CharField(max_length=120, blank=True, default="")
     encrypted_recipient = models.TextField(blank=True, editable=False)
     recipient_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     selected = models.BooleanField(default=False, db_index=True)
@@ -261,6 +291,7 @@ class RenovacionColectiva(models.Model):
     link_expires_at = models.DateTimeField(null=True, blank=True)
     reminder_due_at = models.DateTimeField(null=True, blank=True)
     reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    internal_alert_sent_at = models.DateTimeField(null=True, blank=True)
     encrypted_access_token = models.TextField(blank=True, editable=False)
     send_attempts = models.PositiveSmallIntegerField(default=0)
     last_sent_at = models.DateTimeField(null=True, blank=True)

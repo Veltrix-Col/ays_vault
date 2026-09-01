@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 import zipfile
 from pathlib import Path
@@ -14,6 +15,12 @@ from django.db.models import Sum
 from ..models import AdjuntoSolicitudColectivo, EventoSolicitudColectivo, RespuestaSolicitudColectivo
 
 MIME_BY_EXTENSION = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+
+
+def _safe_original_name(name: str, extension: str) -> str:
+    """Keep the client name for downloads while removing header/path hazards."""
+    value = re.sub(r"[\x00-\x1f\x7f]", "", Path(name or "").name).strip()
+    return (value or f"soporte{extension}")[:120]
 
 
 def _detected(extension: str, header: bytes) -> str:
@@ -73,7 +80,7 @@ def store_attachment(*, response: RespuestaSolicitudColectivo, uploaded, allow_e
             stream.write(content)
         os.replace(temporary, target)
         attachment = AdjuntoSolicitudColectivo.objects.create(
-            request=response.request, response=response, safe_original_name=f"soporte{extension}", internal_name=internal_name,
+            request=response.request, response=response, safe_original_name=_safe_original_name(name, extension), internal_name=internal_name,
             extension=extension, detected_mime=detected, size=size, checksum=checksum,
             stored_path=str(target.relative_to(root)), safe_metadata={"antivirus": "not_configured"},
         )

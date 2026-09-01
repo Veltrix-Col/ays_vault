@@ -49,7 +49,12 @@ en `ays-zoho-sdk` 1.1.0: no se usa HTTP directo para subirlos.
 - `COLECTIVOS_EXTERNAL_SESSION_TTL_SECONDS=1800`.
 - `COLECTIVOS_ATTACHMENT_MAX_BYTES=10485760`.
 - `COLECTIVOS_ATTACHMENT_TOTAL_BYTES=26214400`.
+- `COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED=false` (la publicación
+  controlada de archivos de invitación en `Polizas`; no habilita correo).
 - `COLECTIVOS_EXTERNAL_BASE_URL=https://host-autorizado`.
+- `COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL=<destinatario-interno>` para avisos
+  operativos cuando un ciclo sigue sin respuesta tras el reminder; si queda
+  vacío, el reminder al cliente se conserva y el aviso interno se reintenta.
 
 Las variables heredadas expresadas en días se conservan sólo por compatibilidad
 con flujos legacy; los accesos aquí descritos usan segundos y no redondean.

@@ -1,7 +1,7 @@
 <nav class="renewal-panel-nav" aria-label="Navegación de renovaciones">
   <a class="{% if renewal_tab == 'upcoming' %}is-active{% endif %}" href="{% url 'cotizacion_colectivos:novelties_index' %}"{% if renewal_tab == 'upcoming' %} aria-current="page"{% endif %}>Próximos a enviar</a>
   <a class="{% if renewal_tab == 'tracking' %}is-active{% endif %}" href="{% url 'cotizacion_colectivos:renewal_tracking' %}"{% if renewal_tab == 'tracking' %} aria-current="page"{% endif %}>Seguimiento de links</a>
-  {% if can_manage_notifications %}
+  {% if can_manage_renewal_automation %}
     {% if monthly_renewals_enabled %}
       <form method="post" action="{% url 'cotizacion_colectivos:monthly_renewals_toggle' %}" class="renewal-switch-form">
         {% csrf_token %}<input type="hidden" name="enabled" value="0">

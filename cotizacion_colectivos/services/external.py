@@ -19,11 +19,11 @@ from vault.crypto import decrypt, encrypt
 from vault.notifications import send_notification
 from .otp_email import build_otp_email
 from .mappings import (
-    CONTACT_ID_TYPE_CHOICES,
     INSURED_STATE_CHOICES,
     RELATION_ROLE_CHOICES,
     RELATIONSHIP_CHOICES,
 )
+from .catalogs import CatalogUnavailable, identification_type_values
 
 from ..models import (
     AccesoExternoSolicitudColectivo,
@@ -34,7 +34,13 @@ from ..models import (
     SolicitudColectivo,
     RenovacionColectiva,
 )
-from .task_publisher import ColectivosTaskPayload, enqueue_task
+from .task_publisher import (
+    NOVELTIES_ANALYST_REQUEST,
+    NOVELTIES_TASK_AREA,
+    ColectivosTaskPayload,
+    enqueue_task,
+)
+from .requests import request_snapshot
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
@@ -465,6 +471,12 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
     scoped_policy_ids = None
     if policy_count == 1:
         scoped_policy_ids = set(request.policies.values_list("id", flat=True))
+    valid_id_types = None
+    if any(str(row.get("action", "")).strip().upper() == CambioSolicitudColectivo.Action.INCLUDE for row in rows):
+        try:
+            valid_id_types = identification_type_values()
+        except CatalogUnavailable as exc:
+            raise ExternalAccessError("No fue posible cargar los tipos de identificación vigentes.") from exc
     for position, row in enumerate(rows, 1):
         action = str(row.get("action", "")).strip().upper()
         if action not in ALLOWED_ACTIONS:
@@ -517,7 +529,7 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             raise ExternalAccessError("La fecha solicitada de ingreso es obligatoria.")
         if action == CambioSolicitudColectivo.Action.INCLUDE:
             if (
-                fields["tipo_id"] not in CONTACT_ID_TYPE_CHOICES
+                fields["tipo_id"] not in valid_id_types
                 or fields["rol"] not in RELATION_ROLE_CHOICES
                 or not fields["documento"].isdigit()
                 or not fields["nombres"]
@@ -599,6 +611,9 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
             kinds.add("INCLUSION")
         elif change.action == CambioSolicitudColectivo.Action.RETIRE:
             kinds.add("RETIRO")
+    snapshot = request_snapshot(request)
+    policy_snapshot = snapshot.get("policy") if isinstance(snapshot, dict) else {}
+    seller = str(policy_snapshot.get("seller") or "").strip() if isinstance(policy_snapshot, dict) else ""
     for kind in sorted(kinds):
         label = "Ingreso" if kind == "INCLUSION" else "Retiro"
         observations = [f"Solicitud de {label.lower()} de {request.branch_name or 'ramo no informado'}." ]
@@ -632,6 +647,9 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
                 branch_code=str(request.branch_code),
                 local_reference=str(request.public_id),
                 subject=f"{label} · {request.branch_name or 'Ramo'} · {request.client_label or 'Cliente'}"[:255],
+                area=NOVELTIES_TASK_AREA,
+                analyst_request=NOVELTIES_ANALYST_REQUEST,
+                seller=seller,
                 observations="\n".join(observations)[:2000],
             ),
             event_version=locked.version,

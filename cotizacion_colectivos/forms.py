@@ -318,19 +318,17 @@ class PersonCompletionForm(forms.Form):
 
     first_name = forms.CharField(label="Nombres", required=False, max_length=120)
     last_name = forms.CharField(label="Apellidos", required=False, max_length=120)
-    id_type = forms.ChoiceField(
-        label="Tipo de identificación", required=False,
-        choices=(('', "Seleccione"), ("CC", "CC"), ("CE", "CE"), ("EX", "EX"),
-                 ("NIT", "NIT"), ("NUIP", "NUIP"), ("PAS", "PAS"),
-                 ("PEP", "PEP"), ("PP", "PP"), ("PPT", "PPT"),
-                 ("RC", "RC"), ("TI", "TI")),
-    )
+    id_type = forms.ChoiceField(label="Tipo de identificación", required=False, choices=())
     document = forms.CharField(label="Número de identificación", required=False, max_length=40)
     birth_date = forms.DateField(label="Fecha de nacimiento", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     email = forms.EmailField(label="Correo", required=False, max_length=254)
     mobile = forms.CharField(label="Móvil", required=False, max_length=24)
     phone = forms.CharField(label="Teléfono", required=False, max_length=24)
     consent = forms.ChoiceField(label="Tratamiento de datos", required=False, choices=(('', "No modificar"), ("Si", "Sí"), ("No", "No")))
+
+    def __init__(self, *args, identification_choices=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["id_type"].choices = (("", "Seleccione"), *tuple(identification_choices))
 
     def clean(self):
         cleaned = super().clean()
