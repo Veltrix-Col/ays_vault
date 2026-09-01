@@ -11,6 +11,8 @@ WORKDIR /app
 # - libpango/libcairo/gdk-pixbuf/shared-mime-info -> requeridas por WeasyPrint
 # - libpq5 -> cliente de PostgreSQL para psycopg[binary]
 # - fonts-liberation -> fuentes decentes para los PDF generados
+# - gosu -> deja el entrypoint arrancar como root solo para corregir el dueño
+#   de los volúmenes montados, y luego bajar privilegios a appuser
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -23,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     libpq5 \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -56,9 +59,11 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Corre como usuario sin privilegios: limita el radio de acción si algún día
-# se explota una vulnerabilidad de RCE en la app o en una dependencia.
+# se explota una vulnerabilidad de RCE en la app o en una dependencia. El
+# contenedor arranca como root a propósito (sin USER aquí): el entrypoint
+# corrige el dueño de los volúmenes montados y luego baja a appuser con
+# gosu antes de ejecutar la app. Ver docker-entrypoint.sh.
 RUN useradd -m appuser && chown -R appuser:appuser /app
-USER appuser
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
