@@ -8,6 +8,8 @@ from django.urls import reverse
 
 from config.application_access import DelegatedAccessResult, inherited_application_for_path
 from cotizacion_colectivos.dto import CompanyDetail, ContactSummary
+from cotizacion_colectivos.actors import get_internal_actor
+from cotizacion_colectivos.permissions import has_internal_permission
 from cotizacion_colectivos.services.common import ColectivosServiceError, sign_record_id
 from vault.models import AuditEvent
 
@@ -133,6 +135,22 @@ class TrustedIntranetAccessTests(TestCase):
         self.assertEqual(vault_response.status_code, 302)
         self.assertIn(reverse("login"), vault_response["Location"])
         self.assertNotIn("otp_device_id", self.client.session)
+
+    @override_settings(
+        TOOLS_DELEGATED_ACCESS_VALIDATOR=(
+            "config.tests_application_access.allow_delegated_access"
+        ),
+        COLECTIVOS_TECHNICAL_ACTOR_USERNAME="delegated-technical-test",
+    )
+    def test_delegated_anonymous_request_has_all_collective_permissions_and_actor(self):
+        response = self.client.get(reverse("cotizacion_colectivos:index"))
+        self.assertEqual(response.status_code, 200)
+        request = response.wsgi_request
+        self.assertFalse(request.user.is_authenticated)
+        self.assertTrue(has_internal_permission(request, "manage_notifications"))
+        self.assertTrue(has_internal_permission(request, "approve_responses"))
+        actor = get_internal_actor(request, create=True)
+        self.assertEqual(actor.username, "delegated-technical-test")
 
     def test_client_header_or_query_cannot_enable_access(self):
         response = self.client.get(
