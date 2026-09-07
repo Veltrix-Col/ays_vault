@@ -143,11 +143,13 @@ def _publish_attachment(*, attachment, module: str, record_id: str, zoho=None, f
     _validate_document_contract(module=module, owner_type=owner_type, document_type=document_type)
     previous = metadata.get("zoho_attachment") if isinstance(metadata.get("zoho_attachment"), dict) else {}
     root = Path(settings.COLECTIVOS_PRIVATE_ROOT).resolve()
-    target = (root / "individual_quotations" / str(attachment.stored_path)).resolve()
+    is_collective_attachment = attachment.__class__.__name__ == "AdjuntoSolicitudColectivo"
+    target = (root / str(attachment.stored_path)).resolve() if is_collective_attachment else (root / "individual_quotations" / str(attachment.stored_path)).resolve()
     if root not in target.parents or not target.is_file():
         raise ValidationError("El documento no está disponible.")
     try:
-        content = base64.b64decode(decrypt(target.read_bytes().decode()).encode())
+        raw = target.read_bytes()
+        content = raw if is_collective_attachment else base64.b64decode(decrypt(raw.decode()).encode())
         stream = BytesIO(content)
         metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
         stream.name = build_attachment_filename(

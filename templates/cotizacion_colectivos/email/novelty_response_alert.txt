@@ -1,0 +1,11 @@
+Nueva respuesta de Novedades
+
+Cliente: {{ client }}
+Póliza: {{ policy }}
+Ramo: {{ branch }}
+Aseguradora: {{ insurer }}
+Vendedor: {{ seller }}
+Tipo: {{ novelty_type }}
+Fecha de respuesta: {{ responded_at }}
+
+{% if expediente_url %}Ingresar al expediente: {{ expediente_url }}{% else %}Ingresar al Banco de Herramientas para revisar el expediente.{% endif %}

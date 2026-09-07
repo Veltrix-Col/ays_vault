@@ -119,4 +119,23 @@ class FakeZoho:
     organization: FakeOrganization = FakeOrganization()
     profile: str = "sandbox"
     environment: str = "sandbox"
+def mark_novelties_actions(raw):
+    """Return a v4 workbook fixture with preloaded rows explicitly actionable."""
+    import io
+    from openpyxl import load_workbook
 
+    book = load_workbook(io.BytesIO(raw))
+    for sheet in book.worksheets:
+        if sheet.title in {"Póliza", "Instrucciones", "Catálogos", "Metadatos"}:
+            continue
+        for row in range(2, sheet.max_row + 1):
+            if any(sheet.cell(row=row, column=col).value not in (None, "") for col in range(1, sheet.max_column + 1)):
+                sheet.cell(row=row, column=1).value = "Ingreso"
+                sheet.cell(row=row, column=2).value = "CC"
+                sheet.cell(row=row, column=3).value = "123456"
+                sheet.cell(row=row, column=4).value = "Persona"
+                sheet.cell(row=row, column=5).value = "Prueba"
+                sheet.cell(row=row, column=9).value = "2026-09-01"
+    output = io.BytesIO()
+    book.save(output)
+    return output.getvalue()

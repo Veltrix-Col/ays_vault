@@ -6,6 +6,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Mapping
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
@@ -23,7 +24,9 @@ from .mappings import (
     RELATION_ROLE_CHOICES,
     RELATIONSHIP_CHOICES,
 )
+from ..branches import contract_required_ingress_fields
 from .catalogs import CatalogUnavailable, identification_type_values
+from .common import ColectivosServiceError, unsign_record_context
 
 from ..models import (
     AccesoExternoSolicitudColectivo,
@@ -40,7 +43,9 @@ from .task_publisher import (
     ColectivosTaskPayload,
     enqueue_task,
 )
-from .requests import request_snapshot
+from .requests import _restore_policy_token, request_snapshot
+from .novelty_response_email import send_novelty_response_email
+from .person_contract import contact_identity_missing_fields
 
 EXTERNAL_COOKIE = "colectivos_external_session"
 SESSION_SALT = "cotizacion_colectivos.external_session.v1"
@@ -52,12 +57,22 @@ ACTION_TO_ADJUSTMENT = {
     CambioSolicitudColectivo.Action.RETIRE: "RETIRO",
     CambioSolicitudColectivo.Action.INCLUDE: "INCLUSION",
 }
+_TASK_FIELD_LABELS = {
+    "nombres": "Nombres", "apellidos": "Apellidos", "nombre": "Nombre",
+    "tipo_id": "Tipo de identificación", "documento": "Identificación",
+    "fecha_nacimiento": "Fecha de nacimiento", "fecha_ingreso": "Fecha de ingreso",
+    "fecha_retiro": "Fecha de retiro", "fecha_efectiva": "Fecha efectiva",
+    "observaciones": "Observaciones", "correo": "Correo", "email": "Correo", "telefono": "Teléfono", "phone": "Teléfono",
+    "placa": "Placa", "marca": "Marca",
+    "modelo": "Modelo", "vehiculo": "Vehículo", "ciudad": "Ciudad",
+    "tipo_uso": "Tipo de uso", "rol": "Rol", "parentesco": "Parentesco",
+}
 EDITABLE_FIELDS = {
     "tipo_id", "documento", "nombre", "nombres", "apellidos", "rol", "plan", "parentesco",
     "fecha_nacimiento", "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "motivo",
     "observaciones", "ciudad", "direccion", "tipo_uso",
     "anio_construccion", "descripcion", "valor_asegurado", "vehiculo",
-    "placa", "marca", "modelo", "estado",
+    "placa", "marca", "modelo", "estado", "email", "phone",
 }
 
 
@@ -183,6 +198,277 @@ def generate_access(*, request: SolicitudColectivo, actor, recipient: str = "", 
     # notificación administrativa para el analista.
     token = f"{selector}.{secret}"
     return GeneratedAccess(access, token, f"{settings.COLECTIVOS_EXTERNAL_BASE_URL}/solicitudes/colectivos/externa/{token}/", regenerate)
+
+def _task_novelty_observations(request, changes, label: str) -> str:
+    """Build a human operational summary without exposing payload keys."""
+    action = CambioSolicitudColectivo.Action.INCLUDE if label == "Ingreso" else CambioSolicitudColectivo.Action.RETIRE
+    lines = [f"Solicitud de {label.lower()} de {request.branch_name or 'ramo no informado'}."]
+    policy_labels = []
+    grouped = {}
+    for change in changes:
+        if change.action != action:
+            continue
+        policy = getattr(change, "policy", None)
+        policy_label = getattr(policy, "masked_policy_reference", "") if policy else ""
+        if policy_label and policy_label not in policy_labels:
+            policy_labels.append(policy_label)
+        try:
+            value = decrypt(change.encrypted_new_value).strip() if change.encrypted_new_value else ""
+        except (TypeError, ValueError):
+            value = ""
+        if change.functional_field == "observaciones" and change.encrypted_observation:
+            try:
+                value = decrypt(change.encrypted_observation).strip()
+            except (TypeError, ValueError):
+                pass
+        position = change.position if change.position is not None else 0
+        row = grouped.setdefault(position, {})
+        if value:
+            row[change.functional_field] = value
+        # Retire rows commonly carry only the effective date in the change;
+        # enrich the operational summary from the persisted snapshot rather
+        # than performing a remote lookup or exposing technical identifiers.
+        record = getattr(change, "original_record", None)
+        payload_source = getattr(record, "encrypted_branch_payload", "") if record else ""
+        payload_source = payload_source or getattr(change, "encrypted_branch_payload", "")
+        if payload_source:
+            try:
+                snapshot = json.loads(decrypt(payload_source))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                snapshot = {}
+            if isinstance(snapshot, dict):
+                aliases = {
+                    "id_type": "tipo_id", "identification_type": "tipo_id",
+                    "document": "documento", "identification_number": "documento",
+                    "full_name": "nombre", "display_name": "nombre",
+                    "first_name": "nombres", "last_name": "apellidos",
+                    "birth_date": "fecha_nacimiento", "entry_date": "fecha_ingreso",
+                    "exit_date": "fecha_retiro", "effective_date": "fecha_efectiva",
+                    "email": "correo", "phone": "telefono",
+                }
+                for source_key, target_key in aliases.items():
+                    if not row.get(target_key) and snapshot.get(source_key) not in (None, ""):
+                        row[target_key] = str(snapshot[source_key]).strip()
+                for source_key, target_key in (
+                    ("Tipo_ID", "tipo_id"), ("N_mero_de_ID", "documento"),
+                    ("Nombres", "nombres"), ("Apellidos", "apellidos"),
+                    ("Fecha_de_nacimiento", "fecha_nacimiento"),
+                    ("Fecha_de_ingreso", "fecha_ingreso"),
+                    ("Fecha_de_retiro", "fecha_retiro"),
+                    ("Correo", "correo"), ("Tel_fono", "telefono"),
+                ):
+                    if not row.get(target_key) and snapshot.get(source_key) not in (None, ""):
+                        row[target_key] = str(snapshot[source_key]).strip()
+                row.setdefault("_element_type", getattr(record, "element_type", ""))
+    if policy_labels:
+        lines.append(f"Póliza: {', '.join(policy_labels)}")
+    for position in sorted(grouped):
+        row = grouped[position]
+        vehicle_keys = {"placa", "marca", "modelo", "vehiculo", "ciudad", "tipo_uso"}
+        heading = "Vehículo:" if vehicle_keys.intersection(row) or str(row.get("_element_type", "")) == "VEHICULO" else "Persona:"
+        lines.extend(("", heading))
+        full_name = " ".join(filter(None, (row.get("nombres"), row.get("apellidos")))) or row.get("nombre")
+        if full_name:
+            lines.append(f"Nombre: {full_name}")
+        for key in ("tipo_id", "documento", "fecha_nacimiento", "fecha_ingreso", "fecha_retiro", "fecha_efectiva", "correo", "telefono", "placa", "marca", "modelo", "vehiculo", "ciudad", "tipo_uso", "rol", "parentesco", "observaciones"):
+            if row.get(key):
+                lines.append(f"{_TASK_FIELD_LABELS[key]}: {row[key]}")
+    return "\n".join(lines)[:2000]
+
+
+def _stored_policy_record_id(encrypted_reference: str) -> str:
+    """Recover the Zoho policy ID from the protected stored reference.
+
+    ``SolicitudColectivoPoliza`` stores the compact JSON reference produced by
+    ``_store_policy_reference`` rather than the original signed token.  The
+    canonical restore helper rebuilds and validates the signed context before
+    this service consumes the ID, while still supporting legacy signed values.
+    """
+    if not encrypted_reference:
+        return ""
+    try:
+        stored = decrypt(encrypted_reference)
+        restored = _restore_policy_token(stored)
+        context = unsign_record_context(restored, expected_type="policy")
+        return str(context.get("id") or "").strip()
+    except (TypeError, ValueError, ValidationError, ColectivosServiceError):
+        return ""
+
+
+@transaction.atomic
+def ensure_novelty_ingress_items(request: SolicitudColectivo):
+    """Materialize confirmed ingress rows once, without performing Zoho writes."""
+    from ..models import NovedadIngresoZoho
+
+    response = request.responses.filter(status=RespuestaSolicitudColectivo.Status.SUBMITTED).order_by("-version").first()
+    if response is None:
+        return []
+    result = []
+    for change in response.changes.select_related("policy").filter(action=CambioSolicitudColectivo.Action.INCLUDE, functional_field="accion"):
+        payload = {}
+        source = change.encrypted_branch_payload or ""
+        if source:
+            try:
+                payload = json.loads(decrypt(source))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+        # The action row carries the stable identity, while the submitted
+        # fields are persisted as sibling changes at the same position. Build
+        # one canonical operational payload so Web and Excel feed the exact
+        # same resolver contract.
+        sibling_changes = response.changes.filter(
+            position=change.position,
+            action=CambioSolicitudColectivo.Action.INCLUDE,
+        ).exclude(functional_field="accion")
+        field_map = {
+            "tipo_id": "id_type", "documento": "document",
+            "id_type": "id_type", "document": "document",
+            "nombres": "first_name", "nombre": "first_name",
+            "apellidos": "last_name", "apellido": "last_name",
+            "fecha_nacimiento": "birth_date", "fecha_de_nacimiento": "birth_date",
+            "correo": "email", "correo_electronico": "email",
+            "correo electrónico": "email", "email": "email",
+            "email_address": "email",
+            "telefono": "phone", "teléfono": "phone", "phone": "phone",
+            "telefono_contacto": "phone", "teléfono de contacto": "phone",
+            "celular": "phone", "mobile": "phone",
+            "fecha_ingreso": "entry_date", "fecha_de_ingreso": "entry_date",
+            "rol": "rol", "parentesco": "parentesco", "plan": "plan",
+            "placa": "plate", "marca": "brand", "modelo": "model",
+            "ciudad": "city", "tipo_uso": "use", "clase": "vehicle_class",
+        }
+        for sibling in sibling_changes:
+            target = field_map.get(str(sibling.functional_field or ""))
+            if not target or not sibling.encrypted_new_value:
+                continue
+            try:
+                value = decrypt(sibling.encrypted_new_value)
+            except (TypeError, ValueError):
+                value = ""
+            if value not in (None, ""):
+                payload[target] = str(value).strip()
+        # Older materialized rows can already contain the values under the
+        # labels used by the web/Excel adapters. Normalize those aliases too.
+        for source_key, target_key in (
+            ("Nombres", "first_name"), ("nombre", "first_name"),
+            ("Apellidos", "last_name"), ("apellido", "last_name"),
+            ("Tipo_ID", "id_type"), ("tipo_id", "id_type"),
+            ("N_mero_de_ID", "document"), ("documento", "document"),
+        ):
+            if not payload.get(target_key) and payload.get(source_key) not in (None, ""):
+                payload[target_key] = str(payload[source_key]).strip()
+        item_key = str(payload.get("functional_key") or f"position-{change.position}").strip()
+        if not item_key:
+            item_key = f"position-{change.position}"
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+        policy_remote_id = _stored_policy_record_id(
+            change.policy.encrypted_policy_token if change.policy else ""
+        )
+        # The change-level policy is the authoritative source for a
+        # multi-policy response.  Preserve its visible branch value in the
+        # operational payload so later entity processing can select the same
+        # contract as the individual quotation flow, without another remote
+        # lookup or a guessed generic branch.
+        policy_branch_name = str(
+            getattr(change.policy, "branch_name", "") or request.branch_name or ""
+        ).strip()
+        if policy_branch_name:
+            payload["ramo"] = policy_branch_name
+        # A small number of legacy responses do not retain the policy FK on
+        # the action marker.  A single-policy request still has an
+        # unambiguous protected source; never guess for a multi-policy one.
+        if not policy_remote_id:
+            policy_candidates = list(request.policies.filter(active=True).order_by("position")[:2])
+            if len(policy_candidates) == 1:
+                policy_remote_id = _stored_policy_record_id(
+                    policy_candidates[0].encrypted_policy_token
+                )
+        if not policy_remote_id and request.encrypted_policy_token:
+            # Legacy single-policy requests kept the signed reference only on
+            # the parent request.  Recover it locally before considering any
+            # remote fallback; never guess among multiple policies.
+            policy_remote_id = _stored_policy_record_id(request.encrypted_policy_token)
+        item, created = NovedadIngresoZoho.objects.get_or_create(
+            request=request,
+            item_key=item_key,
+            defaults={
+                "branch_code": request.branch_code or "",
+                "policy_remote_id": policy_remote_id,
+                "encrypted_payload": encrypt(json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+                "payload_hash": digest,
+            },
+        )
+        if not created:
+            # Existing rows may have been materialized before the canonical
+            # sibling-field payload was introduced.  Reconcile only the
+            # operational data/error; never reset confirmed entity IDs or an
+            # uncertain write state.
+            update_fields = []
+            terminal_or_uncertain = {
+                NovedadIngresoZoho.Status.PUBLISHED,
+                NovedadIngresoZoho.Status.RECONCILE_REQUIRED,
+            }
+            if item.status not in terminal_or_uncertain and item.payload_hash != digest:
+                item.encrypted_payload = encrypt(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                item.payload_hash = digest
+                update_fields.extend(("encrypted_payload", "payload_hash"))
+            if policy_remote_id and not item.policy_remote_id:
+                item.policy_remote_id = policy_remote_id
+                update_fields.append("policy_remote_id")
+
+            # Once the signed parent policy reference is recovered locally,
+            # this historic materialization error is no longer active.
+            if (
+                policy_remote_id
+                and str(item.safe_error or "").strip()
+                == "No fue posible resolver la póliza Zoho del ingreso."
+            ):
+                item.safe_error = ""
+                if item.status == NovedadIngresoZoho.Status.BLOCKED:
+                    item.status = NovedadIngresoZoho.Status.PENDING
+                update_fields.extend(("safe_error", "status"))
+
+            contact_data = {
+                "First_Name": payload.get("first_name"),
+                "Last_Name": payload.get("last_name"),
+                "Tipo_ID": payload.get("id_type"),
+                "N_mero_de_ID": payload.get("document"),
+            }
+            missing = contact_identity_missing_fields(contact_data)
+            data_error = "Faltan datos para procesar el ingreso:" in str(item.safe_error or "")
+            if item.status == NovedadIngresoZoho.Status.BLOCKED and data_error:
+                next_error = (
+                    "Faltan datos para procesar el ingreso: " + ", ".join(missing)
+                    if missing else ""
+                )
+                item.safe_error = next_error
+                item.status = NovedadIngresoZoho.Status.BLOCKED if missing else NovedadIngresoZoho.Status.PENDING
+                item.reconcile_required = False
+                update_fields.extend(("safe_error", "status", "reconcile_required"))
+            if update_fields:
+                item.save(update_fields=tuple(dict.fromkeys((*update_fields, "updated_at"))))
+        result.append(item)
+    return result
+
+
+def novelty_ingress_attachments(request: SolicitudColectivo, item_key: str):
+    """Return only person-level attachments for one ingress row.
+
+    Excel imports remain evidence at response level and are deliberately
+    excluded from this operational document path.
+    """
+    response = request.responses.filter(status=RespuestaSolicitudColectivo.Status.SUBMITTED).order_by("-version").first()
+    if response is None:
+        return ()
+    for change in response.changes.filter(action=CambioSolicitudColectivo.Action.INCLUDE, functional_field="accion").prefetch_related("attachments"):
+        try:
+            marker = json.loads(decrypt(change.encrypted_branch_payload or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            marker = {}
+        key = str(marker.get("functional_key") or f"position-{change.position}").strip()
+        if key == str(item_key).strip():
+            return tuple(change.attachments.exclude(category="EXCEL_IMPORT"))
+    return ()
 
 
 @transaction.atomic
@@ -460,11 +746,61 @@ def response_checksum(rows: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def _draft_change_rows(response: RespuestaSolicitudColectivo) -> list[dict[str, str]]:
+    """Rebuild actionable rows from the current draft for incremental saves."""
+    rows = []
+    markers = response.changes.filter(
+        functional_field="accion",
+        action__in=(CambioSolicitudColectivo.Action.INCLUDE, CambioSolicitudColectivo.Action.RETIRE, CambioSolicitudColectivo.Action.MODIFY),
+    ).order_by("position", "id")
+    for marker in markers:
+        try:
+            source = json.loads(decrypt(marker.encrypted_branch_payload or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            source = {}
+        records = tuple(str(value) for value in (source.get("source_record_keys") or ()) if str(value).strip())
+        row = {
+            "record": records[0] if records else "",
+            "records": records,
+            "policy": str(marker.policy_id or ""),
+            "action": marker.action,
+            "functional_key": str(source.get("functional_key") or ""),
+        }
+        for change in response.changes.filter(action=marker.action, position=marker.position).exclude(functional_field="accion"):
+            try:
+                row[change.functional_field] = decrypt(change.encrypted_new_value or "")
+            except Exception:
+                row[change.functional_field] = ""
+        rows.append(row)
+    return rows
+
+
+def _draft_row_identity(row: Mapping[str, object]) -> tuple[str, ...]:
+    action = str(row.get("action") or "").strip().upper()
+    if action == CambioSolicitudColectivo.Action.INCLUDE:
+        functional_key = str(row.get("functional_key") or "").strip()
+        if functional_key:
+            return (action, functional_key)
+        return (
+            action,
+            str(row.get("policy") or "").strip(),
+            str(row.get("tipo_id") or "").strip(),
+            str(row.get("documento") or "").strip(),
+        )
+    records = tuple(sorted(str(value).strip() for value in (row.get("records") or (row.get("record") or "",)) if str(value).strip()))
+    return (action, *records)
+
+
 @transaction.atomic
-def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[str, str]], observations: str, origin: str = "WEB") -> RespuestaSolicitudColectivo:
+def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[str, str]], observations: str, origin: str = "WEB", relationship_choices=None) -> RespuestaSolicitudColectivo:
     request = SolicitudColectivo.objects.select_for_update().get(pk=access.request_id)
     if request.status not in {request.Status.OPENED, request.Status.CORRECTION}:
         raise ExternalAccessError("La solicitud no admite cambios.")
+    current = request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).order_by("-version").first()
+    if current and origin == "WEB":
+        existing_rows = _draft_change_rows(current)
+        incoming_keys = {_draft_row_identity(row) for row in rows if str(row.get("action") or "").strip().upper() != CambioSolicitudColectivo.Action.UNCHANGED}
+        rows = list(rows) + [row for row in existing_rows if _draft_row_identity(row) not in incoming_keys]
     normalized = []
     seen = set()
     policy_count = request.policies.count()
@@ -536,7 +872,24 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 or not fields["apellidos"]
             ):
                 raise ExternalAccessError("El ingreso requiere nombres, apellidos, identificación y documento válidos.")
-        if fields["parentesco"] and fields["parentesco"] not in RELATIONSHIP_CHOICES:
+            contract_branch_code = getattr(policy, "branch_code", "") if policy is not None else getattr(request, "branch_code", "")
+            contract_branch_name = getattr(policy, "branch_name", "") if policy is not None else getattr(request, "branch_name", "")
+            if relationship_choices is not None and "parentesco" in contract_required_ingress_fields(contract_branch_code, contract_branch_name) and not fields["parentesco"]:
+                raise ExternalAccessError("El parentesco es obligatorio para este ingreso.")
+        # ``relationship_choices`` is supplied by the catalog boundary as
+        # ``(value, label)`` pairs (the same representation used by the
+        # HTML select).  Validation must compare the submitted canonical
+        # value against the first member of each pair, never against the
+        # pair object itself.  Legacy callers still provide the historical
+        # flat tuple of strings.
+        if relationship_choices is None:
+            allowed_relationships = tuple(RELATIONSHIP_CHOICES)
+        else:
+            allowed_relationships = tuple(
+                str(choice[0] if isinstance(choice, (tuple, list)) else getattr(choice, "value", choice) or "").strip()
+                for choice in relationship_choices
+            )
+        if fields["parentesco"] and fields["parentesco"] not in allowed_relationships:
             raise ExternalAccessError("El parentesco seleccionado no es válido.")
         if fields["estado"] and fields["estado"] not in INSURED_STATE_CHOICES:
             raise ExternalAccessError("El estado seleccionado no es válido.")
@@ -545,7 +898,13 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
             "functional_key": str(row.get("functional_key") or ""),
             "policy": policy, "fields": fields, "position": position,
         })
-    current = request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).order_by("-version").first()
+    prior_attachments = list(current.attachments.all()) if current else []
+    prior_attachment_keys = {}
+    for attachment in prior_attachments:
+        metadata = attachment.safe_metadata if isinstance(attachment.safe_metadata, dict) else {}
+        key = str(metadata.get("functional_key") or "")
+        if key:
+            prior_attachment_keys.setdefault(key, []).append(attachment)
     version = (request.responses.order_by("-version").values_list("version", flat=True).first() or 0) + 1
     if current:
         current.status = current.Status.SUPERSEDED
@@ -557,6 +916,7 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
         source_payload = encrypt(json.dumps({
             "functional_key": item["functional_key"],
             "source_record_keys": sorted(str(record.public_key) for record in item["source_records"]),
+            "origin": origin,
         }, sort_keys=True))
         CambioSolicitudColectivo.objects.create(response=response, policy=item["policy"], original_record=item["record"], action=item["action"], functional_field="accion", position=item["position"], encrypted_branch_payload=source_payload, checksum=marker)
         for field, value in item["fields"].items():
@@ -574,6 +934,23 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
                 encrypted_observation=encrypt(value) if field == "observaciones" else "",
                 encrypted_branch_payload=source_payload, position=item["position"], checksum=digest,
             )
+    new_changes_by_key = {}
+    for change in response.changes.filter(functional_field="accion"):
+        try:
+            payload = json.loads(decrypt(change.encrypted_branch_payload or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        key = str(payload.get("functional_key") or "")
+        if key:
+            new_changes_by_key[key] = change
+    for key, attachments in prior_attachment_keys.items():
+        target_change = new_changes_by_key.get(key)
+        if not target_change:
+            continue
+        for attachment in attachments:
+            attachment.response = response
+            attachment.change = target_change
+            attachment.save(update_fields=("response", "change"))
     EventoSolicitudColectivo.objects.create(request=request, event_type="EXTERNAL_DRAFT_SAVED", origin="EXTERNO", safe_metadata={"version": version, "changes": response.changes.count()})
     return response
 
@@ -616,28 +993,11 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
     seller = str(policy_snapshot.get("seller") or "").strip() if isinstance(policy_snapshot, dict) else ""
     for kind in sorted(kinds):
         label = "Ingreso" if kind == "INCLUSION" else "Retiro"
-        observations = [f"Solicitud de {label.lower()} de {request.branch_name or 'ramo no informado'}." ]
-        for change in locked.changes.all():
-            if ((kind == "INCLUSION" and change.action != CambioSolicitudColectivo.Action.INCLUDE)
-                    or (kind == "RETIRO" and change.action != CambioSolicitudColectivo.Action.RETIRE)):
-                continue
-            values = []
-            if change.encrypted_new_value:
-                try:
-                    value = decrypt(change.encrypted_new_value).strip()
-                except (TypeError, ValueError):
-                    value = ""
-                if value:
-                    values.append(f"{change.functional_field}: {value}")
-            if change.encrypted_observation:
-                try:
-                    value = decrypt(change.encrypted_observation).strip()
-                except (TypeError, ValueError):
-                    value = ""
-                if value:
-                    values.append(f"observaciones: {value}")
-            if values:
-                observations.append(" · ".join(values))
+        observations = _task_novelty_observations(
+            request,
+            locked.changes.select_related("policy", "original_record").all(),
+            label,
+        )
         enqueue_task(
             source=request,
             payload=ColectivosTaskPayload(
@@ -650,7 +1010,7 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
                 area=NOVELTIES_TASK_AREA,
                 analyst_request=NOVELTIES_ANALYST_REQUEST,
                 seller=seller,
-                observations="\n".join(observations)[:2000],
+                observations=observations,
             ),
             event_version=locked.version,
         )
@@ -672,7 +1032,19 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
         f"El cliente respondió: {result_label.lower()} · póliza {request.masked_policy_reference}.",
         str(locked.version),
     )
+    # Email delivery is independent from the response transaction and task
+    # outbox.  It runs only after the accepted response is committed.
+    transaction.on_commit(lambda response_id=locked.pk: _send_novelty_response_alert(response_id))
     return locked
+
+
+def _send_novelty_response_alert(response_id: int) -> None:
+    try:
+        response = RespuestaSolicitudColectivo.objects.select_related("request").get(pk=response_id)
+        send_novelty_response_email(response=response)
+    except Exception:
+        # The response is already valid; delivery failures must not alter it.
+        logger.exception("colectivos_novelty_response_email_failed response_id=%s", response_id)
 
 
 def _send_submission_receipt(access_id: int, public_id: str) -> None:

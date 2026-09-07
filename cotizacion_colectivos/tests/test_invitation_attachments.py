@@ -44,7 +44,7 @@ class InvitationAttachmentContractTests(SimpleTestCase):
                 _validate_document_contract(module="Polizas", owner_type=owner_type, document_type=document_type)
 
     @override_settings(
-        COLECTIVOS_PRIVATE_ROOT=".", ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_PRIVATE_ROOT=".", ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
@@ -81,6 +81,7 @@ class InvitationAttachmentContractTests(SimpleTestCase):
 class InvitationAttachmentPersistenceTests(TestCase):
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
     )
@@ -107,6 +108,33 @@ class InvitationAttachmentPersistenceTests(TestCase):
 
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
+        COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
+    )
+    @patch("cotizacion_colectivos.services.invitation_attachment_publisher.preview_invitation_templates")
+    @patch("cotizacion_colectivos.services.invitation_attachment_publisher.generate_invitation_templates")
+    def test_standard_fallback_uses_the_same_polizas_attachment_pipeline(self, generate, preview):
+        with tempfile.TemporaryDirectory() as folder:
+            detail = SimpleNamespace(full_reference="040006434488", masked_reference="Póliza", branch_code="28")
+            preview.return_value = (detail, (), {})
+            generate.return_value = (
+                b"PK standard workbook", "invitacion_Hogar_colectivo.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (),
+            )
+            upload = Mock(return_value={"attachment_id": "att-general-1"})
+            zoho = SimpleNamespace(attachments=SimpleNamespace(upload=upload))
+            with override_settings(COLECTIVOS_PRIVATE_ROOT=folder):
+                result = prepare_invitation_attachment(
+                    token=TOKEN, insurer_code="GENERAL", zoho=zoho,
+                )
+            self.assertEqual(result["attachment_id"], "att-general-1")
+            kwargs = upload.call_args.kwargs
+            self.assertEqual(kwargs["module"], "Polizas")
+            self.assertTrue(kwargs["filename"].startswith("INVITACION_040006434488_GENERAL_28"))
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
         COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED=False,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
     )
@@ -124,7 +152,7 @@ class InvitationAttachmentPersistenceTests(TestCase):
             upload.assert_not_called()
 
     @override_settings(
-        COLECTIVOS_PRIVATE_ROOT=".", ZOHO_ACTIVE_PROFILE="sandbox",
+        COLECTIVOS_PRIVATE_ROOT=".", ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
     )

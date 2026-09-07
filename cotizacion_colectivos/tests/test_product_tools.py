@@ -25,6 +25,14 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertEqual(reverse("cotizacion_colectivos:individual_index"), "/cotizacion-colectivos/cotizacion-individual/")
         self.assertEqual(reverse("cotizacion_colectivos:invitations_index"), "/cotizacion-colectivos/invitaciones-aseguradoras/")
 
+    def test_inbox_keeps_tool_identity_separate_from_unread_indicator(self):
+        css = Path("static/css/colectivos.css").read_text(encoding="utf-8")
+        self.assertIn(".operational-request-card--novelty", css)
+        self.assertIn(".operational-request-card--individual", css)
+        self.assertIn(".request-status--novelty", css)
+        self.assertIn(".request-status--individual", css)
+        self.assertIn(".new-response-label", css)
+
     def test_novelties_template_exposes_collective_renewal_workspace_without_changing_manual_flow(self):
         templates = (
             Path("templates/cotizacion_colectivos/index.html"),
@@ -39,7 +47,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Renovaciones Colectivo", content)
         self.assertIn("Próximos envíos", content)
         self.assertNotIn("Próximas a vencer", content)
-        self.assertIn("Seguimiento de links", content)
+        self.assertIn("Seguimiento de envíos", content)
         self.assertIn("renewal-panel-nav", content)
         self.assertIn("novelties-header-layout", content)
         self.assertIn("novelties-search-utility", content)
@@ -77,7 +85,7 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Buscar cliente", html)
         self.assertIn("Próximos envíos", html)
         self.assertIn("Próximos a enviar", html)
-        self.assertIn("Seguimiento de links", html)
+        self.assertIn("Seguimiento de envíos", html)
         self.assertIn("renewal-panel-nav", html)
         self.assertIn("Periodo: Septiembre 2026", html)
 
@@ -147,6 +155,30 @@ class ProductToolsContractTests(SimpleTestCase):
         self.assertIn("Buscar responsable", content)
         self.assertIn("data-task-responsible-select", content)
         self.assertIn("item.request_type != 'COTIZACION'", content)
+
+    def test_novelty_review_and_processing_errors_are_presented_separately(self):
+        content = Path("templates/cotizacion_colectivos/request_detail.html").read_text(encoding="utf-8")
+        self.assertIn("Revisar ingreso", content)
+        self.assertIn("Registrar ingreso en póliza", content)
+        self.assertIn("has_persisted_contact", content)
+        self.assertIn("is_published", content)
+        self.assertNotIn("Continuar ingreso en Zoho", content)
+        self.assertIn("No encontrada en Zoho.", content)
+        self.assertIn("Crear persona en Zoho", content)
+        self.assertIn("novelty_ingress_create_person", content)
+        self.assertIn("can_create_contact", content)
+        self.assertIn("ingress.display_error", content)
+        self.assertIn("ingress.is_mobility", content)
+        self.assertIn("ingress.person_status_display", content)
+        self.assertIn("ingress.policy_status_display", content)
+        self.assertIn("Descargar Excel recibido", content)
+        self.assertNotIn("Descargar archivo recibido", content)
+        self.assertNotIn("Error de procesamiento:", content)
+        self.assertNotIn("Escritura en Production deshabilitada", content)
+        views = Path("cotizacion_colectivos/views.py").read_text(encoding="utf-8")
+        self.assertIn("Pendiente · Reintento disponible", views)
+        self.assertIn("No fue posible preparar los datos para enviarlos a Zoho.", views)
+        self.assertIn("_human_ingress_status", views)
 
     def test_published_task_uses_fresh_read_with_local_fallback(self):
         content = Path("cotizacion_colectivos/services/task_publisher.py").read_text(encoding="utf-8")

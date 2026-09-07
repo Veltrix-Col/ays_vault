@@ -24,12 +24,14 @@ from cotizacion_colectivos.models import (
     SolicitudColectivo,
     SolicitudColectivoPoliza,
     SolicitudColectivoRegistro,
+    RespuestaSolicitudColectivo,
 )
 from cotizacion_colectivos.services.common import ColectivosServiceError, sign_record_id, unsign_record_context
 from cotizacion_colectivos.services.external import generate_access, resolve_token
 from cotizacion_colectivos.services.external import ExternalAccessError
 from cotizacion_colectivos.services.requests import (
     create_request_from_policy,
+    request_snapshot,
     request_reference_hashes,
 )
 
@@ -126,6 +128,8 @@ MEMBER = GroupMember(
     insured_key="insured-hmac-key",
 )
 
+MEMBER_TWO = replace(MEMBER, display_name="Prueba 6 66", insured_document="100000891", insured_masked_document="••••891", insured_key="insured-hmac-key-2")
+
 
 class FakePolicyService:
     profile = "sandbox"
@@ -134,13 +138,15 @@ class FakePolicyService:
 
     def __init__(self, detail=None):
         self.policy = detail or _policy()
+        self.refresh_calls = []
 
     def detail(self, token):
         if token != TOKEN:
             raise ColectivosServiceError("not_found", "No encontrada")
         return self.policy
 
-    def group(self, token, *, source_kind=None):
+    def group(self, token, *, source_kind=None, refresh=False):
+        self.refresh_calls.append(bool(refresh))
         return self.detail(token), (MEMBER,)
 
     def _relations(self, policy_id):
@@ -249,7 +255,7 @@ class PolicyNavigationTests(TestCase):
     def test_home_only_displays_active_zoho_profile_without_runtime_switch(self):
         response = self.client.get(reverse("cotizacion_colectivos:invitations_index"))
         self.assertContains(response, "Perfil Zoho activo: SANDBOX")
-        self.assertContains(response, "ZOHO_ACTIVE_PROFILE")
+        self.assertNotContains(response, "ZOHO_ACTIVE_PROFILE")
         self.assertNotContains(response, 'name="zoho_profile"', html=False)
 
     def test_branch_page_consolidates_only_active_policies_from_same_branch(self):
@@ -444,6 +450,9 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(invitations_page, "Descargar plantillas de invitación")
         self.assertContains(individual_page, "Cotización individual")
         self.assertContains(individual_page, "Generar enlace")
+        for policy_page in (requests_page, invitations_page, individual_page):
+            self.assertNotContains(policy_page, "Respuestas recibidas")
+            self.assertNotContains(policy_page, "Ver respuesta")
         self.assertContains(requests_page, "Salud colectivo")
         self.assertContains(invitations_page, "Salud colectivo")
         self.assertContains(individual_page, "Salud colectivo")
@@ -519,7 +528,7 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "El enlace puede generarse")
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
-    def test_legacy_single_policy_endpoint_remains_compatible_and_reuses_request(self, _service):
+    def test_legacy_single_policy_endpoint_reuses_request_until_force_new(self, _service):
         url = reverse(
             "cotizacion_colectivos:policy_generate_access",
             args=[TOKEN, SolicitudColectivo.RequestType.UPDATE],
@@ -554,13 +563,41 @@ class PolicyNavigationTests(TestCase):
         regenerated = self.client.post(url, {"force_new": "1", "recipient": "cliente@example.test"})
         self.assertEqual(regenerated.status_code, 200)
         self.assertContains(regenerated, "Copiar enlace")
-        self.assertEqual(item.external_accesses.count(), 2)
-        self.assertEqual(
-            item.external_accesses.filter(
-                status=AccesoExternoSolicitudColectivo.Status.REVOKED
-            ).count(),
-            1,
-        )
+        self.assertEqual(SolicitudColectivo.objects.count(), 2)
+        replacement = SolicitudColectivo.objects.exclude(pk=item.pk).get()
+        self.assertNotEqual(item.public_id, replacement.public_id)
+        self.assertFalse(item.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).exists())
+        self.assertFalse(item.attachments.filter(category="EXCEL_IMPORT").exists())
+        self.assertEqual(replacement.external_accesses.count(), 1)
+        self.assertIn(True, _service.return_value.refresh_calls)
+
+    @patch("cotizacion_colectivos.views.PolicyService")
+    def test_revoked_link_generates_new_request_with_current_remote_records(self, service_cls):
+        service = Mock(spec=FakePolicyService)
+        service.profile = "sandbox"
+        service.preparation_status = "hit"
+        service.timings = {"remote_queries": 0}
+        service.group.side_effect = lambda token, source_kind=None, refresh=False: (_policy(), (MEMBER, MEMBER_TWO))
+        service.detail.return_value = _policy()
+        service_cls.return_value = service
+        url = reverse("cotizacion_colectivos:policy_generate_access_simple", args=[TOKEN])
+        first = self.client.post(url, {"request_type": "ACTUALIZACION", "recipient": "cliente@example.test"})
+        self.assertEqual(first.status_code, 200)
+        first_request = SolicitudColectivo.objects.get()
+        self.assertEqual(first_request.record_count, 2)
+        self.client.post(reverse("cotizacion_colectivos:policy_revoke_access", args=[TOKEN]))
+        page = self.client.get(reverse("cotizacion_colectivos:policy_detail", args=[TOKEN]))
+        self.assertContains(page, 'name="force_new" value="1"', html=False)
+        second = self.client.post(url, {"request_type": "ACTUALIZACION", "recipient": "cliente@example.test", "force_new": "1"})
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(SolicitudColectivo.objects.count(), 2)
+        replacement = SolicitudColectivo.objects.exclude(pk=first_request.pk).get()
+        self.assertEqual(replacement.record_count, 2)
+        self.assertEqual(replacement.policies.get().records.count(), 2)
+        self.assertNotEqual(replacement.public_id, first_request.public_id)
+        replacement_snapshot = request_snapshot(replacement)
+        self.assertEqual(len(replacement_snapshot["group"]), 2)
+        self.assertIn("Prueba 6 66", {row["display_name"] for row in replacement_snapshot["group"]})
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_simple_flow_uses_defaults_without_preliminary_form(self, _service):
@@ -583,10 +620,12 @@ class PolicyNavigationTests(TestCase):
     def test_policy_workspace_contains_operational_sections(self):
         response = self.policy_page()
         for text in (
-            "Detalle de póliza", "Resumen", "Grupo asegurado", "Cliente",
-            "Respuestas recibidas", "Herramientas", "Actualizar información desde Zoho",
+            "Detalle de póliza", "Resumen", "Grupo asegurado",
+            "Herramientas", "Actualizar información desde Zoho",
         ):
             self.assertContains(response, text)
+        self.assertNotContains(response, "Respuestas recibidas")
+        self.assertNotContains(response, "Ver respuesta")
         for legacy_text in (
             "Actividad reciente", "Novedades y solicitudes", "Revisión interna",
             "Crear solicitud multipóliza", "Preparar envío", "Próximamente",

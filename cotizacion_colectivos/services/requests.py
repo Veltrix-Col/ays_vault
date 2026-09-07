@@ -237,7 +237,7 @@ def _replace_records(request: SolicitudColectivo, members, *, policy=None, start
 
 
 @transaction.atomic
-def create_request_from_policy(*, token: str, source_kind: str, actor, assigned_to, request_type: str, deadline, internal_notes: str = "", is_test: bool = False, service: PolicyService | None = None) -> SolicitudColectivo:
+def create_request_from_policy(*, token: str, source_kind: str, actor, assigned_to, request_type: str, deadline, internal_notes: str = "", is_test: bool = False, service: PolicyService | None = None, allow_duplicate: bool = False) -> SolicitudColectivo:
     if source_kind not in {"company", "person"}:
         raise ColectivosServiceError("invalid_record", "El origen de la solicitud no es válido.")
     service = service or PolicyService()
@@ -261,7 +261,7 @@ def create_request_from_policy(*, token: str, source_kind: str, actor, assigned_
         deadline__gt=timezone.localdate(),
         assigned_to__isnull=False,
     ).exclude(encrypted_snapshot="").distinct().prefetch_related("policies")
-    if any(
+    if not allow_duplicate and any(
         (
             {policy.policy_reference_hash for policy in candidate.policies.all()}
             or {candidate.policy_reference_hash}
@@ -494,6 +494,7 @@ def create_or_reuse_request_from_policy(
     request_type: str,
     deadline,
     service: PolicyService | None = None,
+    force_new: bool = False,
 ) -> tuple[SolicitudColectivo, bool]:
     """Return the active request for a policy/type or create its safe snapshot.
 
@@ -545,7 +546,7 @@ def create_or_reuse_request_from_policy(
                 return candidate
         return None
 
-    existing = find_existing()
+    existing = None if force_new else find_existing()
     if existing:
         service.preparation_status = "active_request_reused"
         return existing, False
@@ -553,13 +554,16 @@ def create_or_reuse_request_from_policy(
     # Prepare remote data before opening the database critical section. The
     # second call made by create_request_from_policy is a local encrypted-cache
     # hit in normal operation.
-    service.group(token, source_kind=source_kind)
+    # A forced link is explicitly a new view of the policy.  Bypass the
+    # persisted preparation/cache so records published since the previous
+    # link are reflected in the new request snapshot.
+    service.group(token, source_kind=source_kind, refresh=force_new)
     with transaction.atomic():
         # The technical actor is a stable, per-environment serialization point
         # for initial request creation. It closes the double-click race without
         # keeping a remote Zoho call inside the lock.
         actor.__class__.objects.select_for_update().get(pk=actor.pk)
-        existing = find_existing()
+        existing = None if force_new else find_existing()
         if existing:
             service.preparation_status = "active_request_reused"
             return existing, False
@@ -571,6 +575,7 @@ def create_or_reuse_request_from_policy(
             request_type=request_type,
             deadline=deadline,
             service=service,
+            allow_duplicate=force_new,
         )
         return created, True
 

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.test import Client, TestCase
 from django.urls import reverse
 from openpyxl import load_workbook
@@ -183,11 +184,49 @@ class InvitationTemplateGenerationTests(TestCase):
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
 
     @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_branch_without_official_template_gets_a_structured_general_workbook(self, workspace):
+        detail = replace(policy(), branch_code="28", branch_name="Hogar colectivo")
+        person = replace(member(), risk_key="", risk_attributes=(), risk_summary="")
+        workspace.return_value = detail, (person,), {"status": "hit"}, {"source_kind": "company"}, "sandbox", "sdk"
+
+        _detail, previews, _metadata = preview_invitation_templates(TOKEN)
+        self.assertEqual(len(previews), 1)
+        self.assertEqual(previews[0].template.insurer_code, "GENERAL")
+        self.assertEqual(previews[0].status, "ready")
+
+        content, filename, content_type, errors = generate_invitation_templates(TOKEN)
+        self.assertEqual(errors, ())
+        self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertEqual(filename, "invitacion_Hogar_colectivo.xlsx")
+        self.assertEqual(load_workbook(io.BytesIO(content)).sheetnames, ["Información", "Personas y riesgos"])
+        book = load_workbook(io.BytesIO(content), data_only=True)
+        self.assertEqual(book["Información"]["B5"].value, "2026-08-01")
+        self.assertEqual(book["Información"]["B6"].value, "2027-08-01")
+        self.assertEqual(book["Personas y riesgos"]["B2"].value, "100000001")
+        self.assertEqual(book["Personas y riesgos"]["C2"].value, "Persona 1")
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
+    def test_general_mobility_workbook_keeps_people_without_vehicle_data(self, workspace):
+        without_vehicle = replace(member(2), risk_key="", risk_attributes=(), risk_summary="")
+        workspace.return_value = local_workspace(members=(member(1), without_vehicle))
+        content, _filename, _content_type, errors = generate_invitation_templates(
+            TOKEN, template_code="general_40",
+        )
+        self.assertEqual(errors, ())
+        book = load_workbook(io.BytesIO(content), data_only=True)
+        rows = list(book["Personas y riesgos"].iter_rows(min_row=2, values_only=True))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row[2] for row in rows}, {"Persona 1", "Persona 2"})
+        person_without_vehicle = next(row for row in rows if row[2] == "Persona 2")
+        self.assertEqual(person_without_vehicle[1], "100000002")
+        self.assertEqual(person_without_vehicle[4:9], (None, None, None, None, None))
+
+    @patch("cotizacion_colectivos.services.invitation_templates._local_workspace")
     def test_preview_uses_only_workspace_and_reports_all_branch_templates(self, workspace):
         workspace.return_value = local_workspace()
         detail, previews, metadata = preview_invitation_templates(TOKEN)
         self.assertEqual(detail.branch_code, "40")
-        self.assertEqual({item.template.insurer_code for item in previews}, {"SURA", "ALLIANZ"})
+        self.assertEqual({item.template.insurer_code for item in previews}, {"SURA", "ALLIANZ", "GENERAL"})
         self.assertTrue(all(item.rows == 1 for item in previews))
         self.assertEqual(metadata["status"], "hit")
         workspace.assert_called_once_with(TOKEN)
@@ -411,8 +450,9 @@ class InvitationTemplateGenerationTests(TestCase):
     def test_inactive_xls_is_reported_but_not_generated(self, workspace):
         workspace.return_value = local_workspace(branch="83")
         _detail, previews, _metadata = preview_invitation_templates(TOKEN)
-        self.assertEqual(len(previews), 2)
+        self.assertEqual(len(previews), 3)
         self.assertEqual({item.template.insurer_code: item.status for item in previews}["SURA"], "unavailable")
+        self.assertEqual({item.template.insurer_code: item.status for item in previews}["GENERAL"], "ready")
         content, filename, content_type, errors = generate_invitation_templates(TOKEN)
         self.assertEqual(filename, "allianz_83.xlsx")
         self.assertEqual(content_type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -434,6 +474,22 @@ class InvitationTemplateViewTests(TestCase):
         self.client.force_login(self.admin)
 
     @patch("cotizacion_colectivos.views.preview_invitation_templates")
+    def test_invitation_preview_uses_general_view_requests_access(self, preview):
+        viewer = get_user_model().objects.create_user(
+            username="invitation-viewer", password="safe-test-password",
+        )
+        viewer.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="cotizacion_colectivos",
+                codename="view_requests",
+            )
+        )
+        self.client.force_login(viewer)
+        preview.return_value = policy(), (), {"status": "hit", "complete": True, "operational_groups": ()}
+        response = self.client.get(reverse("cotizacion_colectivos:policy_invitation_preview", args=[TOKEN]))
+        self.assertEqual(response.status_code, 200)
+
+    @patch("cotizacion_colectivos.views.preview_invitation_templates")
     def test_preview_is_get_anti_idor_and_contains_no_raw_identifier(self, preview):
         preview.return_value = policy(), (), {
             "status": "hit", "complete": True, "operational_groups": (),
@@ -451,7 +507,7 @@ class InvitationTemplateViewTests(TestCase):
             self.assertEqual(self.client.get(reverse("cotizacion_colectivos:policy_invitation_preview", args=[altered])).status_code, 404)
 
     @patch("cotizacion_colectivos.views.preview_invitation_templates")
-    def test_each_insurer_has_a_short_independent_mailto(self, preview):
+    def test_each_insurer_exposes_download_and_attachment_without_mailto(self, preview):
         from cotizacion_colectivos.services.invitation_templates import TemplatePreview
         templates = templates_for_branch("40", active_only=True)
         preview.return_value = policy(), tuple(
@@ -466,14 +522,12 @@ class InvitationTemplateViewTests(TestCase):
         response = self.client.get(reverse(
             "cotizacion_colectivos:policy_invitation_preview", args=[TOKEN],
         ))
-        self.assertContains(response, "Preparar correo SURA")
-        self.assertContains(response, "Preparar correo Allianz")
+        self.assertNotContains(response, "Preparar correo")
+        self.assertContains(response, "Descargar formato SURA")
+        self.assertContains(response, "Adjuntar a póliza")
         self.assertEqual(response.content.count(b"invitation-preview-table"), 1)
         self.assertContains(response, "ABC001")
         self.assertContains(response, "100000001")
-        for item in response.context["actions"]:
-            self.assertLess(len(item["mailto_url"]), 700)
-            self.assertIn(item["insurer_name"], item["mailto_url"])
 
     @patch("cotizacion_colectivos.views.preview_invitation_templates")
     def test_branch_view_groups_records_by_policy_and_actions_by_catalog_insurer(self, preview):

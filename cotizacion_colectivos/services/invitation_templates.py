@@ -14,6 +14,8 @@ from xml.etree import ElementTree as ET
 
 from django.conf import settings
 from django.core import signing
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 
 from ..invitation_templates.catalog import InvitationTemplate, templates_for_branch
 from ..zoho import get_colectivos_profile
@@ -61,6 +63,59 @@ class GeneratedTemplate:
     content: bytes
 
 
+def _general_branch_template(detail) -> InvitationTemplate:
+    """A structured fallback when no insurer-specific master exists.
+
+    It is intentionally a format owned by Colectivos: it never claims to be
+    an insurer's official form and only exposes values already present in the
+    protected policy workspace.
+    """
+    return InvitationTemplate(
+        code=f"general_{detail.branch_code}", insurer_code="GENERAL",
+        insurer_name="Formato general", branch_code=str(detail.branch_code),
+        branch_name=str(detail.branch_name), purpose="Formato general del ramo",
+        filename="", extension="xlsx", version="colectivos-general-v1",
+        active=True, generator="general_workbook", data_sheet="Información",
+        start_row=2, end_row=5000, fields=(), expandable_rows=True,
+    )
+
+
+def _general_branch_workbook(detail, fixed, rows) -> bytes:
+    """Build the stable, professional fallback from confirmed workspace data."""
+    book = Workbook()
+    summary = book.active
+    summary.title = "Información"
+    summary.append(("Formato general de invitación", ""))
+    summary.append(("Póliza", str(getattr(detail, "full_reference", "") or getattr(detail, "masked_reference", ""))))
+    summary.append(("Ramo", str(getattr(detail, "branch_name", ""))))
+    summary.append(("Cliente", fixed.get("policy.holder", "")))
+    summary.append(("Vigencia inicial", fixed.get("policy.start_date", "")))
+    summary.append(("Vigencia final", fixed.get("policy.end_date", "")))
+    summary.append(("Aseguradora actual", fixed.get("policy.current_insurer", "")))
+    for cell in summary[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="155A96")
+    data = book.create_sheet("Personas y riesgos")
+    headers = ("Póliza", "Identificación", "Nombre", "Relación", "Placa", "Marca", "Modelo", "Ciudad", "Uso")
+    data.append(headers)
+    for cell in data[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="155A96")
+    for row in rows:
+        data.append((
+            row.get("policy.full_reference", ""), row.get("insured.document", ""),
+            row.get("insured.name", ""), row.get("insured.relationship", ""),
+            row.get("vehicle.plate", ""), row.get("vehicle.brand", ""),
+            row.get("vehicle.model", ""), row.get("vehicle.city", ""), row.get("vehicle.use", ""),
+        ))
+    data.freeze_panes = "A2"
+    for column, width in zip("ABCDEFGHI", (20, 20, 32, 20, 16, 24, 16, 22, 18)):
+        data.column_dimensions[column].width = width
+    stream = io.BytesIO()
+    book.save(stream)
+    return stream.getvalue()
+
+
 def _local_workspace(token: str):
     context = unsign_record_context(token, "policy")
     profile = get_colectivos_profile()
@@ -92,8 +147,9 @@ def _vehicle_rows(members, detail=None) -> tuple[dict[str, str], ...]:
         ))
         if not identity or identity in seen:
             continue
-        if not any(attributes.get(key) for key in ("placa", "modelo", "marca", "vehiculo")):
-            continue
+        # A general invitation must retain every person, even when Mobility
+        # has no complete vehicle record yet. Vehicle columns remain empty
+        # for that row; filtering here used to make the person disappear.
         seen.add(identity)
         rows.append({
             "policy.full_reference": getattr(detail, "full_reference", ""),
@@ -256,7 +312,19 @@ def preview_invitation_templates(token: str, *, consolidated=False):
         token, consolidated=consolidated,
     )
     previews = []
-    for template in templates_for_branch(detail.branch_code):
+    branch_templates = templates_for_branch(detail.branch_code)
+    # The general workbook is a selectable fallback for every ramo.  It never
+    # replaces an official master in the default generation path, but prevents
+    # an analyst from reaching a dead end when their insurer lacks one.
+    branch_templates = (*branch_templates, _general_branch_template(detail))
+    for template in branch_templates:
+        if template.generator == "general_workbook":
+            previews.append(TemplatePreview(
+                template, "ready", 0, 0, len(rows), len(rows), (),
+                "Formato general del ramo listo para descargar.", 1,
+                ("Póliza", "Identificación", "Nombre", "Relación", "Placa", "Marca", "Modelo", "Ciudad", "Uso"), (),
+            ))
+            continue
         declared_capacity = template.end_row - template.start_row + 1
         capacity = (
             max(declared_capacity, len(rows))
@@ -504,9 +572,13 @@ def generate_invitation_templates(
         token, consolidated=consolidated, require_complete=not consolidated,
     )
     generated, errors = [], []
-    templates = templates_for_branch(detail.branch_code, active_only=True)
+    official_templates = templates_for_branch(detail.branch_code, active_only=True)
+    general_template = _general_branch_template(detail)
+    templates = official_templates
     if template_code:
         templates = tuple(item for item in templates if item.code == template_code)
+        if not templates and template_code == general_template.code:
+            templates = (general_template,)
         if not templates:
             raise ColectivosServiceError("template_unavailable", "La plantilla solicitada no está disponible para este ramo.")
     if insurer_code:
@@ -514,11 +586,17 @@ def generate_invitation_templates(
             item for item in templates if item.insurer_code == insurer_code
         )
         if not templates:
-            raise ColectivosServiceError(
-                "template_unavailable",
-                "La aseguradora solicitada no está disponible para este ramo.",
-            )
+            templates = (general_template,)
+    if not templates:
+        templates = (general_template,)
     for template in templates:
+        if template.generator == "general_workbook":
+            generated.append(GeneratedTemplate(
+                template,
+                f"invitacion_{SAFE_NAME.sub('_', str(detail.branch_name)).strip('_') or detail.branch_code}.xlsx",
+                _general_branch_workbook(detail, fixed, rows),
+            ))
+            continue
         template_rows = rows if any("{row}" in field.position for field in template.fields) else ()
         capacity = template.end_row - template.start_row + 1
         if (

@@ -9,13 +9,12 @@ def colectivos_navigation(request):
     navigation = {
         "novedades": has_internal_permission(request, "view_requests"),
         "individual": (
-            has_internal_permission(request, "view_individual_quotation")
+            has_internal_permission(request, "view_requests")
             or has_internal_permission(request, "create_individual_quotation")
         ),
         "invitations": has_internal_permission(request, "view_requests"),
         "inbox": (
             has_internal_permission(request, "view_requests")
-            or has_internal_permission(request, "view_individual_quotation")
         ),
     }
     if public_internal_access_enabled():
