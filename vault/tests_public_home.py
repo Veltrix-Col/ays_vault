@@ -63,7 +63,7 @@ class PublicHomeTests(TestCase):
         self.assertContains(response, 'data-tool-card', count=6)
         self.assertContains(response, "CardManager")
         self.assertContains(response, ">SOAT<")
-        self.assertContains(response, ">Novedades<")
+        self.assertContains(response, ">Reporte de clientes con novedades<")
         self.assertContains(response, ">Cotización Individual<")
         self.assertContains(response, ">Invitaciones a Aseguradoras<")
         self.assertContains(response, "Conciliador de Facturación")
@@ -92,7 +92,7 @@ class PublicHomeTests(TestCase):
                 ),
                 "Operaciones": ("SOAT",),
                 "Colectivos": (
-                    "Novedades",
+                    "Reporte de clientes con novedades",
                     "Cotización Individual",
                     "Invitaciones a Aseguradoras",
                     "Conciliador de Facturación",
@@ -118,7 +118,7 @@ class PublicHomeTests(TestCase):
             "cartera": ("CardManager",),
             "operaciones": ("SOAT",),
             "colectivos": (
-                "Novedades",
+                "Reporte de clientes con novedades",
                 "Cotización Individual",
                 "Invitaciones a Aseguradoras",
                 "Conciliador de Facturación",
@@ -156,7 +156,7 @@ class PublicHomeTests(TestCase):
 
     def test_collective_cards_enter_existing_contextual_modes(self):
         urls = {app["name"]: app["url"] for app in application_catalog()}
-        self.assertEqual(urls["Novedades"], reverse("cotizacion_colectivos:novelties_index"))
+        self.assertEqual(urls["Reporte de clientes con novedades"], reverse("cotizacion_colectivos:novelties_index"))
         self.assertEqual(urls["Cotización Individual"], reverse("cotizacion_colectivos:individual_index"))
         self.assertEqual(urls["Invitaciones a Aseguradoras"], reverse("cotizacion_colectivos:invitations_index"))
         for route_name in (

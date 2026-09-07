@@ -6,7 +6,7 @@
 {% with current=request.resolver_match.url_name namespace=request.resolver_match.namespace %}
 <nav class="colectivos-tool-nav" aria-label="Herramientas de Colectivos">
   <div class="colectivos-tool-nav__links">
-    {% if colectivos_navigation.novedades %}<a href="{% url 'cotizacion_colectivos:novelties_index' %}"{% if colectivos_mode.code == 'novelties' or current == 'novelties_index' %} class="is-active" aria-current="page"{% endif %}>Novedades</a>{% endif %}
+    {% if colectivos_navigation.novedades %}<a href="{% url 'cotizacion_colectivos:novelties_index' %}"{% if colectivos_mode.code == 'novelties' or current == 'novelties_index' %} class="is-active" aria-current="page"{% endif %}>Reporte de clientes con novedades</a>{% endif %}
     {% if colectivos_navigation.individual %}<a href="{% url 'cotizacion_colectivos:individual_index' %}"{% if colectivos_mode.code == 'individual' or current == 'individual_index' or current == 'individual_expedient' or current == 'individual_quotation_detail' %} class="is-active" aria-current="page"{% endif %}>Cotización Individual</a>{% endif %}
     {% if colectivos_navigation.invitations %}<a href="{% url 'cotizacion_colectivos:invitations_index' %}"{% if colectivos_mode.code == 'invitations' or current == 'invitations_index' %} class="is-active" aria-current="page"{% endif %}>Invitaciones</a>{% endif %}
     <a href="{% url 'conciliacion:index' %}"{% if namespace == 'conciliacion' %} class="is-active" aria-current="page"{% endif %}>Conciliador</a>

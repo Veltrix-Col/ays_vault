@@ -365,7 +365,7 @@ class PolicyNavigationTests(TestCase):
         service.group = Mock(wraps=service.group)
         with patch("cotizacion_colectivos.views.EntityDetailService") as entity_service:
             response = self.policy_page(service)
-        self.assertContains(response, "Novedades")
+        self.assertContains(response, "Reporte de clientes con novedades")
         self.assertContains(response, "Fonconstruimos")
         self.assertContains(response, "← Volver a la ficha del cliente")
         href = anchor_href(response, "← Volver a la ficha del cliente")
@@ -381,7 +381,7 @@ class PolicyNavigationTests(TestCase):
     def test_person_breadcrumb_and_back_action_resolve_to_signed_source(self):
         detail = _policy(source_name="Persona de prueba", source_kind="person")
         response = self.policy_page(AnyPolicyTokenService(detail), token=PERSON_TOKEN)
-        self.assertContains(response, "Novedades")
+        self.assertContains(response, "Reporte de clientes con novedades")
         self.assertContains(response, "Persona de prueba")
         href = anchor_href(response, "← Volver a la ficha del cliente")
         match = resolve(urlsplit(href).path)
@@ -444,7 +444,7 @@ class PolicyNavigationTests(TestCase):
             individual_page = self.client.get(reverse(
                 "cotizacion_colectivos:individual_policy_detail", args=[TOKEN]
             ))
-        self.assertContains(requests_page, "Novedades")
+        self.assertContains(requests_page, "Reporte de clientes con novedades")
         self.assertContains(requests_page, "Generar enlace")
         self.assertContains(invitations_page, "Invitaciones a Aseguradoras")
         self.assertContains(invitations_page, "Descargar plantillas de invitación")
@@ -488,7 +488,7 @@ class PolicyNavigationTests(TestCase):
             "cotizacion_colectivos:request_list",
         ):
             self.assertIn(f'href="{reverse(route_name)}"', header)
-        self.assertIn("Novedades", header)
+        self.assertIn("Reporte de clientes con novedades", header)
         self.assertIn("Cotización Individual", header)
         self.assertIn("Invitaciones", header)
         self.assertIn("Conciliador", header)
