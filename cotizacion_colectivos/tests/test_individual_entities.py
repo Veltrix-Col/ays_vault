@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ from django.test import SimpleTestCase, override_settings
 from django.urls import resolve
 
 from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
+from cotizacion_colectivos.services.operational_entities import resolve_operational_entities
 from cotizacion_colectivos.services.person_contract import build_contact_payload
 
 
@@ -35,6 +36,162 @@ class _Facade:
 
 
 class IndividualEntityResolutionTests(SimpleTestCase):
+    @patch("cotizacion_colectivos.services.operational_entities.get_contacts_publisher")
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    def test_novelty_contact_create_uses_shared_individual_contract(self, resolve, factory):
+        publisher = Mock()
+        publisher.create.return_value = {"record_id": "CONTACT-NEW"}
+        factory.return_value = publisher
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="")
+        result = resolve_operational_entities(
+            payload={
+                "id_type": "CC", "document": "1019059650", "first_name": "Camilo",
+                "last_name": "Vargas", "birth_date": "1991-04-19",
+            },
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM",
+            required=("contact",),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        factory.assert_called_once_with(profile="sandbox", confirmation="CONTACT_CONFIRM")
+        publisher.create.assert_called_once_with(
+            {
+                "First_Name": "Camilo", "Last_Name": "Vargas", "Tipo_ID": "CC",
+                "N_mero_de_ID": "1019059650", "Date_of_Birth": "1991-04-19",
+                "Email": "", "Phone": "", "Mobile": "",
+            },
+            zoho=None,
+            status="Cliente",
+        )
+
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "CONTACT-OPTIONAL"})
+    def test_novelty_contact_contract_does_not_require_optional_email_or_phone(self, resolve):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="")
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "1019059650", "first_name": "Camilo", "last_name": "Vargas"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", required=("contact",),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["entities"]["contact"], "CONTACT-OPTIONAL")
+
+    @patch("cotizacion_colectivos.services.operational_entities.get_contacts_publisher")
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    def test_novelty_contact_payload_preserves_email_phone_aliases(self, resolve, factory):
+        publisher = Mock()
+        publisher.create.return_value = {"record_id": "CONTACT-ALIAS"}
+        factory.return_value = publisher
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="")
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez", "correo": "ana@example.test", "telefono": "3000000000"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", required=("contact",),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        payload = publisher.create.call_args.args[0]
+        self.assertEqual(payload["Email"], "ana@example.test")
+        self.assertEqual(payload["Phone"], "3000000000")
+
+    @patch("cotizacion_colectivos.services.operational_entities.get_contacts_publisher")
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document")
+    def test_vg_deudores_missing_parentesco_blocks_before_contact_write(self, resolve, factory):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040")
+        with self.assertRaisesMessage(Exception, "Parentesco"):
+            resolve_operational_entities(
+                payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez", "entry_date": "2026-08-31"},
+                state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", branch_name="VG deudores",
+                required=("contact", "subrisk"),
+            )
+        resolve.assert_not_called()
+        factory.assert_not_called()
+
+    @patch("cotizacion_colectivos.services.operational_entities.create_subrisk_sandbox", return_value={"record_id": "4991513000270954999"})
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    def test_novelty_vg_deudores_resolves_contact_and_subrisk_without_risk(self, resolve, create):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040")
+        result = resolve_operational_entities(
+            payload={
+                "id_type": "CC", "document": "123456", "first_name": "Ana",
+                "last_name": "Pérez", "birth_date": "1990-01-01",
+                "email": "ana@example.test", "phone": "3000000000",
+                "name": "Ana Pérez", "entry_date": "2026-08-31",
+                "parentesco": "Afiliado", "plan": "Deudores",
+            },
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM",
+            subrisk_confirmation="SUBRISK_CONFIRM", branch_name="VG deudores",
+            required=("contact", "subrisk"),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["entities"]["contact"], "4991513000270954001")
+        self.assertEqual(result["entities"]["subrisk"], "4991513000270954999")
+        self.assertEqual(result["entities"]["risk"], "")
+        create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["confirmation"], "SUBRISK_CONFIRM")
+
+    @patch("cotizacion_colectivos.services.operational_entities.create_subrisk_sandbox")
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    def test_novelty_other_vg_keeps_contact_and_blocks_subrisk_contract(self, resolve, create):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040")
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez", "birth_date": "1990-01-01", "email": "ana@example.test", "phone": "3000000000", "name": "Ana Pérez", "entry_date": "2026-08-31", "parentesco": "Afiliado"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", branch_name="VG patronal",
+            # The caller may only require Contact for a non-enabled VG, but
+            # the contractual block must still prevent PUBLISHED.
+            required=("contact",),
+        )
+        self.assertEqual(state.contact_zoho_id, "4991513000270954001")
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("contrato Zoho de VG patronal", result["blocked_reason"])
+        self.assertEqual(result["entities"]["contact"], "4991513000270954001")
+        self.assertEqual(result["entities"]["subrisk"], "")
+        create.assert_not_called()
+
+    @patch("cotizacion_colectivos.services.operational_entities.create_subrisk_sandbox", return_value={"record_id": "SUBRISK-1"})
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    def test_life_group_human_policy_label_uses_deudores_contract(self, resolve, create):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040")
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez", "entry_date": "2026-08-31", "parentesco": "Afiliado"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM",
+            branch_name="Vida grupo de deudores", required=("contact", "subrisk"),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["entities"]["contact"], "4991513000270954001")
+        self.assertEqual(result["entities"]["subrisk"], "SUBRISK-1")
+        create.assert_called_once()
+
+    @patch("cotizacion_colectivos.services.operational_entities.create_mobility_subrisk_sandbox", return_value={"record_id": "4991513000270954998"})
+    @patch("cotizacion_colectivos.services.operational_entities.create_sandbox_risk", return_value={"record_id": "4991513000270954997"})
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_risk_by_plate", return_value={"status": "NOT_FOUND"})
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    def test_novelty_mobility_resolves_contact_risk_and_subrisk(self, contact, risk_lookup, risk_create, subrisk_create):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040", branch_code="40")
+        zoho = SimpleNamespace(search=SimpleNamespace(by_criteria=Mock(return_value=SimpleNamespace(records=()))))
+        order = []
+        risk_lookup.side_effect = lambda **kwargs: (order.append("risk"), {"status": "NOT_FOUND"})[1]
+        risk_create.side_effect = lambda *args, **kwargs: (order.append("risk_create"), {"record_id": "4991513000270954997"})[1]
+        subrisk_create.side_effect = lambda *args, **kwargs: (order.append("subrisk"), {"record_id": "4991513000270954998"})[1]
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez", "plate": "ABC123", "model": "2024", "entry_date": "2026-08-31", "branch": "MOVILIDAD"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", required=("contact", "risk", "subrisk"), branch_name="Movilidad colectivo", zoho=zoho,
+            on_contact_resolved=lambda _contact_id: order.append("attachment"),
+        )
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["entities"]["risk"], "4991513000270954997")
+        self.assertEqual(result["entities"]["subrisk"], "4991513000270954998")
+        self.assertEqual(subrisk_create.call_args.kwargs["operational"], True)
+        self.assertLess(order.index("attachment"), order.index("risk"))
+        self.assertLess(order.index("risk_create"), order.index("subrisk"))
+
+    @patch("cotizacion_colectivos.services.operational_entities.create_subrisk_sandbox")
+    @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    def test_novelty_exequial_resolves_contact_without_subrisk_write(self, contact, subrisk_create):
+        state = SimpleNamespace(contact_zoho_id="", risk_zoho_id="", subrisk_zoho_id="", policy_remote_id="4991513000270954040", branch_code="86")
+        result = resolve_operational_entities(
+            payload={"id_type": "CC", "document": "123456", "first_name": "Ana", "last_name": "Pérez"},
+            state=state, profile="sandbox", confirmation="CONTACT_CONFIRM", required=("contact",), branch_name="Exequial colectivo",
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["entities"]["contact"], "4991513000270954001")
+        subrisk_create.assert_not_called()
+
     @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document")
     @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
     def test_health_resolves_affiliate_and_multiple_insured_people_without_duplication(self, decrypt, resolve):
@@ -53,6 +210,22 @@ class IndividualEntityResolutionTests(SimpleTestCase):
         self.assertEqual([item["status"] for item in result["people"]], ["found", "found", "found"])
         self.assertEqual(len({item["document"] for item in result["people"]}), 3)
 
+    @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000270954040"})
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954001"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_health_accepted_prepares_subrisk_after_contact(self, decrypt, resolve, unsign):
+        quotation = self.person_quotation("salud", [{"entity_key": "people-health", "is_requester": True, "document": "111", "first_name": "Ana"}])
+        payload = json.loads(quotation.encrypted_payload)
+        payload["context"] = {"policy_token": "signed-policy"}
+        quotation.encrypted_payload = json.dumps(payload)
+
+        result = resolve_common_people_entities(quotation=quotation, include_subrisk=True)
+
+        self.assertEqual(result["people"][0]["remote_id"], "4991513000270954001")
+        self.assertEqual(result["subrisks"][0]["status"], "not_found")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Ramo"], "Salud colectivo")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Asegurado"], {"id": "4991513000270954001"})
+
     @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
     @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
     def test_vida_people_owner_keys_resolve_independently(self, decrypt, resolve):
@@ -64,6 +237,76 @@ class IndividualEntityResolutionTests(SimpleTestCase):
         self.assertEqual([item["owner_key"] for item in result["people"]], ["affiliate", "people-juan", "people-maria"])
         self.assertEqual([item["status"] for item in result["people"]], ["not_found"] * 3)
         self.assertEqual(result["people"][2]["candidate"]["N_mero_de_ID"], "555")
+
+    @patch("cotizacion_colectivos.services.individual_entities.build_life_group_subrisk_payload")
+    @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000270954040"})
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954041"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_resolution_prepares_policy_subrisk_after_contact(self, decrypt, resolve, unsign, builder):
+        quotation = self.person_quotation("vida", [{"entity_key": "people-vida", "document": "444", "first_name": "Juan"}])
+        payload = json.loads(quotation.encrypted_payload)
+        payload["context"] = {"policy_token": "signed-policy"}
+        payload["fields"]["parentesco"] = "Afiliado"
+        quotation.encrypted_payload = json.dumps(payload)
+        facade = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(return_value={"id": "4991513000270954040", "Ramo": "VG deudores"})))
+        builder.return_value = {"Name": "Juan", "Ramo": "VG deudores"}
+        result = resolve_common_people_entities(quotation=quotation, zoho=facade, include_subrisk=True)
+        self.assertEqual(result["subrisks"][0]["status"], "not_found")
+        self.assertEqual(result["subrisks"][0]["candidate"], {"Name": "Juan", "Ramo": "VG deudores"})
+        self.assertEqual(builder.call_args.kwargs["ramo"], "VG deudores")
+
+    @patch("cotizacion_colectivos.services.individual_entities.build_life_group_subrisk_payload")
+    @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000270954040"})
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954041"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_persisted_relationship_flows_to_riesgos1(self, decrypt, resolve, unsign, builder):
+        quotation = self.person_quotation("vida", [{"entity_key": "people-vida", "document": "444", "first_name": "Juan"}])
+        payload = json.loads(quotation.encrypted_payload)
+        payload["context"] = {"policy_token": "signed-policy"}
+        payload["fields"]["relationship"] = "Hijo"
+        quotation.encrypted_payload = json.dumps(payload)
+        facade = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(return_value={"id": "4991513000270954040", "Ramo": "VG deudores"})))
+        builder.return_value = {"Name": "Juan", "Ramo": "VG deudores", "Parentesco": "Hijo"}
+
+        result = resolve_common_people_entities(quotation=quotation, zoho=facade, include_subrisk=True)
+
+        self.assertEqual(result["subrisks"][0]["status"], "not_found")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Parentesco"], "Hijo")
+        self.assertEqual(builder.call_args.kwargs["parentesco"], "Hijo")
+
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954041"})
+    @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000270954040"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_missing_parentesco_keeps_contact_and_blocks_riesgos1(self, decrypt, unsign, resolve):
+        quotation = self.person_quotation("vida", [{"entity_key": "people-vida", "document": "444", "first_name": "Juan"}])
+        payload = json.loads(quotation.encrypted_payload)
+        payload["context"] = {"policy_token": "signed-policy"}
+        quotation.encrypted_payload = json.dumps(payload)
+        facade = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(return_value={"id": "4991513000270954040", "Ramo": "VG deudores"})))
+        result = resolve_common_people_entities(quotation=quotation, zoho=facade, include_subrisk=True)
+        self.assertEqual(result["people"][0]["remote_id"], "4991513000270954041")
+        self.assertEqual(result["subrisks"][0]["status"], "blocked")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Parentesco"], "")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Ramo"], "VG deudores")
+
+    @patch("cotizacion_colectivos.services.individual_entities.build_life_group_subrisk_payload")
+    @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "4991513000270954041"})
+    @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000270954040"})
+    @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
+    def test_vida_parentesco_correction_prepares_explicit_subrisk_action(self, decrypt, unsign, resolve, builder):
+        quotation = self.person_quotation("vida", [{"entity_key": "people-vida", "document": "444", "first_name": "Juan"}])
+        payload = json.loads(quotation.encrypted_payload)
+        payload["context"] = {"policy_token": "signed-policy"}
+        quotation.encrypted_payload = json.dumps(payload)
+        quotation.safe_metadata = {"zoho_entity_corrections": {"subrisk:0": {"Parentesco": "Titular"}}}
+        facade = SimpleNamespace(records=SimpleNamespace(get_by_id=Mock(return_value={"id": "4991513000270954040", "Ramo": "VG deudores"})))
+        builder.return_value = {"Name": "Juan", "Ramo": "VG deudores", "Parentesco": "Titular"}
+
+        result = resolve_common_people_entities(quotation=quotation, zoho=facade, include_subrisk=True)
+
+        self.assertEqual(result["subrisks"][0]["status"], "not_found")
+        self.assertEqual(result["subrisks"][0]["candidate"]["Parentesco"], "Titular")
+        builder.assert_called_once()
 
     @patch("cotizacion_colectivos.services.individual_entities.resolve_contact_by_document", return_value={"status": "FOUND", "record_id": "CONTACT-1"})
     @patch("cotizacion_colectivos.services.individual_entities.decrypt", side_effect=lambda value: value)
@@ -291,7 +534,7 @@ class IndividualEntityResolutionTests(SimpleTestCase):
         self.assertEqual(affiliate["candidate"]["Date_of_Birth"], "2000-01-01")
         self.assertNotIn("Date_of_Birth", affiliate["missing_fields"])
         payload = build_contact_payload(affiliate["candidate"], status="Cliente")
-        self.assertEqual(payload["Date_of_Birth"], "2000-01-01")
+        self.assertEqual(payload["Date_of_Birth"], date(2000, 1, 1))
 
     @patch("cotizacion_colectivos.services.individual_entities.unsign_record_context", return_value={"id": "4991513000000000001", "type": "policy"})
     @patch("cotizacion_colectivos.services.individual_entities.decrypt")
@@ -364,7 +607,10 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
         self.assertNotIn('id="subrisk-edit-', self.template)
         self.assertIn("Asegurado:", self.template)
         self.assertIn("mismo afiliado", self.template)
-        self.assertIn("Datos para Zoho", self.template)
+        self.assertIn("Información operativa", self.template)
+        self.assertNotIn("Información técnica", self.template)
+        for technical in ("policy_remote_id", "SDK", "serializer", "RECONCILE_REQUIRED"):
+            self.assertNotIn(technical, self.template)
         self.assertIn("Fecha de nacimiento", self.template)
 
     def test_vehicle_and_association_forms_are_not_details_editors(self):
@@ -528,7 +774,7 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
                 "subrisks": [], "policy": {},
             },
         })
-        self.assertIn("Pendiente de Zoho", html)
+        self.assertIn("Pendiente de publicar", html)
         self.assertIn("Adjuntar documento en Zoho", html)
         class DocumentParser(HTMLParser):
             def __init__(self):
@@ -579,7 +825,8 @@ class IndividualMobilityWorkspaceTemplateTests(SimpleTestCase):
 
     def test_policy_data_uses_human_language_without_changing_subrisk_contract(self):
         javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-detail.js").read_text(encoding="utf-8")
-        self.assertIn("Datos para Zoho", self.template)
+        self.assertIn("Información operativa", self.template)
+        self.assertNotIn("Datos para Zoho", self.template)
         self.assertIn("Datos de póliza", self.template)
         self.assertNotIn('id="subrisk-edit-', self.template)
         self.assertIn('id="affiliate-edit-', self.template)

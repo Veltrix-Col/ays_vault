@@ -107,6 +107,9 @@ LIFE_PERSON_FIELDS = (
     FieldSchema("birth_date", "Fecha de nacimiento", "date"),
     FieldSchema("email", "Correo electrónico", "email"),
     FieldSchema("phone", "Teléfono", "tel"),
+    # Vida Grupo requires this business datum for its Riesgos1 association.
+    # The validated contract treats it as text, not as an invented picklist.
+    FieldSchema("relationship", "Parentesco o relación"),
 )
 
 VEHICLE_FIELDS = (
@@ -206,6 +209,28 @@ def with_identification_choices(schema: BranchSchema, choices) -> BranchSchema:
         ):
             return replace(field, choices=normalized)
         return field
+    return replace(
+        schema,
+        fields=tuple(update_field(field) for field in schema.fields),
+        repeatables=tuple(
+            replace(group, fields=tuple(update_field(field) for field in group.fields))
+            for group in schema.repeatables
+        ),
+    )
+
+
+def with_relationship_choices(schema: BranchSchema, choices) -> BranchSchema:
+    """Clone a schema using the canonical Riesgos1.Parentesco catalog."""
+    normalized = tuple(
+        (item, item) if isinstance(item, str) else (item[0], item[1])
+        for item in (choices or ())
+    )
+
+    def update_field(field: FieldSchema) -> FieldSchema:
+        if field.key == "relationship":
+            return replace(field, kind="choice", choices=normalized)
+        return field
+
     return replace(
         schema,
         fields=tuple(update_field(field) for field in schema.fields),

@@ -121,7 +121,7 @@ def card_list(request):
     if search_form.is_valid():
         query = search_form.cleaned_data["q"]
         if query:
-            filters = Q(company_name__icontains=query) | Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(purpose__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
+            filters = Q(company_name__icontains=query) | Q(client_name__icontains=query) | Q(cardholder_name__icontains=query) | Q(identity_document__icontains=query) | Q(purpose__icontains=query) | Q(brand__icontains=query) | Q(last4__icontains=query)
             if query.isdigit():
                 filters |= Q(pk=int(query))
             if query.casefold() in {"activa", "activo"}:

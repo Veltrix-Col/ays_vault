@@ -1,0 +1,6 @@
+{% extends 'cotizacion_colectivos/external/base.html' %}
+{% block title %}Revise el archivo{% endblock %}
+{% block content %}
+<header class="external-hero"><p class="eyebrow">Validación del archivo</p><h1>No pudimos procesar el archivo</h1><p>Encontramos información que debes revisar antes de continuar.</p></header>
+<section class="external-card" role="alert"><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul><p><a class="button-link" href="{% url 'colectivos_external:portal' %}">Volver a cargar archivo</a></p></section>
+{% endblock %}

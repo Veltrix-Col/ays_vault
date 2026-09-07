@@ -53,6 +53,7 @@ en `ays-zoho-sdk` 1.1.0: no se usa HTTP directo para subirlos.
   controlada de archivos de invitación en `Polizas`; no habilita correo).
 - `COLECTIVOS_EXTERNAL_BASE_URL=https://host-autorizado`.
 - `COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL=<destinatario-interno>` para avisos
+- `COLECTIVOS_NOVELTY_RESPONSE_ALERT_EMAIL=<destinatario-interno>` para avisos por correo cuando se confirma una respuesta de Novedades.
   operativos cuando un ciclo sigue sin respuesta tras el reminder; si queda
   vacío, el reminder al cliente se conserva y el aviso interno se reintenta.
 

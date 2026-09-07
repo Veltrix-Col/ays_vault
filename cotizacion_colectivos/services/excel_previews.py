@@ -57,8 +57,12 @@ def _split_token(token: str) -> tuple[str, str]:
     return selector, secret
 
 
-def create_preview(*, access, session_cookie: str, uploaded) -> tuple[VistaPreviaExcelSolicitudColectivo, str]:
-    preview = parse_novelties(uploaded, access.request)
+def create_preview(*, access, session_cookie: str, uploaded, identification_choices=()) -> tuple[VistaPreviaExcelSolicitudColectivo, str]:
+    preview = parse_novelties(
+        uploaded,
+        access.request,
+        identification_choices=identification_choices,
+    )
     uploaded.seek(0)
     raw = uploaded.read()
     checksum = _digest(raw)

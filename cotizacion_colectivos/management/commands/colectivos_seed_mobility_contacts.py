@@ -48,6 +48,8 @@ class Command(BaseCommand):
     def _guard_profile(self):
         if str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "")).strip().lower() != "sandbox":
             raise CommandError("El perfil activo no es Sandbox.")
+
+    def _guard_write(self):
         if not getattr(settings, "ZOHO_SANDBOX_WRITE_ENABLED", False):
             raise CommandError("La escritura Sandbox está deshabilitada.")
         if not ZohoSettings.from_django("sandbox").write_enabled:
@@ -67,6 +69,7 @@ class Command(BaseCommand):
             }, ensure_ascii=False, indent=2))
             self.stdout.write("NO se realizó WRITE.")
             return
+        self._guard_write()
         try:
             publisher = GuardedSandboxContactPublisher(
                 confirmation=options["confirm"],

@@ -25,23 +25,8 @@ PLACEHOLDERS = {
 }
 
 
-class MultipleFileInput(forms.ClearableFileInput):
-    allow_multiple_selected = True
-
-
-class MultipleFileField(forms.FileField):
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("widget", MultipleFileInput(attrs={"accept": ".pdf,.jpg,.jpeg,.png"}))
-        super().__init__(*args, **kwargs)
-
-    def clean(self, data, initial=None):
-        single = super().clean
-        return [single(item, initial) for item in (data or [])]
-
-
 class IndividualQuotationForm(forms.Form):
     items_payload = forms.CharField(widget=forms.HiddenInput)
-    attachments = MultipleFileField(required=False, label="Documentos de soporte")
 
     def __init__(self, *args, schema: BranchSchema, context=None, identification_choices=None, **kwargs):
         self.schema = schema

@@ -686,6 +686,39 @@ class CambioSolicitudColectivo(models.Model):
         ordering = ("position", "id")
 
 
+class NovedadIngresoZoho(models.Model):
+    """Persistent operational state for one confirmed novelty ingress."""
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pendiente"
+        PROCESSING = "PROCESSING", "Procesando"
+        PUBLISHED = "PUBLISHED", "Publicado"
+        BLOCKED = "BLOCKED", "Bloqueado"
+        RECONCILE_REQUIRED = "RECONCILE_REQUIRED", "Requiere conciliación"
+
+    request = models.ForeignKey(SolicitudColectivo, on_delete=models.CASCADE, related_name="ingress_items")
+    item_key = models.CharField(max_length=120)
+    branch_code = models.CharField(max_length=24, blank=True)
+    policy_remote_id = models.CharField(max_length=64, blank=True)
+    encrypted_payload = models.TextField(editable=False)
+    payload_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING, db_index=True)
+    contact_zoho_id = models.CharField(max_length=64, blank=True)
+    risk_zoho_id = models.CharField(max_length=64, blank=True)
+    subrisk_zoho_id = models.CharField(max_length=64, blank=True)
+    safe_error = models.CharField(max_length=240, blank=True)
+    reconcile_required = models.BooleanField(default=False)
+    review_status = models.CharField(max_length=24, blank=True)
+    review_contact_id = models.CharField(max_length=64, blank=True)
+    review_error = models.CharField(max_length=240, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = (models.UniqueConstraint(fields=("request", "item_key"), name="colect_ingress_item_unique"),)
+        indexes = (models.Index(fields=("request", "status"), name="colect_ingress_status"),)
+
+
 class AdjuntoSolicitudColectivo(models.Model):
     class Status(models.TextChoices):
         PENDING_SCAN = "REVISION_ANTIVIRUS", "Pendiente de revisión antivirus"

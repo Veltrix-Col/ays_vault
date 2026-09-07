@@ -412,8 +412,8 @@ def _send_renewal_internal_alert(*, cycle, reminder_at=None, request_obj=None, r
         "reminder_at": reminder_at,
     })
     message = EmailMultiAlternatives(
-        subject=f"Renovación sin respuesta · {cycle.client_label} · {cycle.masked_policy}",
-        body="Una renovación mensual continúa sin respuesta.",
+        subject=f"Reporte sin respuesta · {cycle.client_label} · {cycle.masked_policy}",
+        body="Un reporte mensual continúa sin respuesta.",
         from_email=cfg["from_email"],
         to=[recipient],
         connection=get_connection(

@@ -17,6 +17,35 @@
   border: 0 !important;
 }
 
+.portal-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, .98);
+  text-align: center;
+}
+.portal-loading-overlay[hidden] { display: none; }
+.portal-loading-overlay__content { width: min(90vw, 360px); color: #68748a; }
+.portal-loading-overlay img { width: min(220px, 65vw); height: auto; margin-bottom: 24px; }
+.portal-loading-overlay p { margin: 6px 0; }
+.portal-loading-overlay__title { color: #152036; font-size: 1.2rem; font-weight: 700; }
+.portal-loading-overlay__spinner {
+  display: block;
+  width: 30px;
+  height: 30px;
+  margin: 22px auto 0;
+  border: 3px solid rgba(8, 117, 184, .18);
+  border-top-color: #0875b8;
+  border-radius: 50%;
+  animation: portal-loading-spin .8s linear infinite;
+}
+@keyframes portal-loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .portal-loading-overlay__spinner { animation: none; }
+}
+
 .portal-page {
   width: min(100% - 48px, 1180px);
   min-height: 100vh;
@@ -260,3 +289,17 @@
   .application-card, .portal-button { transition: none; }
   .application-card:hover, .portal-button:hover { transform: none; }
 }
+.prepared-novelties { display: grid; gap: 1rem; }
+.prepared-novelty { display: grid; gap: .45rem; padding: 1rem; border: 1px solid var(--border, #d9e2ec); border-radius: .75rem; background: #fff; }
+.prepared-novelty__heading { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.prepared-novelty__heading h3 { margin: .35rem 0 0; }
+.prepared-novelty__actions { display: flex; gap: .5rem; margin-top: .25rem; }
+.prepared-novelty__document-editor,.prepared-novelty__edit { margin-top: .35rem; }
+.prepared-novelty__document-editor > summary,.prepared-novelty__edit > summary { cursor: pointer; font-weight: 700; }
+.prepared-novelty__document-editor form,.prepared-novelty__edit form { display: grid; gap: .55rem; margin-top: .65rem; }
+.prepared-novelty__document-editor form label,.prepared-novelty__edit form label { display: grid; gap: .25rem; }
+.prepared-novelty__document-editor form button,.prepared-novelty__edit form button { justify-self: start; }
+.prepared-novelty form[action*="upload_attachment"] { display: none; }
+.prepared-novelty__document-editor[open] form[action*="upload_attachment"] { display: grid; }
+.external-card--excel { margin-top: 1rem; }
+.external-card--excel summary { cursor: pointer; }

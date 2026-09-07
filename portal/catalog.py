@@ -67,7 +67,7 @@ def application_catalog():
             "search_terms": "seguro obligatorio vehículos carga archivo",
         },
         {
-            "name": "Novedades",
+            "name": "Reporte de clientes con novedades",
             "area": "Colectivos",
             "description": "Gestione ingresos y retiros desde el contexto confirmado del cliente, ramo y póliza.",
             "logo": "",

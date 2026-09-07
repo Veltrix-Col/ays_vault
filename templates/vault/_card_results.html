@@ -13,6 +13,7 @@
           <tr>
             <th>Emp.</th>
             <th>Titular</th>
+            <th>Identificación</th>
             <th>Referencia</th>
             <th>Alias</th>
             <th>Franquicia</th>
@@ -26,6 +27,7 @@
             <tr>
               <td data-label="Emp."><span class="cell-truncate" title="{{ c.company_name|default:'Sin EMP. registrada' }}">{{ c.company_name|default:"—" }}</span></td>
               <td data-label="Titular"><span class="cell-truncate" title="{{ c.cardholder_name }}">{{ c.cardholder_name }}</span></td>
+              <td data-label="Identificación"><span class="cell-truncate" title="{{ c.identity_document|default:'Sin identificación registrada' }}">{{ c.identity_document|default:"—" }}</span></td>
               <td data-label="Referencia"><span class="cell-truncate" title="{{ c.purpose }}">{{ c.purpose }}</span></td>
               <td data-label="Alias"><span class="cell-truncate" title="{{ c.client_name }}">{{ c.client_name }}</span></td>
               <td data-label="Franquicia">{{ c.get_brand_display }}</td>
@@ -44,6 +46,7 @@
       <p>Pruebe buscando por:</p>
       <ul>
         <li>Titular</li>
+        <li>Identificación</li>
         <li>Referencia</li>
         <li>Alias</li>
         <li>Franquicia</li>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -27,6 +28,7 @@ from cotizacion_colectivos.services.external import ExternalAccessError, generat
 from cotizacion_colectivos.services.common import sign_record_id
 from cotizacion_colectivos.services.requests import create_request_from_policies, regenerate_request_snapshot, request_snapshot
 from cotizacion_colectivos.views import _builder_policies
+from cotizacion_colectivos.tests.fakes import mark_novelties_actions
 
 
 class FakeMultiPolicyService:
@@ -82,7 +84,7 @@ class MultiPolicyRequestTests(TestCase):
             encrypted_snapshot=encrypt('{"version": 1, "policy": {}, "group": [], "warnings": []}'),
             created_by=self.actor,
         )
-        self.health = self._policy(1, "b", "1814", "91", "Salud colectivo", ["SIN_CAMBIOS", "MODIFICACION"])
+        self.health = self._policy(1, "b", "1814", "91", "Salud colectivo", ["SIN_CAMBIOS", "MODIFICACION", "INCLUSION"])
         self.mobility = self._policy(2, "c", "8971", "40", "Movilidad colectivo", ["SIN_CAMBIOS", "INCLUSION"])
         self.record = SolicitudColectivoRegistro.objects.create(
             request=self.request,
@@ -134,7 +136,8 @@ class MultiPolicyRequestTests(TestCase):
                 observations="",
             )
 
-    def test_inclusion_requires_and_uses_a_policy_from_same_request(self):
+    @patch("cotizacion_colectivos.services.external.identification_type_values", return_value=frozenset({"CC"}))
+    def test_inclusion_requires_and_uses_a_policy_from_same_request(self, _identification_types):
         response = save_response(
             access=self.access,
             rows=[{
@@ -157,13 +160,13 @@ class MultiPolicyRequestTests(TestCase):
             )
 
     def test_workbook_has_one_signed_sheet_per_policy_and_converges_on_response_rows(self):
-        content = build_novelties_template(self.request)
+        content = mark_novelties_actions(build_novelties_template(self.request))
         workbook = load_workbook(io.BytesIO(content))
         self.assertIn("Salud_colectivo_1814", workbook.sheetnames)
         self.assertIn("Movilidad_colectivo_8971", workbook.sheetnames)
         upload = SimpleUploadedFile("novedades.xlsx", content)
         preview = parse_novelties(upload, self.request)
-        self.assertEqual(preview.counts["SIN_CAMBIOS"], 1)
+        self.assertEqual(preview.counts["INCLUIR"], 1)
         self.assertEqual(preview.rows[0]["policy"], str(self.health.pk))
 
     def test_adjustments_are_preselected_but_can_be_unchecked(self):
