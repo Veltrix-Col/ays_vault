@@ -23,7 +23,7 @@
           {% if app.logo %}<div class="application-logo {{ app.logo_class }}"><img src="{% static app.logo %}" alt="{{ app.name }}"></div>
           {% else %}<div class="application-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="{{ app.icon_path }}"></path></svg></div>{% endif %}
           <div class="application-copy"><span class="application-area-label">Área {{ area.name }}</span><h2{% if app.logo %} class="sr-only"{% endif %}>{{ app.name }}</h2><p>{{ app.description }}</p></div>
-          <div class="application-action"><a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}{% if app.name == 'Novedades' %} data-novelties-entry{% endif %}>Ingresar <span aria-hidden="true">→</span></a></div>
+          <div class="application-action"><a class="portal-button" href="{{ app.url }}"{% if app.external %} rel="noopener noreferrer"{% endif %}{% if app.name == 'Reporte de clientes con novedades' %} data-novelties-entry{% endif %}>Ingresar <span aria-hidden="true">→</span></a></div>
         </article>
       {% endfor %}
       </div>
@@ -40,7 +40,7 @@
   <div class="portal-loading-overlay" data-novelties-loading hidden role="status" aria-live="polite" aria-busy="true">
     <div class="portal-loading-overlay__content">
       <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&amp;S Asesores en Seguros">
-      <p class="portal-loading-overlay__title">Cargando Novedades...</p>
+      <p class="portal-loading-overlay__title">Cargando Reporte de clientes con novedades...</p>
       <p>Estamos consultando la información necesaria.</p>
       <span class="portal-loading-overlay__spinner" aria-hidden="true"></span>
     </div>

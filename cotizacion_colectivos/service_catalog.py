@@ -36,7 +36,7 @@ class CollectiveService:
 
 CORE_SERVICES = (
     CollectiveService(
-        "novelties", "Novedades",
+        "novelties", "Reporte de clientes con novedades",
         "Registrar un ingreso o retiro con el contexto confirmado de la póliza.",
         True, "cotizacion_colectivos:novelties_policy_detail",
     ),

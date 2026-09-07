@@ -68,7 +68,7 @@ class ColectivosViewTests(TestCase):
     def test_each_entry_point_has_one_unified_client_search(self):
         client = self.authenticated_client(self.admin)
         for route, title in (
-            ("cotizacion_colectivos:novelties_index", "Novedades"),
+            ("cotizacion_colectivos:novelties_index", "Reporte de clientes con novedades"),
             ("cotizacion_colectivos:invitations_index", "Invitaciones a Aseguradoras"),
         ):
             response = client.get(reverse(route))

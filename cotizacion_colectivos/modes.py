@@ -39,8 +39,8 @@ TOOL_MODES = {
     REQUESTS_MODE: ToolMode(
         code=REQUESTS_MODE,
         slug="novedades",
-        name="Novedades",
-        short_name="Novedades",
+        name="Reporte de clientes con novedades",
+        short_name="Reporte de clientes con novedades",
         description=(
             "Capture ingresos y retiros en pólizas colectivas mediante un "
             "enlace contextualizado para el cliente."
