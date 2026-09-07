@@ -10,6 +10,14 @@ def public_internal_access_enabled() -> bool:
     return bool(getattr(settings, "COLECTIVOS_INTERNAL_PUBLIC_ACCESS", False))
 
 
+def _delegated_internal_access_enabled(request) -> bool:
+    delegated = getattr(request, "delegated_access", None)
+    return bool(
+        getattr(delegated, "allowed", False)
+        and getattr(request, "inherited_tool_application", "") == "cotizacion_colectivos"
+    )
+
+
 def get_internal_actor(request, *, create: bool = False):
     """Resolve the real user or the isolated non-privileged QA actor.
 
@@ -17,7 +25,7 @@ def get_internal_actor(request, *, create: bool = False):
     superuser. Creation is allowed only at a mutation boundary.
     """
 
-    if not public_internal_access_enabled():
+    if not public_internal_access_enabled() and not _delegated_internal_access_enabled(request):
         user = request.user
         if not user.is_authenticated or not user.is_active:
             raise ImproperlyConfigured("No existe un actor interno autenticado.")

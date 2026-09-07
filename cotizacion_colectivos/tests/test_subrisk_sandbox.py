@@ -9,6 +9,7 @@ from cotizacion_colectivos.services.subrisk_sandbox import (
     SUBRISK_CONFIRMATION,
     SubriskPublicationUncertain,
     build_subrisk_payload,
+    build_life_group_subrisk_payload,
     build_mobility_subrisk_payload,
     create_subrisk_sandbox,
     create_mobility_subrisk_sandbox,
@@ -31,6 +32,48 @@ def _payload():
 
 
 class SubriskPayloadTests(SimpleTestCase):
+    def test_life_group_builder_keeps_policy_ramo_and_omits_risk(self):
+        payload = build_life_group_subrisk_payload(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954041",
+            insured_contact_id="4991513000270954041",
+            subrisk_name="TEST-VIDA-001",
+            entry_date="2026-08-31",
+            ramo="VG deudores",
+            parentesco="Afiliado",
+        )
+        self.assertEqual(payload["Ramo"], "VG deudores")
+        self.assertNotIn("Riesgo", payload)
+        self.assertEqual(payload["P_liza"], {"id": "4991513000270954040"})
+
+    def test_life_group_beneficiary_role_uses_beneficiary_lookup(self):
+        payload = build_life_group_subrisk_payload(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954041",
+            insured_contact_id="4991513000270954041",
+            subrisk_name="TEST-VIDA-BENEFICIARIO",
+            entry_date="2026-08-31",
+            ramo="VG deudores",
+            parentesco="Hijo",
+            role="Beneficiario",
+        )
+        self.assertEqual(payload["Beneficiario"], {"id": "4991513000270954041"})
+
+    def test_life_group_builder_rejects_unvalidated_branch_and_missing_parentesco(self):
+        kwargs = dict(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954041",
+            insured_contact_id="4991513000270954041",
+            subrisk_name="TEST-VIDA-001",
+            entry_date="2026-08-31",
+        )
+        with self.assertRaises(ValidationError):
+            build_life_group_subrisk_payload(**kwargs, ramo="Vida individual", parentesco="Afiliado")
+        with self.assertRaises(ValidationError):
+            build_life_group_subrisk_payload(**kwargs, ramo="VG patronal", parentesco="Afiliado")
+        with self.assertRaises(ValidationError):
+            build_life_group_subrisk_payload(**kwargs, ramo="VG deudores")
+
     def test_mobility_builder_contains_vehicle_lookup_and_closed_branch(self):
         payload = build_mobility_subrisk_payload(
             policy_id="4991513000000000001",

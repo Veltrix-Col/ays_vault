@@ -16,9 +16,15 @@ from django.utils import timezone
 from vault.crypto import decrypt
 
 from .common import colectivos_zoho, unsign_record_context
+from ..branches import LIFE_GROUP_CONTRACTS, LIFE_GROUP_VALUES
 from .person_contract import resolve_contact_by_document, contact_missing_fields, PersonCandidate
 from .risk_sandbox import normalize_plate
-from .subrisk_sandbox import resolve_mobility_subrisk_relation, resolve_policy_by_number
+from .subrisk_sandbox import (
+    build_life_group_subrisk_payload,
+    build_subrisk_payload,
+    resolve_mobility_subrisk_relation,
+    resolve_policy_by_number,
+)
 
 PERSON_PROPOSAL_FIELDS = frozenset({"First_Name", "Last_Name", "Tipo_ID", "N_mero_de_ID", "Date_of_Birth", "Email", "Mobile", "Phone"})
 RISK_PROPOSAL_FIELDS = frozenset({"Name", "Tipo_de_riesgo", "Placa_del_vehiculo", "Marca_Tipo_Caracter_sticas", "Modelo", "Clase", "Ciudad", "Tipo_de_uso"})
@@ -196,15 +202,19 @@ def _resolve_person(data, zoho):
     }
 
 
-def resolve_common_people_entities(*, quotation, zoho=None) -> dict[str, object]:
-    """Resolve Contacts for every implemented person-based individual ramo.
+def resolve_common_people_entities(*, quotation, zoho=None, include_subrisk: bool | None = None) -> dict[str, object]:
+    """Resolve person entities and, after acceptance, their Riesgos1 stage.
 
     Mobility keeps its vehicle/subrisk orchestration in
     :func:`resolve_mobility_entities`; this adapter only normalizes the
     affiliate/insured Contact candidates so the document publisher can use the
-    same ``people`` snapshot for Salud, Vida and Exequial.
+    same ``people`` snapshot for Salud, Vida and Exequial.  Exequial remains
+    contact-only until its specific Riesgos1 contract is enabled.
     """
     payload = json.loads(decrypt(quotation.encrypted_payload))
+    if include_subrisk is None:
+        acceptance = (quotation.safe_metadata or {}).get("acceptance") or {}
+        include_subrisk = acceptance.get("status") == "accepted"
     branch = str(payload.get("schema") or quotation.branch_slug or "").casefold()
     if branch not in {"movilidad", "salud", "vida", "exequial"}:
         return {"status": "unsupported", "branch": branch, "people": []}
@@ -334,12 +344,157 @@ def resolve_common_people_entities(*, quotation, zoho=None) -> dict[str, object]
             remote_id = str(old.get("remote_id") or old.get("contact_id"))
             item.update({"status": "created", "created": True, "remote_id": remote_id, "contact_id": remote_id, "missing_fields": [], "has_complete_data": True})
     entities.update({"branch": branch, "people": resolved, "resolved_at": timezone.now().isoformat()})
+    if include_subrisk and branch in {"vida", "salud"}:
+        _resolve_life_group_subrisks(
+            quotation=quotation, payload=payload, context=context,
+            entities=entities, zoho=zoho, branch_slug=branch,
+        )
     metadata["zoho_entities"] = entities
     metadata["people_lookup"] = resolved
     metadata["person_lookup"] = resolved[0] if resolved else {"status": "pending_identifier"}
     quotation.safe_metadata = metadata
     quotation.save(update_fields=("safe_metadata",))
     return entities
+
+
+def _resolve_life_group_subrisks(*, quotation, payload: Mapping[str, object],
+                                 context: Mapping[str, object], entities: dict[str, object],
+                                 zoho=None, branch_slug: str = "vida") -> None:
+    """Complete accepted person-based branches with their Riesgos1 relation.
+
+    The function name is retained for compatibility with the existing Vida
+    tests/callers, while the closed Salud builder now uses the same stage
+    orchestration.  Vida keeps its policy-derived VG contract; Salud uses the
+    already validated Salud contract and does not inspect Vida Grupo metadata.
+    """
+    people = list(entities.get("people") or ())
+    metadata = dict(quotation.safe_metadata or {})
+    previous = list((metadata.get("zoho_entities") or {}).get("subrisks") or ())
+    try:
+        policy_context = unsign_record_context(
+            context.get("policy_token") or context.get("entity_token"),
+            expected_type="policy",
+        )
+        policy_id = str(policy_context.get("id") or "").strip()
+    except Exception:
+        policy_id = ""
+    if not policy_id:
+        entities["subrisks"] = [
+            {"status": "blocked", "owner_key": person.get("owner_key"),
+             "reason": "No fue posible validar la póliza de origen."}
+            for person in people
+        ]
+        return
+    try:
+        facade = zoho or colectivos_zoho()
+    except Exception:
+        facade = None
+    policy_record = None
+    if facade is not None and branch_slug == "vida":
+        try:
+            policy_record = facade.records.get_by_id(
+                module="Polizas", record_id=policy_id,
+                fields=("id", "Name", "Ramo"),
+            )
+        except Exception:
+            policy_record = None
+    ramo = str((policy_record or {}).get("Ramo") or context.get("branch_name") or "").strip()
+    if branch_slug == "salud":
+        ramo = "Salud"
+    if branch_slug == "vida" and ramo not in LIFE_GROUP_VALUES:
+        entities["subrisks"] = [
+            {"status": "blocked", "owner_key": person.get("owner_key"),
+             "reason": "La póliza no tiene un ramo Vida Grupo válido."}
+            for person in people
+        ]
+        return
+    if branch_slug == "vida" and not LIFE_GROUP_CONTRACTS.get(ramo, {}).get("write_enabled"):
+        entities["subrisks"] = [
+            {"status": "blocked", "owner_key": person.get("owner_key"),
+             "reason": f"El contrato Zoho de {ramo} está pendiente de validación."}
+            for person in people
+        ]
+        return
+    entry_date = quotation.submitted_at.date().isoformat() if getattr(quotation, "submitted_at", None) else date.today().isoformat()
+    rows = payload.get("groups", {}).get("people", ()) if isinstance(payload.get("groups"), Mapping) else ()
+    rows_by_key = {
+        str(row.get("entity_key")): row
+        for row in rows
+        if isinstance(row, Mapping) and row.get("entity_key")
+    }
+    fields = payload.get("fields") if isinstance(payload.get("fields"), Mapping) else {}
+    metadata_parentesco = metadata.get("life_parentesco") or metadata.get("parentesco") or ""
+    entity_corrections = metadata.get("zoho_entity_corrections")
+    entity_corrections = entity_corrections if isinstance(entity_corrections, Mapping) else {}
+    requester_parentesco = (
+        context.get("parentesco") or context.get("relationship")
+        or fields.get("parentesco") or fields.get("relationship") or metadata_parentesco
+    )
+    subrisks = []
+    for index, person in enumerate(people):
+        sub_payload = {}
+        old = previous[index] if index < len(previous) and isinstance(previous[index], Mapping) else {}
+        existing_id = str(old.get("remote_id") or old.get("riesgos1_id") or "").strip()
+        contact_id = str(person.get("remote_id") or person.get("contact_id") or "").strip()
+        item = {"owner_key": person.get("owner_key") or f"people-{index}", "index": index}
+        if existing_id:
+            item.update({"status": "created", "created": True, "remote_id": existing_id, "riesgos1_id": existing_id})
+            subrisks.append(item)
+            continue
+        if not contact_id:
+            item.update({"status": "blocked", "reason": "Falta resolver el Contact de la persona."})
+            subrisks.append(item)
+            continue
+        candidate = person.get("candidate") if isinstance(person.get("candidate"), Mapping) else {}
+        source_row = rows_by_key.get(str(person.get("owner_key") or ""), {})
+        subrisk_correction = entity_corrections.get(f"subrisk:{index}")
+        subrisk_correction = subrisk_correction if isinstance(subrisk_correction, Mapping) else {}
+        parentesco = (
+            subrisk_correction.get("Parentesco")
+            or source_row.get("parentesco") or source_row.get("Parentesco")
+            or source_row.get("relationship") or source_row.get("relacion")
+            or requester_parentesco
+        )
+        parentesco = str(parentesco or "").strip()
+        name = " ".join(filter(None, (str(candidate.get("First_Name") or "").strip(), str(candidate.get("Last_Name") or "").strip()))) or str(person.get("display_name") or "Asegurado").strip()
+        review_candidate = {"Name": name, "Ramo": ramo, "Estado": "Activo", "Parentesco": parentesco, "Fecha_ingreso_riesgo": entry_date}
+        plan = candidate.get("Plan") or candidate.get("plan") or ""
+        if plan:
+            review_candidate["Plan"] = plan
+        if branch_slug == "vida" and not parentesco:
+            item.update({
+                "status": "blocked",
+                "reason": "Falta el parentesco requerido para el Riesgos1 de Vida Grupo.",
+                "candidate": review_candidate,
+            })
+            subrisks.append(item)
+            continue
+        try:
+            if branch_slug == "salud":
+                sub_payload = build_subrisk_payload(
+                    policy_id=policy_id, affiliate_contact_id=contact_id,
+                    insured_contact_id=contact_id, subrisk_name=name,
+                    entry_date=entry_date,
+                )
+            else:
+                sub_payload = build_life_group_subrisk_payload(
+                    policy_id=policy_id, affiliate_contact_id=contact_id,
+                    insured_contact_id=contact_id, subrisk_name=name,
+                    entry_date=entry_date, ramo=ramo,
+                    plan=plan,
+                    parentesco=parentesco,
+                )
+            # Resolution is read-only.  Publication belongs exclusively to
+            # ``individual_create_subrisk`` (POST + CSRF + write guards).
+            # Keeping this stage as NOT_FOUND makes the next operational
+            # action explicit after a Contact or correction is resolved.
+            item.update({"status": "not_found", "candidate": sub_payload})
+        except Exception as exc:
+            item.update({"status": "error", "reason": str(exc)[:240], "candidate": sub_payload if "sub_payload" in locals() else {}})
+        subrisks.append(item)
+    entities["subrisks"] = subrisks
+    required_complete = bool(people) and all(item.get("remote_id") for item in subrisks)
+    entities["status"] = "created" if required_complete else "partial"
 
 
 def _risk_row(row):

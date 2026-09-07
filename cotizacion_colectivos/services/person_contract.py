@@ -7,8 +7,9 @@ from __future__ import annotations
 import re
 import unicodedata
 import threading
+import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Mapping
 
 from django.conf import settings
@@ -23,12 +24,37 @@ from .common import colectivos_zoho, escape_criteria_value, sign_record_id, tran
 from .write_guards import require_write_guard
 
 
+logger = logging.getLogger(__name__)
+
+
 CONTACT_FIELDS = frozenset({
     "First_Name", "Last_Name", "Tipo_de_persona", "Tipo_ID", "N_mero_de_ID",
     "Date_of_Birth", "Email", "Mobile", "Phone", "Estado", "Tratamiento_de_datos",
 })
 CONTACT_REQUIRED = frozenset({"Last_Name", "Tipo_de_persona", "Tipo_ID", "N_mero_de_ID"})
 PERSON_STATUS = {"FOUND", "NOT_FOUND", "AMBIGUOUS", "TYPE_MISMATCH", "INVALID_INPUT"}
+
+
+def _normalize_contact_date(value: object) -> date | None:
+    """Return a CRM Date value as ``datetime.date`` or reject it early."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(text)
+            except ValueError as exc:
+                raise ValidationError("La fecha de nacimiento no tiene un formato válido.") from exc
+    raise ValidationError("La fecha de nacimiento no tiene un formato válido.")
 
 
 @dataclass(frozen=True)
@@ -88,6 +114,18 @@ def contact_missing_fields(data: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(missing)
 
 
+def contact_identity_missing_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Fields required by the existing Contacts identity/create contract."""
+    if isinstance(data, PersonCandidate):
+        data = data.as_contact_data()
+    return tuple(label for key, label in (
+        ("First_Name", "Nombres"),
+        ("Last_Name", "Apellidos"),
+        ("Tipo_ID", "Tipo de identificación"),
+        ("N_mero_de_ID", "Número de identificación"),
+    ) if not str(data.get(key) or "").strip())
+
+
 def _fold(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     return "".join(char for char in text if not unicodedata.combining(char)).strip().casefold()
@@ -109,10 +147,13 @@ def build_contact_payload(data: Mapping[str, object], *, status: str = "Prospect
         "N_mero_de_ID": document,
         "Estado": status,
     }
-    for field in ("First_Name", "Email", "Mobile", "Phone", "Date_of_Birth"):
+    for field in ("First_Name", "Email", "Mobile", "Phone"):
         value = data.get(field)
         if value not in (None, ""):
-            payload[field] = value.isoformat() if isinstance(value, date) else str(value).strip()
+            payload[field] = str(value).strip()
+    birth_date = _normalize_contact_date(data.get("Date_of_Birth"))
+    if birth_date is not None:
+        payload["Date_of_Birth"] = birth_date
     if data.get("Tratamiento_de_datos") in {"Si", "No"}:
         payload["Tratamiento_de_datos"] = data["Tratamiento_de_datos"]
     return payload
@@ -222,6 +263,15 @@ class GuardedContactPublisher:
             if existing["status"] != "NOT_FOUND":
                 raise ContactPublicationRejected("La persona requiere validación antes de crearla.")
             try:
+                # Diagnostic-only: field names and Python types make SDK
+                # serialization mismatches visible without logging values or
+                # personal data.  The same publisher is used by Individual
+                # Quotation and Novedades.
+                logger.warning(
+                    "contacts_create_payload module=Contacts payload_type=%s records_type=tuple field_types=%s",
+                    type(payload).__name__,
+                    ",".join(f"{key}:{type(value).__name__}" for key, value in payload.items()),
+                )
                 result = (zoho or get_zoho(profile=self.profile)).records.create(
                     module="Contacts", records=(payload,),
                 )

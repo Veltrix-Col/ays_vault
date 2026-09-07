@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="es"><body style="margin:0;background:#f3f6f9;font-family:Arial,sans-serif;color:#24344d">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:28px 12px"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border:1px solid #dce5ed;border-radius:12px"><tr><td style="padding:28px 32px">
+<p style="margin:0 0 20px"><img src="{{ logo_url }}" alt="A&amp;S Gestión de Beneficios" width="140" style="display:block;border:0"></p>
+<h1 style="color:#0875b8;font-size:20px">Nueva respuesta de Novedades</h1>
+<p>Se recibió una nueva respuesta de un cliente en el módulo de Novedades.</p>
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td><strong>Cliente:</strong></td><td style="padding-left:16px">{{ client }}</td></tr><tr><td><strong>Póliza:</strong></td><td style="padding-left:16px">{{ policy }}</td></tr><tr><td><strong>Ramo:</strong></td><td style="padding-left:16px">{{ branch }}</td></tr><tr><td><strong>Aseguradora:</strong></td><td style="padding-left:16px">{{ insurer }}</td></tr><tr><td><strong>Vendedor:</strong></td><td style="padding-left:16px">{{ seller }}</td></tr><tr><td><strong>Tipo:</strong></td><td style="padding-left:16px">{{ novelty_type }}</td></tr><tr><td><strong>Fecha de respuesta:</strong></td><td style="padding-left:16px">{{ responded_at }}</td></tr></table>
+{% if expediente_url %}<p style="margin-top:24px"><a href="{{ expediente_url }}" style="color:#0875b8">Ingresar al expediente</a></p>{% else %}<p style="margin-top:24px">Ingresar al Banco de Herramientas para revisar el expediente.</p>{% endif %}
+</td></tr></table></td></tr></table></body></html>

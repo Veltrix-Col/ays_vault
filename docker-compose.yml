@@ -98,6 +98,7 @@ services:
       COLECTIVOS_RENEWAL_EMAIL_PASSWORD: ${COLECTIVOS_RENEWAL_EMAIL_PASSWORD}
       COLECTIVOS_RENEWAL_EMAIL_FROM: ${COLECTIVOS_RENEWAL_EMAIL_FROM:-gestionbeneficios@segurosays.com}
       COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL: ${COLECTIVOS_RENEWAL_INTERNAL_ALERT_EMAIL}
+      COLECTIVOS_NOVELTY_RESPONSE_ALERT_EMAIL: ${COLECTIVOS_NOVELTY_RESPONSE_ALERT_EMAIL}
       # El default real de settings.py es VAULT_BASE_URL cuando esta variable
       # no esta definida (no una cadena vacia): se replica aqui con
       # sustitucion anidada para no romper ese fallback si Dokploy no la trae.
@@ -160,7 +161,10 @@ services:
       # y Colectivos, que consultan Zoho directo, quedarian no funcionales.
       ZOHO_ENABLED: ${ZOHO_ENABLED:-false}
       ZOHO_PUBLIC_SETUP_ENABLED: ${ZOHO_PUBLIC_SETUP_ENABLED:-false}
-      ZOHO_ACTIVE_PROFILE: ${ZOHO_ACTIVE_PROFILE:-sandbox}
+      # Esta composición es la de Production: si Dokploy no define el perfil,
+      # no debe caer silenciosamente en Sandbox. Los flags/credenciales siguen
+      # siendo explícitos y los guards de escritura permanecen apagados.
+      ZOHO_ACTIVE_PROFILE: ${ZOHO_ACTIVE_PROFILE:-production}
       ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID}
       ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET}
       ZOHO_REDIRECT_URI: ${ZOHO_REDIRECT_URI:-http://localhost:8000/integrations/zoho/callback/}

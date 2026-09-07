@@ -19,6 +19,18 @@ def has_internal_permission(request, codename: str) -> bool:
         return True
     if codename in _SSO_ONLY_CODENAMES:
         return True
+    # El middleware de intranet ya aprovisiona y loguea un User Django
+    # dedicado (sso__..., sin permisos ni grupos) antes de llegar aca, asi
+    # que ese usuario nunca pasa el has_perm de abajo. El resultado delegado
+    # que valido el middleware ES el boundary de autorizacion para el resto
+    # de Colectivos -- sin este bypass, cualquier accion fuera de
+    # _SSO_ONLY_CODENAMES le devuelve 403 a un visitante SSO legitimo.
+    delegated = getattr(request, "delegated_access", None)
+    if (
+        getattr(delegated, "allowed", False)
+        and getattr(request, "inherited_tool_application", "") == "cotizacion_colectivos"
+    ):
+        return True
     user = request.user
     return bool(
         user.is_authenticated

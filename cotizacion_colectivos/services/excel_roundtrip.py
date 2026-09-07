@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import zipfile
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -13,6 +14,7 @@ from django.core.signing import salted_hmac
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils.exceptions import InvalidFileException
@@ -21,6 +23,7 @@ from vault.crypto import decrypt
 
 from ..models import CambioSolicitudColectivo, RespuestaSolicitudColectivo, SolicitudColectivo
 from .external import ACTION_TO_ADJUSTMENT, response_checksum
+from .functional_groups import consolidate_functional_groups
 from ..filenames import safe_filename_part
 
 TEMPLATE_VERSION = 4
@@ -64,6 +67,28 @@ def _safe(value):
     return "'" + text if text.startswith(("=", "+", "-", "@")) else text
 
 
+def _choice_pair(choice) -> tuple[str, str]:
+    if hasattr(choice, "value"):
+        return str(choice.value or "").strip(), str(getattr(choice, "label", None) or choice.value or "").strip()
+    if isinstance(choice, (tuple, list)):
+        value = str(choice[0] if choice else "").strip()
+        label = str(choice[1] if len(choice) > 1 else value).strip()
+        return value, label
+    value = str(choice or "").strip()
+    return value, value
+
+
+def _excel_choice_pair(choice) -> tuple[str, str]:
+    """Return a human display value while retaining the canonical code."""
+    value, label = _choice_pair(choice)
+    if label.casefold() == value.casefold():
+        return value, value
+    prefix = f"{value} - "
+    if label.startswith(prefix):
+        label = f"{value} — {label[len(prefix):]}"
+    return value, label
+
+
 def _metadata_signature(request: SolicitudColectivo, nonce: str, sheet_map=(), row_map=()) -> str:
     return signing.dumps({
         "request": str(request.uuid), "branch": request.branch_code,
@@ -90,21 +115,39 @@ def _policy_sheets(request: SolicitudColectivo):
     return tuple(result)
 
 
-def _style_novelties_sheet(sheet, headers: tuple[str, ...]) -> None:
+def _style_novelties_sheet(sheet, headers: tuple[str, ...], identification_choices=()) -> None:
     sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="155A96")
     sheet.freeze_panes = "A2"
-    widths = (15, 22, 18, 22, 22, 18, 30, 18, 18, 36)
-    for index, width in enumerate(widths, 1):
-        sheet.column_dimensions[chr(64 + index)].width = width
-    actions = DataValidation(type="list", formula1='"Ingreso,Retiro"', allow_blank=True)
+    widths = {
+        "Acción": 14, "Tipo de identificación": 28, "Identificación": 20,
+        "Nombres": 24, "Apellidos": 24, "Fecha de nacimiento": 19,
+        "Correo": 30, "Teléfono": 18, "Fecha de ingreso": 19,
+        "Fecha de retiro": 19, "Observaciones": 38,
+    }
+    from openpyxl.utils import get_column_letter
+    for index, header in enumerate(headers, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = widths.get(header, 20)
+    actions = DataValidation(type="list", formula1='"Ninguna,Ingreso,Retiro"', allow_blank=True)
     actions.error = "Selecciona Ingreso o Retiro."
     actions.errorTitle = "Acción no válida"
     actions.prompt = "Selecciona la novedad que deseas reportar."
     sheet.add_data_validation(actions)
     actions.add("A2:A5000")
+    if identification_choices:
+        id_types = DataValidation(type="list", formula1="=IdentificationTypes", allow_blank=True)
+        id_types.error = "Selecciona un tipo de identificación válido."
+        id_types.errorTitle = "Tipo de identificación no válido"
+        sheet.add_data_validation(id_types)
+        try:
+            id_column = headers.index("Tipo de identificación") + 1
+        except ValueError:
+            id_column = 0
+        if id_column:
+            from openpyxl.utils import get_column_letter
+            id_types.add(f"{get_column_letter(id_column)}2:{get_column_letter(id_column)}5000")
 
 
 def _record_payload(record) -> dict[str, object]:
@@ -115,8 +158,49 @@ def _record_payload(record) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _functional_records(records):
+def _functional_records(records, *, snapshot=None):
     """Agrupa por referencias técnicas HMAC, nunca por datos descriptivos."""
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("group"), list) and snapshot.get("group"):
+        records = list(records)
+        rows = []
+        for index, record in enumerate(records):
+            member = snapshot["group"][index] if index < len(snapshot["group"]) and isinstance(snapshot["group"][index], dict) else {}
+            rows.append({
+                "public_key": record.public_key,
+                "role": record.role,
+                "initial_status": record.initial_status,
+                "plan": record.plan,
+                "entry_date": record.entry_date,
+                "exit_date": record.exit_date,
+                **member,
+            })
+        groups, _warnings = consolidate_functional_groups(rows, branch_code="")
+        record_by_ref = {str(record.public_key): record for record in records}
+        payload_by_ref = {key: _record_payload(record) for key, record in record_by_ref.items()}
+        normalized = []
+        seen = set()
+        for group in groups:
+            for entity in (group.get("principal", {}), *group.get("members", ())):
+                key = str(entity.get("key") or "")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                refs = tuple(str(value) for value in entity.get("source_record_keys", ()) if value)
+                payload = {
+                    "display_name": entity.get("display_name", ""),
+                    "id_type": entity.get("id_type", ""),
+                    "document": entity.get("masked_document", ""),
+                    "entry_date": entity.get("entry_date", ""),
+                    "exit_date": entity.get("exit_date", ""),
+                    "plan": entity.get("plan", ""),
+                }
+                for ref in refs:
+                    source = payload_by_ref.get(ref, {})
+                    payload["id_type"] = payload["id_type"] or source.get("id_type") or source.get("Tipo_ID", "")
+                    payload["document"] = source.get("document") or source.get("documento") or payload["document"]
+                    payload["display_name"] = payload["display_name"] if payload["display_name"] != "Información protegida" else source.get("display_name", payload["display_name"])
+                normalized.append({"key": key, "records": tuple(record_by_ref[ref] for ref in refs if ref in record_by_ref), "payload": payload, "roles": set(entity.get("roles", ()))})
+        return tuple(normalized)
     grouped = OrderedDict()
     prefix_by_role = {"Afiliado": "associate", "Asegurado": "insured", "Beneficiario": "beneficiary"}
     for record in records:
@@ -139,7 +223,7 @@ def _functional_records(records):
     return tuple(grouped.values())
 
 
-def build_novelties_template(request: SolicitudColectivo) -> bytes:
+def build_novelties_template(request: SolicitudColectivo, *, identification_choices=()) -> bytes:
     nonce = hashlib.sha256(f"{request.uuid}:{timezone.now().isoformat()}".encode()).hexdigest()[:24]
     book = Workbook()
     sheet_specs = _policy_sheets(request)
@@ -156,8 +240,19 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
         reference = policy_item.masked_policy_reference if policy_item else request.masked_policy_reference
         branch_name = policy_item.branch_name if policy_item else request.branch_name
         branch_code = policy_item.branch_code if policy_item else request.branch_code
-        _style_novelties_sheet(sheet, _compact_headers(branch_code))
-        for functional in _functional_records(records[:MAX_ROWS]):
+        _style_novelties_sheet(sheet, _compact_headers(branch_code), identification_choices)
+        policy_snapshot = {}
+        if policy_item is not None:
+            try:
+                policy_snapshot = json.loads(decrypt(policy_item.encrypted_snapshot))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                policy_snapshot = {}
+        elif index == 0:
+            try:
+                policy_snapshot = json.loads(decrypt(request.encrypted_snapshot))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                policy_snapshot = {}
+        for functional in _functional_records(records[:MAX_ROWS], snapshot=policy_snapshot):
             record = functional["records"][0]
             current = functional["payload"]
             role = str(record.role or "")
@@ -186,11 +281,23 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
             display_name = person[2] or principal
             names = display_name.split(" ", 1)
             sheet.append(tuple(_safe(value) for value in (
-                "", person[0], person[1], names[0], names[1] if len(names) > 1 else "",
+                "Ninguna", person[0], person[1], names[0], names[1] if len(names) > 1 else "",
                 current.get("birth_date", ""), current.get("email", ""), current.get("phone", ""),
                 record.entry_date, record.exit_date, "",
             )))
         sheet.auto_filter.ref = sheet.dimensions
+    instructions = book.create_sheet("Instrucciones")
+    instructions.append(("Novedades de póliza",))
+    instructions.append(("Guía rápida para diligenciar el archivo",))
+    instructions.append(("Este archivo sirve para reportar novedades de la póliza.",))
+    instructions.append(("No cambie los nombres ni elimine las columnas estructurales.",))
+    instructions.append(("Acción: Ninguna no reporta cambios; Ingreso agrega una persona; Retiro retira una persona existente.",))
+    instructions.append(("Para personas precargadas, deje Ninguna si no hay una novedad.",))
+    instructions.append(("En un Ingreso diligencie los campos obligatorios del formulario; en un Retiro diligencie los campos requeridos para identificar y retirar la persona.",))
+    instructions.append(("Seleccione Tipo de identificación del catálogo disponible. Los textos como CC — Cédula de ciudadanía se importan como el código CC.",))
+    instructions.append(("Si aparece un código Zoho desconocido, se conserva el código sin inventar una descripción.",))
+    instructions.append(("Si una novedad de ingreso requiere soporte, adjúntelo después desde el portal en la tarjeta de la novedad preparada.",))
+    instructions.append(("Guarde el archivo como XLSX y vuelva a cargarlo en el portal para revisarlo antes del envío.",))
     policy = book.create_sheet("Póliza")
     policy.append(("Solicitud", request.public_id))
     policy.append(("Fecha límite", request.deadline))
@@ -198,12 +305,18 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
     for index, (_, item) in enumerate(sheet_specs, 1):
         modality = item.get_modality_display() if item and item.modality != "NO_DETERMINADA" else ""
         policy.append(tuple(_safe(value) for value in (index, item.masked_policy_reference if item else request.masked_policy_reference, item.branch_name if item else request.branch_name, item.insurer if item else "", item.policy_status if item else "", modality)))
-    instructions = book.create_sheet("Instrucciones")
-    instructions.append(("Use únicamente las acciones del catálogo. No agregue fórmulas, macros ni cambie la hoja Metadatos.",))
     catalogs = book.create_sheet("Catálogos")
-    catalogs.append(("Acciones", "Tipos de novedad", "Tipos de identificación"))
+    catalogs.append(("Acciones", "Tipos de novedad", "Tipos de identificación", "Código canónico"))
+    for index, choice in enumerate(identification_choices, 2):
+        value, label = _excel_choice_pair(choice)
+        catalogs.cell(index, 3, label)
+        catalogs.cell(index, 4, value)
+    if identification_choices:
+        end = len(identification_choices) + 1
+        book.defined_names.add(DefinedName("IdentificationTypes", attr_text=f"'Catálogos'!$C$2:$C${end}"))
     for index, action in enumerate(CambioSolicitudColectivo.Action.values, 2):
         catalogs.cell(index, 1, action)
+    catalogs.sheet_state = "hidden"
     catalogs.cell(1, 5, "Hoja")
     catalogs.cell(1, 6, "Acciones habilitadas")
     adjustment_actions = {value: key for key, value in ACTION_TO_ADJUSTMENT.items()}
@@ -218,6 +331,11 @@ def build_novelties_template(request: SolicitudColectivo) -> bytes:
     values = (("version", TEMPLATE_VERSION), ("request", request.public_id), ("branch", request.branch_code), ("snapshot", request.snapshot_revision), ("nonce", nonce), ("checksum", _metadata_signature(request, nonce, sheet_map, signed_rows)), *(tuple((f"sheet:{name}", position) for name, position in sheet_map)), *(tuple((f"row:{sheet_name}:{reference}", ",".join(source_keys)) for sheet_name, reference, source_keys in functional_row_map)))
     for row in values:
         metadata.append(row)
+    # The client first sees the operational novelty sheet(s), followed by the
+    # short guide and policy context.  Hidden validation/signature sheets stay
+    # at the end.  The parser relies on the signed sheet map, never on order.
+    operational_sheets = [book[name] for name, _item in sheet_specs]
+    book._sheets = [*operational_sheets, instructions, policy, catalogs, metadata]
     stream = io.BytesIO()
     book.save(stream)
     return stream.getvalue()
@@ -230,7 +348,7 @@ class ExcelPreview:
     warnings: tuple[str, ...]
 
 
-def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
+def parse_novelties(uploaded, request: SolicitudColectivo, *, identification_choices=()) -> ExcelPreview:
     name = str(getattr(uploaded, "name", "")).casefold()
     if not name.endswith(".xlsx") or name.endswith(".xlsm") or getattr(uploaded, "size", 0) > settings.COLECTIVOS_ATTACHMENT_MAX_BYTES:
         raise ValidationError("El archivo XLSX no es válido.")
@@ -247,8 +365,22 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
             for info in infos:
                 if info.filename.casefold().endswith(".rels"):
                     relationship_xml = archive.read(info)
-                    if b'TargetMode="External"' in relationship_xml or b"TargetMode='External'" in relationship_xml:
-                        raise ValidationError("El archivo contiene vínculos externos no permitidos.")
+                    try:
+                        relationships = ET.fromstring(relationship_xml)
+                    except ET.ParseError as exc:
+                        raise ValidationError("El archivo contiene relaciones no válidas.") from exc
+                    for relationship in relationships:
+                        if str(relationship.attrib.get("TargetMode", "")).casefold() != "external":
+                            continue
+                        relationship_type = str(relationship.attrib.get("Type", "")).casefold()
+                        # Excel stores an ordinary cell hyperlink as an
+                        # external relationship of type ``.../hyperlink``.
+                        # It is deliberately ignored; the cell's displayed
+                        # value is consumed as plain text below.  Other
+                        # external relationships (external workbooks,
+                        # connections, etc.) remain prohibited.
+                        if not relationship_type.endswith("/hyperlink"):
+                            raise ValidationError("El archivo contiene vínculos externos no permitidos.")
         book = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
     except (zipfile.BadZipFile, InvalidFileException, OSError, ValueError) as exc:
         raise ValidationError("El archivo XLSX no es válido.") from exc
@@ -300,7 +432,11 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
     for sheet_name in novelty_sheets:
         sheet = book[sheet_name]
         headers = tuple(cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1)))
-        if headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS} and not (headers and headers[0] == "Acción" and headers[1:] == PERSON_COLUMNS):
+        compact = bool(headers and headers[0] == "Acción" and headers[1:] == PERSON_COLUMNS)
+        if headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS} and not compact:
+            missing = [field for field in ("Acción", "Tipo de identificación", "Identificación") if field not in headers]
+            if missing:
+                raise ValidationError(f"Falta la columna obligatoria '{missing[0]}'.")
             raise ValidationError("Los encabezados fueron alterados.")
         policy_position = int(meta.get(f"sheet:{sheet_name}", 0) or 0)
         policy_item = request.policies.filter(position=policy_position, active=True).first() if policy_position else None
@@ -310,14 +446,20 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
             total_rows += 1
             if position > MAX_ROWS or total_rows > MAX_ROWS:
                 raise ValidationError("El archivo supera el máximo de filas.")
-            if any(cell.data_type == "f" or getattr(cell, "hyperlink", None) for cell in cells):
-                raise ValidationError("No se permiten fórmulas ni hipervínculos.")
+            # A cell hyperlink is presentation metadata.  The importer consumes
+            # only the displayed cell value; it never follows or preserves the
+            # target.  Formula cells remain rejected below as executable input.
+            if any(cell.data_type == "f" for cell in cells):
+                raise ValidationError("No se permiten fórmulas.")
             values = {headers[index]: _safe(cell.value).strip() for index, cell in enumerate(cells[:len(headers)])}
             if not any(values.values()):
                 continue
             if headers and headers[0] == "Acción" and headers not in {HEADERS, V2_HEADERS, LEGACY_HEADERS}:
                 action_value = str(values.get("Acción", "")).strip().casefold()
-                line_reference = compact_line_refs.get((sheet_name, position), "")
+                # ``compact_line_refs`` is keyed by the physical Excel row
+                # (headers are row 1, therefore the first data row is 2),
+                # while ``position`` is relative to the data rows.
+                line_reference = compact_line_refs.get((sheet_name, position + 1), "")
                 has_data = any(values.get(header, "") for header in headers[1:])
                 if not action_value:
                     if not has_data and not line_reference:
@@ -330,15 +472,42 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
                     action = "INCLUIR"
                 elif action_value == "retiro":
                     action = "RETIRAR"
+                elif action_value == "ninguna":
+                    # Explicitly opt out of changing this preloaded/new row.
+                    continue
                 else:
                     raise ValidationError(f"Fila {position + 1}: la Acción debe ser Ingreso o Retiro.")
+                if (
+                    policy_item is not None
+                    and ACTION_TO_ADJUSTMENT[action] not in set(policy_item.enabled_adjustments or ())
+                ):
+                    raise ValidationError(
+                        f"Fila {position + 1}: la acción seleccionada no está habilitada para esta póliza."
+                    )
                 source_references = functional_sources.get((sheet_name, line_reference), ()) if line_reference else ()
                 required = (
                     (("Tipo de identificación", "Identificación", "Nombres", "Apellidos", "Fecha de ingreso") if action == "INCLUIR" else ("Fecha de retiro",)),
                 )
                 missing = [field for field in required[0] if not values.get(field, "").strip()]
                 if missing:
-                    raise ValidationError(f"Fila {position + 1}: falta {', '.join(missing)} para {action_value.title()}.")
+                    person_name = " ".join(filter(None, (values.get("Nombres", "").strip(), values.get("Apellidos", "").strip())))
+                    suffix = f" para {person_name}" if person_name else ""
+                    raise ValidationError(f"Fila {position + 1}: falta {', '.join(missing)}{suffix}.")
+                if action == "INCLUIR" and identification_choices:
+                    pairs = tuple(_choice_pair(choice) for choice in identification_choices)
+                    raw_id_type = values.get("Tipo de identificación", "").strip()
+                    by_label = {label.casefold(): value for value, label in pairs}
+                    by_value = {value.casefold(): value for value, _label in pairs}
+                    display_pairs = tuple(_excel_choice_pair(choice) for choice in identification_choices)
+                    by_display = {label.casefold(): value for value, label in display_pairs}
+                    canonical = (
+                        by_value.get(raw_id_type.casefold())
+                        or by_label.get(raw_id_type.casefold())
+                        or by_display.get(raw_id_type.casefold())
+                    )
+                    if not canonical:
+                        raise ValidationError(f"Fila {position + 1}: el Tipo de identificación '{raw_id_type}' no es válido.")
+                    values["Tipo de identificación"] = canonical
                 if action == "RETIRAR":
                     if not source_references:
                         if not values.get("Identificación", "").strip():
@@ -346,7 +515,7 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
                     if line_reference in seen:
                         raise ValidationError(f"Fila {position + 1}: referencia duplicada.")
                     seen.add(line_reference)
-                rows.append({
+                row_payload = {
                     "record": source_references[0] if source_references else "",
                     "records": source_references,
                     "functional_key": line_reference,
@@ -362,7 +531,14 @@ def parse_novelties(uploaded, request: SolicitudColectivo) -> ExcelPreview:
                     "fecha_ingreso": values.get("Fecha de ingreso", ""),
                     "fecha_retiro": values.get("Fecha de retiro", ""),
                     "observaciones": values.get("Observaciones", ""),
-                })
+                }
+                # The web inclusion form does not expose role as a client
+                # choice; it submits the implicit Asegurado role.  Keep the
+                # v4 compact workbook equivalent without adding a visible
+                # column.  Retire rows intentionally receive no role.
+                if action == "INCLUIR":
+                    row_payload["rol"] = "Asegurado"
+                rows.append(row_payload)
                 counts[action] += 1
                 continue
             action = values["Acción"].upper()

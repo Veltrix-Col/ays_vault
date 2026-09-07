@@ -17,13 +17,14 @@ from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
 from integrations.zoho.settings import ZohoSettings
 from .write_guards import require_write_guard
+from ..branches import LIFE_GROUP_CONTRACTS, canonical_life_group_value
 
 
 SUBRISK_MODULE = "Riesgos1"
 SUBRISK_CONFIRMATION = "SANDBOX_SUBRISK_WRITE"
 SUBRISK_FIELDS = frozenset({
     "Name", "P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado",
-    "Riesgo", "Ramo", "Estado", "Parentesco", "Fecha_ingreso_riesgo", "Plan",
+    "Beneficiario", "Riesgo", "Ramo", "Estado", "Parentesco", "Fecha_ingreso_riesgo", "Plan",
 })
 SUBRISK_REQUIRED_FIELDS = frozenset({
     "Name", "P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado",
@@ -76,14 +77,17 @@ def _lookup(value: object, field: str) -> dict[str, str]:
 def _validate_common_subrisk(*, name: object, policy_id: object,
                              affiliate_contact_id: object, insured_contact_id: object,
                              risk_id: object, entry_date: object, ramo: str,
-                             estado: str, parentesco: str) -> tuple[str, dict[str, str], dict[str, str], dict[str, str], dict[str, str], str]:
+                             estado: str, parentesco: str,
+                             validate_parentesco: bool = True) -> tuple[str, dict[str, str], dict[str, str], dict[str, str], dict[str, str], str]:
     normalized_name = str(name or "").strip()
     if not normalized_name or len(normalized_name) > 120 or any(ord(char) < 32 for char in normalized_name):
         raise ValidationError("Name del subriesgo no es válido.")
     if estado != SUBRISK_ALLOWED_STATUS:
         raise ValidationError("Estado del ensayo no es válido.")
-    if parentesco not in SUBRISK_ALLOWED_RELATIONS:
+    if validate_parentesco and parentesco not in SUBRISK_ALLOWED_RELATIONS:
         raise ValidationError("Parentesco no está dentro del catálogo del ensayo.")
+    if not validate_parentesco and (not str(parentesco or "").strip() or len(str(parentesco).strip()) > 80):
+        raise ValidationError("Parentesco del subriesgo no es válido.")
     if isinstance(entry_date, date):
         normalized_date = entry_date.isoformat()
     else:
@@ -97,7 +101,7 @@ def _validate_common_subrisk(*, name: object, policy_id: object,
         _lookup(policy_id, "P_liza"),
         _lookup(affiliate_contact_id, "Contacto_facturaci_n_dividida_colectivas"),
         _lookup(insured_contact_id, "Asegurado"),
-        _lookup(risk_id, "Riesgo"),
+        (_lookup(risk_id, "Riesgo") if str(risk_id or "").strip() else {}),
         normalized_date,
     )
 
@@ -107,7 +111,7 @@ def build_subrisk_payload(*, policy_id: object, affiliate_contact_id: object,
                           entry_date: object, plan: object = "",
                           ramo: str = SUBRISK_ALLOWED_BRANCH,
                           estado: str = SUBRISK_ALLOWED_STATUS,
-                          parentesco: str = "Afiliado") -> dict[str, object]:
+                          parentesco: str = "Afiliado", role: str = "") -> dict[str, object]:
     """Build the closed, Salud-only payload for exactly one test record."""
     name = str(subrisk_name or "").strip()
     if not name or len(name) > 120 or any(ord(char) < 32 for char in name):
@@ -150,7 +154,7 @@ def build_mobility_subrisk_payload(*, policy_id: object, affiliate_contact_id: o
                                    subrisk_name: object, entry_date: object,
                                    plan: object = "",
                                    estado: str = SUBRISK_ALLOWED_STATUS,
-                                   parentesco: str = "Afiliado") -> dict[str, object]:
+                                   parentesco: str = "Afiliado", role: str = "") -> dict[str, object]:
     """Build the closed Movilidad contract without widening the Salud builder."""
     name, policy, affiliate, insured, risk, normalized_date = _validate_common_subrisk(
         name=subrisk_name, policy_id=policy_id,
@@ -173,6 +177,53 @@ def build_mobility_subrisk_payload(*, policy_id: object, affiliate_contact_id: o
         payload["Plan"] = str(plan).strip()
     if set(payload) - SUBRISK_FIELDS or not SUBRISK_REQUIRED_FIELDS.issubset(payload):
         raise ValidationError("El payload Movilidad no coincide con la allowlist.")
+    return payload
+
+
+def build_life_group_subrisk_payload(*, policy_id: object, affiliate_contact_id: object,
+                                     insured_contact_id: object, subrisk_name: object,
+                                     entry_date: object, ramo: str,
+                                     plan: object = "", estado: str = SUBRISK_ALLOWED_STATUS,
+                                     parentesco: str = "", role: str = "") -> dict[str, object]:
+    """Build the closed Vida Grupo association contract.
+
+    Vida Grupo uses ``Riesgos1`` directly: there is no ``Riesgo`` lookup in
+    the observed VG records.  The branch value is supplied by the policy
+    snapshot and is never normalized to the generic ``Vida`` label.
+    """
+    ramo = canonical_life_group_value(ramo)
+    if not LIFE_GROUP_CONTRACTS.get(ramo, {}).get("write_enabled"):
+        raise ValidationError("El contrato Vida Grupo no admite este ramo.")
+    name, policy, affiliate, insured, _risk, normalized_date = _validate_common_subrisk(
+        name=subrisk_name, policy_id=policy_id,
+        affiliate_contact_id=affiliate_contact_id, insured_contact_id=insured_contact_id,
+        risk_id="", entry_date=entry_date, ramo=ramo,
+        estado=estado, parentesco=parentesco, validate_parentesco=False,
+    )
+    payload = {
+        "Name": name,
+        "P_liza": policy,
+        "Contacto_facturaci_n_dividida_colectivas": affiliate,
+        "Asegurado": insured,
+        "Ramo": ramo,
+        "Estado": estado,
+        "Parentesco": parentesco,
+        "Fecha_ingreso_riesgo": normalized_date,
+    }
+    if str(plan or "").strip():
+        payload["Plan"] = str(plan).strip()
+    if str(role or "").strip() == "Beneficiario":
+        payload["Beneficiario"] = _lookup(insured_contact_id, "Beneficiario")
+    if str(role or "").strip() == "Beneficiario":
+        payload["Beneficiario"] = _lookup(insured_contact_id, "Beneficiario")
+    # Preserve the role-specific lookup contract when the source explicitly
+    # provides a role.  The common affiliate/insured lookups remain populated
+    # for backwards-compatible VG records; Beneficiario is added only for
+    # beneficiary rows and never inferred from parentesco.
+    if str(role or "").strip() == "Beneficiario":
+        payload["Beneficiario"] = _lookup(insured_contact_id, "Beneficiario")
+    if set(payload) - SUBRISK_FIELDS or not SUBRISK_REQUIRED_FIELDS.issubset(payload):
+        raise ValidationError("El payload Vida Grupo no coincide con la allowlist.")
     return payload
 
 
@@ -252,7 +303,7 @@ def sanitized_subrisk_dry_run(payload: Mapping[str, object], *, profile: str) ->
 
 def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
                            confirmation: str, zoho=None) -> dict[str, object]:
-    """Perform at most one guarded Sandbox CREATE; never retries or falls back."""
+    """Perform one guarded Sandbox CREATE for the closed subrisk contracts."""
     require_write_guard(
         entity="subrisk", profile=profile, confirmation=confirmation,
         feature_flag="COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
@@ -264,13 +315,18 @@ def create_subrisk_sandbox(payload: Mapping[str, object], *, profile: str,
     for field in ("P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado"):
         if not isinstance(payload.get(field), Mapping) or set(payload[field]) != {"id"}:
             raise ValidationError(f"{field}: use exactamente {{'id': '<ID Zoho>'}}.")
-    normalized = build_subrisk_payload(
+    if "Beneficiario" in payload and (not isinstance(payload.get("Beneficiario"), Mapping) or set(payload["Beneficiario"]) != {"id"}):
+        raise ValidationError("Beneficiario: use exactamente {'id': '<ID Zoho>'}.")
+    ramo = canonical_life_group_value(payload["Ramo"])
+    builder = build_life_group_subrisk_payload if LIFE_GROUP_CONTRACTS.get(ramo, {}).get("write_enabled") else build_subrisk_payload
+    normalized = builder(
         policy_id=payload["P_liza"]["id"],
         affiliate_contact_id=payload["Contacto_facturaci_n_dividida_colectivas"]["id"],
         insured_contact_id=payload["Asegurado"]["id"],
         subrisk_name=payload["Name"], entry_date=payload["Fecha_ingreso_riesgo"],
-        plan=payload.get("Plan", ""), ramo=payload["Ramo"],
+        plan=payload.get("Plan", ""), ramo=ramo,
         estado=payload["Estado"], parentesco=payload["Parentesco"],
+        role=("Beneficiario" if payload.get("Beneficiario") else ""),
     )
     with _WRITE_LOCK:
         try:
@@ -313,12 +369,15 @@ def create_mobility_subrisk_sandbox(payload: Mapping[str, object], *,
     for field in ("P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado", "Riesgo"):
         if not isinstance(payload.get(field), Mapping) or set(payload[field]) != {"id"}:
             raise ValidationError(f"{field}: use exactamente {{'id': '<ID Zoho>'}}.")
+    if "Beneficiario" in payload and (not isinstance(payload.get("Beneficiario"), Mapping) or set(payload["Beneficiario"]) != {"id"}):
+        raise ValidationError("Beneficiario: use exactamente {'id': '<ID Zoho>'}.")
     normalized = build_mobility_subrisk_payload(
         policy_id=payload["P_liza"]["id"],
         affiliate_contact_id=payload["Contacto_facturaci_n_dividida_colectivas"]["id"],
         insured_contact_id=payload["Asegurado"]["id"], risk_id=payload["Riesgo"]["id"],
         subrisk_name=payload["Name"], entry_date=payload["Fecha_ingreso_riesgo"],
         plan=payload.get("Plan", ""), estado=payload["Estado"], parentesco=payload["Parentesco"],
+        role=("Beneficiario" if payload.get("Beneficiario") else ""),
     )
     with _WRITE_LOCK:
         duplicate = resolve_mobility_subrisk_relation(

@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -13,6 +14,28 @@ from cotizacion_colectivos.services.person_contract import (
 
 
 class PersonContractTests(SimpleTestCase):
+    def test_contact_date_values_are_normalized_to_python_date(self):
+        cases = (
+            "1991-04-19",
+            "1991-04-19 00:00:00",
+            datetime(1991, 4, 19, 8, 30),
+            date(1991, 4, 19),
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                payload = build_contact_payload({
+                    "Last_Name": "Vargas", "Tipo_ID": "CC", "N_mero_de_ID": "1019059650",
+                    "Date_of_Birth": value,
+                })
+                self.assertIs(type(payload["Date_of_Birth"]), date)
+                self.assertEqual(payload["Date_of_Birth"], date(1991, 4, 19))
+
+    def test_contact_empty_date_is_omitted_and_invalid_date_fails_early(self):
+        payload = build_contact_payload({"Last_Name": "Vargas", "Tipo_ID": "CC", "N_mero_de_ID": "1019059650", "Date_of_Birth": ""})
+        self.assertNotIn("Date_of_Birth", payload)
+        with self.assertRaisesMessage(ValidationError, "fecha de nacimiento"):
+            build_contact_payload({"Last_Name": "Vargas", "Tipo_ID": "CC", "N_mero_de_ID": "1019059650", "Date_of_Birth": "19/04/1991"})
+
     def test_contact_command_diagnostic_is_sanitized_and_allowlisted(self):
         from cotizacion_colectivos.management.commands.zoho_create_test_contact import _safe_contact_diagnostic
 

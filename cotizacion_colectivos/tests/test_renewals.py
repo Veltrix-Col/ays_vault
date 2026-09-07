@@ -542,7 +542,7 @@ class RenewalSelectionTests(TestCase):
         target = RenovacionColectiva.objects.create(
             cycle_key="4991513000271000020:2026-09", policy_remote_id="4991513000271000020",
             policy_token="protected", masked_policy="0420", client_label="Empresa", branch_name="VG deudores", automation_eligible=True,
-            monthly_period="2026-09", scheduled_for=date(2026, 12, 31), status=RenovacionColectiva.Status.PROGRAMMED,
+            monthly_period="2026-10", scheduled_for=date(2026, 12, 31), status=RenovacionColectiva.Status.PROGRAMMED,
         )
         other = RenovacionColectiva.objects.create(
             cycle_key="4991513000271000021:2026-09", policy_remote_id="4991513000271000021",
@@ -574,7 +574,7 @@ class RenewalSelectionTests(TestCase):
         selected = set_renewal_selection(cycle_id=cycle.pk, selected=True, recipient="client@example.test")
         self.assertTrue(selected.selected)
         self.assertEqual(selected.status, RenovacionColectiva.Status.PROGRAMMED)
-        self.assertEqual(upcoming_cycles(filter_name="programmed").count(), 1)
+        self.assertEqual(upcoming_cycles(filter_name="programmed", today=date(2026, 8, 24)).count(), 1)
 
     def test_sent_cycle_moves_to_tracking_and_responded_is_not_resendable_by_default(self):
         cycle = RenovacionColectiva.objects.create(

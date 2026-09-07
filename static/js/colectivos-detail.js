@@ -224,3 +224,33 @@
     documentSection.remove();
   }
 })();
+
+(() => {
+  "use strict";
+  // Completion dialogs use the same dynamic Contacts.Tipo_ID catalog as the
+  // public form.  Render it as a select only when the server supplied that
+  // catalog; a missing catalog must never be replaced with invented values.
+  const source = document.getElementById("colectivos-identification-types");
+  if (!source) return;
+  let choices;
+  try { choices = JSON.parse(source.textContent || "[]"); } catch (_) { return; }
+  if (!Array.isArray(choices) || !choices.length) return;
+  document.querySelectorAll(".zoho-dialog-grid input[name='id_type'], .ingress-edit-grid input[name='id_type']").forEach((input) => {
+    const select = document.createElement("select");
+    select.name = input.name;
+    select.id = input.id;
+    select.required = input.required;
+    select.className = input.className;
+    select.setAttribute("aria-label", input.getAttribute("aria-label") || "Tipo de identificación");
+    const placeholder = new Option("Seleccione...", "");
+    select.add(placeholder);
+    choices.forEach((choice) => {
+      const [value, label] = Array.isArray(choice) ? choice : ["", ""];
+      const code = String(value || "").trim();
+      if (!code) return;
+      const option = new Option(String(label || code).trim(), code, false, code === input.value);
+      select.add(option);
+    });
+    input.replaceWith(select);
+  });
+})();

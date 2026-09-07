@@ -193,6 +193,45 @@ class IntegralVaultFlowTests(TestCase):
         self.assertNotContains(protected_code, "Cliente Seguro")
         self.assertContains(protected_code, "0 tarjetas")
 
+    def test_card_list_displays_and_searches_identity_document_with_role_scope(self):
+        client = self.authenticated_client(self.analyst)
+        url = reverse("vault:card_list")
+
+        listing = client.get(url)
+        self.assertContains(listing, "Identificación")
+        self.assertContains(listing, self.card.identity_document)
+        self.assertContains(listing, "—")
+
+        for query in (self.card.identity_document, "000001"):
+            response = client.get(
+                url,
+                {"q": query},
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, "Cliente Seguro")
+
+        missing = client.get(url, {"q": "9999999999"})
+        self.assertNotContains(missing, "Cliente Seguro")
+
+        hidden = PaymentCard(
+            company_name="Empresa fuera de alcance",
+            client_name="Tarjeta inactiva",
+            cardholder_name="Titular fuera de alcance",
+            identity_document="876543210",
+            brand="VISA",
+            purpose="Prueba de aislamiento",
+            active=False,
+            created_by=self.leader,
+        )
+        hidden.set_pan("4000000000000002")
+        hidden.set_expiry("08/31")
+        hidden.set_code("CODIGO-AISLADO")
+        hidden.save()
+        isolated = client.get(url, {"q": hidden.identity_document})
+        self.assertNotContains(isolated, "Tarjeta inactiva")
+        self.assertContains(isolated, "0 tarjetas")
+
     def test_company_is_administrative_and_code_is_encrypted_and_safe(self):
         stored = PaymentCard.objects.get(pk=self.card.pk)
         self.assertEqual(stored.company_name, COMPANY)

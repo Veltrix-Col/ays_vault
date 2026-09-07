@@ -2,7 +2,7 @@
 {% block title %}Bandeja de solicitudes{% endblock %}
 {% block content %}
 <header class="page-heading page-heading--compact inbox-heading">
-  <div><span class="eyebrow">Centro operativo · Área Colectivos</span><h1>Bandeja de solicitudes</h1><p>Encuentre lo que requiere gestión. Los expedientes y respuestas permanecen locales; esta pantalla no escribe en Zoho.</p></div>
+  <div><span class="eyebrow">Centro operativo · Área Colectivos</span><h1>Buzón</h1><p>Respuestas de clientes que requieren revisión. Esta pantalla no escribe en Zoho.</p></div>
   {% if unread_count %}<span class="attention-counter">{{ unread_count }} respuesta{{ unread_count|pluralize }} nueva{{ unread_count|pluralize }}</span>{% endif %}
 </header>
 
@@ -34,22 +34,22 @@
 </section>
 
 <section class="operational-inbox" aria-labelledby="requests-title">
-  <div class="section-heading"><div><span class="eyebrow">Actividad operacional</span><h2 id="requests-title">Expedientes</h2></div><label class="inbox-sort">Ordenar <select name="sort" onchange="this.form.submit()" form="inbox-sort-form"><option value="recent"{% if sort_mode == "recent" %} selected{% endif %}>Más recientes</option><option value="oldest"{% if sort_mode == "oldest" %} selected{% endif %}>Más antiguos</option><option value="attention"{% if sort_mode == "attention" %} selected{% endif %}>Requiere gestión primero</option></select></label><span>{{ page.paginator.count }}</span></div>
+  <div class="section-heading"><div><span class="eyebrow">Actividad operacional</span><h2 id="requests-title">Respuestas recibidas</h2></div><label class="inbox-sort">Ordenar <select name="sort" onchange="this.form.submit()" form="inbox-sort-form"><option value="recent"{% if sort_mode == "recent" %} selected{% endif %}>Más recientes</option><option value="oldest"{% if sort_mode == "oldest" %} selected{% endif %}>Más antiguos</option><option value="attention"{% if sort_mode == "attention" %} selected{% endif %}>Requiere gestión primero</option></select></label><span>{{ page.paginator.count }}</span></div>
   <div class="operational-request-list">
   {% for item in page %}
     <article class="operational-request-card operational-request-card--{{ item.inbox_status_tone }}{% if item.has_unread_response %} operational-request-card--unread{% endif %}" data-inbox-kind="{{ item.inbox_kind }}">
       <div class="operational-request-main">
         <div class="operational-request-title"><h3>Póliza {{ item.inbox_policy_reference }} <span>· {{ item.inbox_branch_name }}</span></h3>{% if item.has_unread_response %}<span class="new-response-label">Nueva respuesta</span>{% endif %}</div>
-        <p><strong>{{ item.inbox_client_label }}</strong> · {{ item.inbox_type_label }}</p>
-        <div class="operational-request-meta">{% if item.inbox_person_label %}<span>{{ item.inbox_person_label }}</span>{% endif %}{% if item.inbox_public_id %}<span>{{ item.inbox_public_id }}</span>{% endif %}<span>Última actividad {{ item.inbox_last_activity }}</span><span>Vence {{ item.inbox_deadline }}</span>{% if item.inbox_kind == 'request' and item.assigned_to %}<span>Responsable: {{ item.assigned_to }}</span>{% endif %}</div>
+        <p><strong>{{ item.inbox_client_label }}</strong> · {{ item.inbox_source }}</p>
+        <div class="operational-request-meta">{% if item.inbox_person_label %}<span>{{ item.inbox_person_label }}</span>{% endif %}{% if item.inbox_public_id %}<span>{{ item.inbox_public_id }}</span>{% endif %}<span>Ramo: {{ item.inbox_branch_name }}</span>{% if item.inbox_kind == 'request' and item.assigned_to %}<span>Responsable: {{ item.assigned_to }}</span>{% endif %}</div>
       </div>
       <div class="operational-current-state">
-        <span class="request-status request-status--{{ item.inbox_status_tone }}">{{ item.inbox_status_label }}{% if item.inbox_requires_attention %}<small>Requiere gestión</small>{% endif %}</span>
-        <small>Enlace: {{ item.inbox_access_summary }}{% if item.inbox_access_opened %} · abierto{% endif %}{% if item.inbox_otp_verified %} · OTP verificado{% endif %}</small>
+        <span class="request-status request-status--{{ item.inbox_status_tone }}">Respondido<small>{{ item.inbox_responded_at|date:"d/m/Y · H:i" }}</small></span>
+        {% if item.has_unread_response %}<small>Sin leer</small>{% else %}<small>Leída</small>{% endif %}
       </div>
       {% if item.inbox_detail_url %}<a class="button-link button-link--secondary" href="{{ item.inbox_detail_url }}">Abrir expediente</a>{% else %}<span class="muted">Esperando al cliente</span>{% endif %}
     </article>
-  {% empty %}<div class="inbox-empty"><h3>No hay solicitudes para estos filtros</h3><p>Pruebe con otra póliza, cliente, estado o rango de fechas.</p></div>{% endfor %}
+  {% empty %}<div class="inbox-empty"><h3>No hay respuestas para estos filtros</h3><p>Las aperturas y verificaciones de enlace permanecen en el historial, fuera de este Buzón.</p></div>{% endfor %}
   </div>
 </section>
 

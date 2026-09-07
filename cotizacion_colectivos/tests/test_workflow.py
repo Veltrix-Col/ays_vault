@@ -328,6 +328,15 @@ class RequestWorkflowTests(TestCase):
 
     def test_request_list_has_deterministic_visible_order_and_stable_pages(self):
         items = [self.create_local_request(index) for index in range(1, 28)]
+        for item in items:
+            RespuestaSolicitudColectivo.objects.create(
+                request=item,
+                version=1,
+                status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+                origin=RespuestaSolicitudColectivo.Origin.WEB,
+                submitted_at=timezone.now(),
+                checksum=f"{item.pk:064x}"[-64:],
+            )
         anchor = timezone.now() - timedelta(days=1)
         for index, item in enumerate(items):
             stamp = anchor - timedelta(minutes=index)
@@ -425,6 +434,11 @@ class RequestWorkflowTests(TestCase):
         answered = self.create_request()
         answered.status = answered.Status.ANSWERED
         answered.save(update_fields=("status", "updated_at"))
+        RespuestaSolicitudColectivo.objects.create(
+            request=answered, version=1, status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+            origin=RespuestaSolicitudColectivo.Origin.WEB, submitted_at=timezone.now(),
+            checksum="a" * 64,
+        )
         self.client.force_login(self.creator)
 
         response = self.client.get(reverse("cotizacion_colectivos:request_list"))
@@ -454,6 +468,11 @@ class RequestWorkflowTests(TestCase):
         answered = self.create_request()
         answered.status = answered.Status.ANSWERED
         answered.save(update_fields=("status", "updated_at"))
+        RespuestaSolicitudColectivo.objects.create(
+            request=answered, version=1, status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+            origin=RespuestaSolicitudColectivo.Origin.WEB, submitted_at=now - timedelta(minutes=10),
+            checksum="b" * 64,
+        )
         SolicitudColectivo.objects.filter(pk=answered.pk).update(
             updated_at=now - timedelta(minutes=10),
         )
@@ -464,9 +483,8 @@ class RequestWorkflowTests(TestCase):
 
         response = self.client.get(reverse("cotizacion_colectivos:request_list"))
         rows = response.context["page"].object_list
-        self.assertEqual([row.inbox_kind for row in rows[:3]], [
-            "individual", "request", "request",
-        ])
+        self.assertEqual([row.inbox_kind for row in rows[:2]], ["individual", "request"])
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].quotation_id, quotation.pk)
         self.assertContains(response, 'data-inbox-kind="individual"', html=False)
         self.assertContains(response, 'data-inbox-kind="request"', html=False)
@@ -515,7 +533,7 @@ class RequestWorkflowTests(TestCase):
         self.assertContains(detail, "edited@example.test")
         self.assertContains(detail, "Respuesta recibida")
         self.assertContains(detail, "Zoho")
-        self.assertContains(detail, "Más información")
+        self.assertContains(detail, "Historial del expediente")
         self.assertContains(detail, '<details class="workspace-card technical-disclosure">', html=False)
         self.assertNotContains(detail, "<details open", html=False)
 
@@ -554,12 +572,12 @@ class RequestWorkflowTests(TestCase):
         self.assertContains(page, "Póliza 083002914855")
         self.assertContains(page, "Respuesta recibida")
         self.assertContains(page, "Fecha de retiro")
-        self.assertContains(page, "2026-08-31")
-        self.assertContains(page, "Información técnica")
-        self.assertContains(page, "Identificador")
+        self.assertContains(page, "31/08/2026")
+        self.assertContains(page, "Historial del expediente")
+        self.assertNotContains(page, "Información técnica")
+        self.assertNotContains(page, "Identificador")
         self.assertContains(page, '<details class="workspace-card technical-disclosure">', html=False)
         self.assertNotContains(page, '<details open class="workspace-card technical-disclosure">', html=False)
-        self.assertContains(page, "Contrato de layout pendiente")
 
     def test_response_novelty_edit_is_local_auditable_and_isolated(self):
         item = self.create_request()
@@ -594,7 +612,7 @@ class RequestWorkflowTests(TestCase):
         # must not replace that evidence in the current UX.
         self.assertContains(page, "Respuesta recibida")
         self.assertContains(page, "Persona interna")
-        self.assertContains(page, "2026-09-15")
+        self.assertContains(page, "15/09/2026")
         self.assertNotContains(page, "2026-09-01")
         self.assertNotContains(page, "Ajuste operativo")
         self.assertNotContains(page, "Editar")

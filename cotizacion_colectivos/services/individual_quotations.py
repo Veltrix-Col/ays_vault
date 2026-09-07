@@ -12,6 +12,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from django.utils import timezone
 
@@ -225,6 +226,64 @@ def validate_attachments(uploaded_files) -> tuple[dict, ...]:
     return tuple(validated)
 
 
+def _pending_upload_root() -> Path:
+    root = (Path(settings.COLECTIVOS_PRIVATE_ROOT) / "individual_pending").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def stash_pending_uploads(*, access_key: str, uploaded_files) -> tuple[dict, ...]:
+    """Keep already-received valid files across a validation rerender.
+
+    The browser cannot repopulate ``input[type=file]`` after a 200 response.
+    Files are encrypted before being written to the existing private storage;
+    only opaque filenames and form keys are retained in the session.
+    """
+    pending = []
+    root = _pending_upload_root()
+    for field_name, uploaded in uploaded_files:
+        validated = validate_attachments((uploaded,))[0]
+        content = validated["uploaded"].read()
+        validated["uploaded"].seek(0)
+        internal_name = f"{secrets.token_hex(32)}.enc"
+        target = (root / internal_name).resolve()
+        if root not in target.parents:
+            raise ValidationError("La ruta de almacenamiento no es válida.")
+        target.write_bytes(encrypt(base64.b64encode(content).decode()).encode())
+        pending.append({
+            "field": str(field_name)[:120], "path": internal_name,
+            "name": validated["name"], "mime": validated["mime"],
+        })
+    return tuple(pending)
+
+
+def restore_pending_uploads(*, access_key: str, pending: tuple[dict, ...]):
+    root = _pending_upload_root()
+    restored = []
+    for item in pending:
+        name = Path(str(item.get("path") or "")).name
+        target = (root / name).resolve()
+        if root not in target.parents or not target.is_file():
+            continue
+        try:
+            content = base64.b64decode(decrypt(target.read_bytes().decode()))
+        except (TypeError, ValueError):
+            continue
+        restored.append((str(item.get("field") or ""), SimpleUploadedFile(
+            str(item.get("name") or "soporte"), content,
+            content_type=str(item.get("mime") or "application/octet-stream"),
+        )))
+    return tuple(restored)
+
+
+def clear_pending_uploads(*, pending: tuple[dict, ...]):
+    root = _pending_upload_root()
+    for item in pending:
+        target = (root / Path(str(item.get("path") or "")).name).resolve()
+        if root in target.parents:
+            target.unlink(missing_ok=True)
+
+
 def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="legacy", document_type="support_document", field_key="", risk_key="", filename_context=None):
     """Encrypt and persist one file with an explicit local functional owner."""
     uploaded = item["uploaded"]
@@ -281,7 +340,12 @@ def _store_individual_file(*, quotation, item, owner_role="legacy", owner_key="l
 
 @transaction.atomic
 def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
-    files = validate_attachments(cleaned_data.get("attachments") or [])
+    # The quotation-level support upload was retired. Historical attachment
+    # rows remain readable, but a new submission must associate each file with
+    # a concrete person/entity rather than silently creating an unowned file.
+    if cleaned_data.get("attachments"):
+        raise ValidationError("Cada documento debe adjuntarse a la persona correspondiente.")
+    files = ()
     entity_files = dict(cleaned_data.get("entity_attachments") or {})
     normalized_items = cleaned_data["normalized_items"]
     allowed_owners = {"affiliate"}
@@ -320,6 +384,29 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     if "affiliate" in entity_files and (context or {}).get("affiliate_key"):
         raise ValidationError("El afiliado precargado no requiere un documento adicional.")
     captured_fields = {field.key: cleaned_data.get(field.key, "") for field in schema.fields}
+    # The repeatable Vida row is the source of truth for the relationship
+    # selected in the external form.  Persist it in the encrypted top-level
+    # payload as well, because the internal expediente resolves the later
+    # Riesgos1 stage from the persisted quotation rather than from the old
+    # browser POST.  Keep the canonical value (e.g. ``Hijo``), never the
+    # display label (e.g. ``Hijo/a``).
+    people_rows = normalized_items.get("people") if isinstance(normalized_items, dict) else None
+    if isinstance(people_rows, (list, tuple)):
+        requester_row = next(
+            (row for row in people_rows if isinstance(row, dict) and row.get("is_requester")),
+            None,
+        )
+        if requester_row is None:
+            # Vida rows carry the relationship on the repeatable person even
+            # when that row is not flagged as the Salud requester.
+            requester_row = next(
+                (row for row in people_rows if isinstance(row, dict) and str(row.get("relationship") or "").strip()),
+                None,
+            )
+        if requester_row:
+            relationship = str(requester_row.get("relationship") or "").strip()
+            if relationship and not str(captured_fields.get("relationship") or "").strip():
+                captured_fields["relationship"] = relationship
     # Mantener una copia de lectura para expedientes históricos; el formulario
     # nuevo ya no muestra este nombre redundante.
     if context and context.get("requester_name"):
@@ -363,17 +450,6 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
     root.mkdir(parents=True, exist_ok=True)
     created_paths = []
     try:
-        basic_support = schema.slug in {"salud", "exequial", "soat"}
-        for item in files:
-            _, target = _store_individual_file(
-                quotation=quotation,
-                item=item,
-                owner_role="request" if basic_support else "legacy",
-                owner_key=str(quotation.public_id) if basic_support else "legacy",
-                document_type="support_document",
-                field_key="support_document",
-            )
-            created_paths.append(target)
         for owner_key, uploaded in entity_files.items():
             validated = validate_attachments((uploaded,))
             role, document_type, duplicate = ("affiliate", "identity_document", False) if owner_key == "affiliate" else row_owners[owner_key]
