@@ -71,18 +71,6 @@
     form.querySelector("[data-review-summary]").textContent = `${count} elemento${count === 1 ? "" : "s"} listo${count === 1 ? "" : "s"} para enviar.`;
   };
   const affiliateInput = form.querySelector('input[name="affiliate_document"]');
-  const supportInput = form.querySelector('input[name="attachments"]');
-  const supportSummary = form.querySelector('[data-attachments-summary]');
-  if (supportInput && supportSummary) {
-    const updateSupportSummary = () => {
-      const count = supportInput.files ? supportInput.files.length : 0;
-      supportSummary.textContent = count
-        ? `${count} archivo${count === 1 ? "" : "s"} seleccionado${count === 1 ? "" : "s"}.`
-        : "";
-    };
-    supportInput.addEventListener("change", updateSupportSummary);
-    updateSupportSummary();
-  }
   if (affiliateInput) {
     const clear = document.createElement("button");
     clear.type = "button"; clear.className = "button-link button-link--secondary"; clear.textContent = "Quitar";
@@ -354,7 +342,8 @@
       }
       if (["first_name","last_name","id_type","document","birth_date","email","phone","insured_name","insured_id_type","insured_document","insured_first_name","insured_last_name","insured_birth_date","insured_email","insured_phone"].includes(field.key)) input.dataset.requesterCopy = "true";
       if (field.kind === "checkbox" && field.help_text) {
-        const hint = document.createElement("small"); hint.textContent = field.help_text; wrapper.appendChild(hint);
+        const hint = document.createElement("small"); hint.textContent = field.help_text;
+        wrapper.append(label, input, hint); fieldsHost.append(wrapper); return;
       }
       wrapper.append(label, input); fieldsHost.append(wrapper);
     });

@@ -20,13 +20,15 @@ from cotizacion_colectivos.models import (
     AccesoExternoSolicitudColectivo,
     RespuestaSolicitudColectivo,
     SolicitudColectivo,
+    SolicitudColectivoPoliza,
     SolicitudColectivoRegistro,
     VistaPreviaExcelSolicitudColectivo,
 )
 from cotizacion_colectivos.services.deadlines import process_deadlines
 from cotizacion_colectivos.services.excel_previews import cancel_preview, confirm_preview, create_preview
-from cotizacion_colectivos.services.excel_roundtrip import build_novelties_template
+from cotizacion_colectivos.services.excel_roundtrip import build_novelties_template, parse_novelties
 from cotizacion_colectivos.services.external import ExternalAccessError, generate_access
+from cotizacion_colectivos.tests.fakes import mark_novelties_actions
 
 
 class PreviewDeadlineTests(TestCase):
@@ -66,7 +68,7 @@ class PreviewDeadlineTests(TestCase):
         self.cookie = "signed-session-value"
 
     def workbook(self):
-        raw = build_novelties_template(self.request)
+        raw = mark_novelties_actions(build_novelties_template(self.request))
         return SimpleUploadedFile("novedades.xlsx", raw, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     def test_preview_does_not_create_response_and_cancel_removes_encrypted_file(self):
@@ -82,7 +84,61 @@ class PreviewDeadlineTests(TestCase):
         self.assertFalse(path.exists())
         self.assertFalse(RespuestaSolicitudColectivo.objects.exists())
 
-    def test_confirmation_is_atomic_and_idempotent(self):
+    def test_novelties_template_keeps_canonical_identification_values_in_dropdown(self):
+        import io
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(build_novelties_template(
+            self.request,
+            identification_choices=(
+                ("CC", "CC - Cédula de ciudadanía"),
+                ("XYZ", "XYZ"),
+            ),
+        )))
+        catalogs = workbook["Catálogos"]
+        self.assertEqual(workbook.active.title, "Novedades")
+        self.assertEqual(workbook["Catálogos"].sheet_state, "hidden")
+        self.assertEqual(workbook["Metadatos"].sheet_state, "hidden")
+        self.assertEqual(workbook.sheetnames, ["Novedades", "Instrucciones", "Póliza", "Catálogos", "Metadatos"])
+        instructions = workbook["Instrucciones"]
+        self.assertIn("Este archivo sirve para reportar novedades", instructions[3][0].value)
+        self.assertIn("Ninguna", instructions[5][0].value)
+        self.assertEqual(catalogs["C2"].value, "CC — Cédula de ciudadanía")
+        self.assertEqual(catalogs["C3"].value, "XYZ")
+        self.assertEqual(catalogs["D2"].value, "CC")
+        self.assertEqual(catalogs["D3"].value, "XYZ")
+        self.assertIn("IdentificationTypes", workbook.defined_names)
+        worksheet = workbook["Novedades"]
+        validations = tuple(worksheet.data_validations.dataValidation)
+        self.assertTrue(any(validation.formula1 == "=IdentificationTypes" for validation in validations))
+
+    def test_excel_identification_display_normalizes_to_canonical_code(self):
+        import io
+        from openpyxl import load_workbook
+
+        raw = build_novelties_template(
+            self.request,
+            identification_choices=(("CC", "CC - Cédula de ciudadanía"), ("CE", "CE - Cédula de extranjería"), ("XYZ", "XYZ")),
+        )
+        book = load_workbook(io.BytesIO(raw))
+        sheet = book["Novedades"]
+        sheet.cell(row=2, column=1).value = "Ingreso"
+        sheet.cell(row=2, column=2).value = "CC — Cédula de ciudadanía"
+        sheet.cell(row=2, column=3).value = "123456"
+        sheet.cell(row=2, column=4).value = "Ana"
+        sheet.cell(row=2, column=5).value = "Prueba"
+        sheet.cell(row=2, column=9).value = "2026-09-01"
+        output = io.BytesIO()
+        book.save(output)
+        preview = parse_novelties(
+            SimpleUploadedFile("novedades.xlsx", output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            self.request,
+            identification_choices=(("CC", "CC - Cédula de ciudadanía"), ("CE", "CE - Cédula de extranjería"), ("XYZ", "XYZ")),
+        )
+        self.assertEqual(preview.rows[0]["tipo_id"], "CC")
+
+    @patch("cotizacion_colectivos.services.external.identification_type_values", return_value=frozenset({"CC"}))
+    def test_confirmation_is_atomic_and_idempotent(self, _identification_types):
         item, token = create_preview(access=self.access, session_cookie=self.cookie, uploaded=self.workbook())
         path = Path(self.private.name) / "excel_previews" / item.stored_path
         with self.captureOnCommitCallbacks(execute=True):
@@ -182,3 +238,65 @@ class PreviewDeadlineTests(TestCase):
         client = Client(enforce_csrf_checks=True)
         response = client.post(reverse("colectivos_external:confirm_excel_preview", args=["selector.secret-that-is-long-enough-1234567890"]))
         self.assertEqual(response.status_code, 403)
+
+    def test_compact_preview_rejects_action_disabled_for_policy_before_confirmation(self):
+        from cotizacion_colectivos.models import SolicitudColectivoPoliza
+
+        policy = SolicitudColectivoPoliza.objects.create(
+            request=self.request,
+            policy_reference_hash="e" * 64,
+            encrypted_policy_token=encrypt("policy-token"),
+            masked_policy_reference="Póliza 1234",
+            branch_code=self.request.branch_code,
+            branch_name=self.request.branch_name,
+            enabled_adjustments=["INCLUSION"],
+            encrypted_snapshot=encrypt("{}"),
+            snapshot_checksum="f" * 64,
+            position=1,
+        )
+        workbook = build_novelties_template(self.request)
+        import io
+        from openpyxl import load_workbook
+
+        book = load_workbook(io.BytesIO(workbook))
+        sheet = book[[name for name in book.sheetnames if name not in {"Póliza", "Instrucciones", "Catálogos", "Metadatos"}][0]]
+        sheet.cell(row=2, column=1).value = "Retiro"
+        sheet.cell(row=2, column=3).value = "123456"
+        output = io.BytesIO()
+        book.save(output)
+        uploaded = SimpleUploadedFile("novedades.xlsx", output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        with self.assertRaisesMessage(ValidationError, "la acción seleccionada no está habilitada"):
+            parse_novelties(uploaded, self.request)
+
+    def test_compact_preloaded_retirement_keeps_functional_reference_on_confirmation(self):
+        policy = SolicitudColectivoPoliza.objects.create(
+            request=self.request,
+            policy_reference_hash="g" * 64,
+            encrypted_policy_token=encrypt("policy-token"),
+            masked_policy_reference="Póliza 1234",
+            branch_code=self.request.branch_code,
+            branch_name=self.request.branch_name,
+            enabled_adjustments=["RETIRO"],
+            encrypted_snapshot=encrypt("{}"),
+            snapshot_checksum="h" * 64,
+            position=1,
+        )
+        self.request.records.update(policy=policy)
+        import io
+        from openpyxl import load_workbook
+
+        source_workbook = self.workbook()
+        workbook = load_workbook(io.BytesIO(source_workbook.read()))
+        source_workbook.seek(0)
+        sheet = workbook[[name for name in workbook.sheetnames if name not in {"Póliza", "Instrucciones", "Catálogos", "Metadatos"}][0]]
+        sheet.cell(row=2, column=1).value = "Retiro"
+        sheet.cell(row=2, column=10).value = "2026-09-01"
+        output = io.BytesIO()
+        workbook.save(output)
+        uploaded = SimpleUploadedFile("novedades.xlsx", output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        preview = parse_novelties(uploaded, self.request)
+        self.assertEqual(preview.rows[0]["action"], "RETIRAR")
+        self.assertTrue(preview.rows[0]["records"])
+        item, token = create_preview(access=self.access, session_cookie=self.cookie, uploaded=uploaded)
+        response = confirm_preview(token=token, access=self.access, session_cookie=self.cookie)
+        self.assertEqual(response.changes.filter(action="RETIRAR", functional_field="accion").count(), 1)

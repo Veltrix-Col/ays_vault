@@ -23,11 +23,11 @@
 
 <header class="policy-workspace-hero">
   <div><span class="eyebrow">Póliza</span><h1>{{ detail.full_reference|default:detail.masked_reference }}</h1><p>{{ detail.branch_name }} · {{ detail.insurer }}</p></div>
-  <div class="workspace-status"><span class="state-chip">{{ detail.state }}</span><span class="read-only-chip">Solo lectura</span></div>
+  <div class="workspace-status"><span class="state-chip">{{ detail.state }}</span></div>
 </header>
 {% for warning in detail.warnings %}<div class="status-message" role="status">{{ warning }}</div>{% endfor %}
 
-<nav class="workspace-nav" aria-label="Secciones de la póliza"><a href="#resumen">Resumen</a><a href="#grupo">Grupo asegurado</a><a href="#cliente">Enlace del cliente</a><a href="#respuestas">Respuestas</a></nav>
+<nav class="workspace-nav" aria-label="Secciones de la póliza"><a href="#resumen">Resumen</a><a href="#grupo">Grupo asegurado</a><a href="#cliente">Enlace del cliente</a></nav>
 
 <section class="preparation-status" aria-label="Actualización de información">
   <div><span>Información de la póliza</span><strong>Disponible</strong>{% if preparation_metadata.queried_at_dt %}<small>Actualizada hace {{ preparation_metadata.queried_at_dt|timesince }}</small>{% endif %}</div>
@@ -60,7 +60,6 @@
     </details>
   </section>
 
-  <section id="respuestas" class="workspace-card" aria-labelledby="responses-heading"><div class="section-heading"><div><span class="eyebrow">Cliente</span><h2 id="responses-heading">Respuestas recibidas</h2></div><span>{{ workspace_response_count }}</span></div>{% if can_view_responses %}{% for item in policy_requests %}{% for response in item.responses.all %}{% if response.status == 'ENVIADA' %}<article class="relation-row"><div><strong>Respuesta recibida</strong><span>{{ response.submitted_at }}</span></div><a href="{% url 'cotizacion_colectivos:response_detail' item.public_id response.version %}">Ver respuesta</a></article>{% endif %}{% endfor %}{% empty %}<p class="muted">El cliente todavía no ha respondido.</p>{% endfor %}{% else %}<p class="muted">El cliente todavía no ha respondido.</p>{% endif %}</section>
 </main>
 
 <aside class="policy-workspace-sidebar" id="cliente">
@@ -85,7 +84,7 @@
     {% elif access_panel.status == 'Vigente' %}<p>Existe un enlace vigente. Genere uno nuevo para copiarlo; el anterior quedará revocado.</p>{% elif access_panel.status == 'Respondido' %}<p>El cliente ya respondió. Puede generar otro enlace cuando necesite una nueva actualización.</p>{% else %}<p>Genere un enlace y compártalo con el cliente.</p>{% endif %}
 
     {% if can_generate_access and detail.classification == 'confirmed' %}
-      <form class="simple-access-form" method="post" action="{% url 'cotizacion_colectivos:policy_generate_access_simple' policy_token %}" data-remote-action data-loading-message="Generando enlace…">{% csrf_token %}<input type="hidden" name="request_type" value="ACTUALIZACION">{% if existing_access_notice or access_panel.status == 'Vigente' %}<input type="hidden" name="force_new" value="1">{% endif %}<p>Desde este acceso el cliente podrá reportar los ingresos y retiros correspondientes exclusivamente a esta póliza.</p><div class="individual-access-field access-recipient-card"><label for="access-recipient">Correo que recibirá el código OTP</label><input id="access-recipient" type="email" name="recipient" maxlength="254" required autocomplete="email" value="{{ detail.commercial_email }}"><small>Puede corregirlo antes de generar el enlace.</small></div><button type="submit">{% if existing_access_notice or access_panel.status == 'Vigente' %}Generar nuevo enlace{% else %}Generar enlace{% endif %}</button></form>
+      <form class="simple-access-form" method="post" action="{% url 'cotizacion_colectivos:policy_generate_access_simple' policy_token %}" data-remote-action data-loading-message="Generando enlace…">{% csrf_token %}<input type="hidden" name="request_type" value="ACTUALIZACION">{% if access_panel.status != 'No generado' %}<input type="hidden" name="force_new" value="1">{% endif %}<p>Desde este acceso el cliente podrá reportar los ingresos y retiros correspondientes exclusivamente a esta póliza.</p><div class="individual-access-field access-recipient-card"><label for="access-recipient">Correo que recibirá el código OTP</label><input id="access-recipient" type="email" name="recipient" maxlength="254" required autocomplete="email" value="{{ detail.commercial_email }}"><small>Puede corregirlo antes de generar el enlace.</small></div><button type="submit">{% if access_panel.status != 'No generado' %}Generar nuevo enlace{% else %}Generar enlace{% endif %}</button></form>
     {% endif %}
 
     {% if can_revoke_access and access_panel.status == 'Vigente' %}<form method="post" action="{% url 'cotizacion_colectivos:policy_revoke_access' policy_token %}" data-remote-action>{% csrf_token %}<button type="submit" class="danger-button">Revocar enlace</button></form>{% endif %}

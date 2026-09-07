@@ -29,7 +29,7 @@
     <label class="check-row">{{ form.is_test }} {{ form.is_test.label }}</label>
     <label class="check-row">{{ form.confirm_snapshot }} {{ form.confirm_snapshot.label }}</label>{{ form.confirm_snapshot.errors }}
     <button type="submit" {% if not policies %}disabled{% endif %}>Generar expediente y enlace único</button>
-    <p class="muted">Zoho permanece en modo solo lectura. Crear el expediente no modifica ninguna póliza.</p>
+    <p class="muted">Crear el expediente no modifica la póliza.</p>
   </aside>
 </form>
 <script src="{% static 'js/colectivos-builder.js' %}" defer></script>

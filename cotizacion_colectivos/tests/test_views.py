@@ -79,7 +79,8 @@ class ColectivosViewTests(TestCase):
             self.assertContains(response, 'name="query"', count=1)
             self.assertNotContains(response, 'id="id_company_query"')
             self.assertNotContains(response, 'id="id_person_query"')
-            self.assertContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
+            self.assertContains(response, "Perfil Zoho activo: SANDBOX")
+            self.assertNotContains(response, "Solo lectura")
 
     @patch("cotizacion_colectivos.views.UnifiedClientSearchService")
     def test_unified_search_renders_company_and_person_as_clients(self, service):
@@ -91,6 +92,8 @@ class ColectivosViewTests(TestCase):
         response = client.post(
             reverse("cotizacion_colectivos:novelties_client_search"), {"query": "Segura"}
         )
+        self.assertEqual(response.status_code, 302)
+        response = client.get(response["Location"])
         self.assertContains(response, "Empresa Segura")
         self.assertContains(response, "Persona Segura")
         self.assertContains(response, "NIT 9012171973")
@@ -101,19 +104,50 @@ class ColectivosViewTests(TestCase):
             "cotizacion_colectivos:novelties_client_detail", args=["company", "company-token"]
         ))
 
+    @patch("cotizacion_colectivos.views.UnifiedClientSearchService")
+    def test_invitations_search_post_includes_csrf_token(self, service):
+        service.return_value.search.return_value = ()
+        client = self.authenticated_client(self.admin, csrf=True)
+        form_page = client.get(reverse("cotizacion_colectivos:invitations_client_search"))
+        self.assertEqual(form_page.status_code, 200)
+        csrf = form_page.cookies["csrftoken"].value
+        response = client.post(
+            reverse("cotizacion_colectivos:invitations_client_search"),
+            {"query": "Segura", "csrfmiddlewaretoken": csrf},
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("?q=Segura", response["Location"])
+        result_page = client.get(response["Location"])
+        self.assertEqual(result_page.status_code, 200)
+
+    @patch("cotizacion_colectivos.views.UnifiedClientSearchService")
+    def test_client_search_uses_post_redirect_get(self, service):
+        service.return_value.search.return_value = ()
+        client = self.authenticated_client(self.admin)
+        posted = client.post(
+            reverse("cotizacion_colectivos:invitations_client_search"),
+            {"query": "Acme"},
+        )
+        self.assertEqual(posted.status_code, 302)
+        self.assertEqual(posted["Location"], "/cotizacion-colectivos/invitaciones-aseguradoras/clientes/buscar/?q=Acme")
+        page = client.get(posted["Location"])
+        self.assertEqual(page.status_code, 200)
+        service.return_value.search.assert_called_once_with("Acme")
+
     @override_settings(ZOHO_ACTIVE_PROFILE="production")
     def test_production_badge_is_derived_from_configuration(self):
         response = self.client.get(reverse("cotizacion_colectivos:index"))
-        self.assertContains(response, "Perfil Zoho activo: PRODUCCIÓN · Solo lectura")
+        self.assertContains(response, "Perfil Zoho activo: PRODUCCIÓN")
         self.assertContains(response, "environment-badge--production")
-        self.assertNotContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
+        self.assertNotContains(response, "Perfil Zoho activo: SANDBOX")
 
     def test_browser_cannot_select_the_profile(self):
         response = self.client.get(
             reverse("cotizacion_colectivos:index"), {"profile": "production"}
         )
-        self.assertContains(response, "Perfil Zoho activo: SANDBOX · Solo lectura")
-        self.assertNotContains(response, "Perfil Zoho activo: PRODUCCIÓN · Solo lectura")
+        self.assertContains(response, "Perfil Zoho activo: SANDBOX")
+        self.assertNotContains(response, "Perfil Zoho activo: PRODUCCIÓN")
 
     def test_numeric_prefix_shorter_than_three_is_rejected(self):
         client = self.authenticated_client(self.admin)
@@ -128,6 +162,8 @@ class ColectivosViewTests(TestCase):
         )
         client = self.authenticated_client(self.admin)
         response = client.post(reverse("cotizacion_colectivos:company_search"), {"query": "9001234567"})
+        self.assertEqual(response.status_code, 302)
+        response = client.get(response["Location"])
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Empresa Segura")
         self.assertContains(response, "•••••••567")
@@ -138,7 +174,8 @@ class ColectivosViewTests(TestCase):
         service.return_value.search.return_value = ()
         client = self.authenticated_client(self.admin)
         with self.assertLogs("cotizacion_colectivos", level="INFO") as captured:
-            client.post(reverse("cotizacion_colectivos:company_search"), {"query": "9001234567"})
+            posted = client.post(reverse("cotizacion_colectivos:company_search"), {"query": "9001234567"})
+            client.get(posted["Location"])
         output = " ".join(captured.output)
         self.assertIn("entity=company", output)
         self.assertIn("application=cotizacion_colectivos", output)
@@ -150,7 +187,8 @@ class ColectivosViewTests(TestCase):
     def test_unknown_search_error_returns_safe_message(self, service):
         service.return_value.search.side_effect = RuntimeError("secret endpoint and token")
         client = self.authenticated_client(self.admin)
-        response = client.post(reverse("cotizacion_colectivos:company_search"), {"query": "Empresa"})
+        posted = client.post(reverse("cotizacion_colectivos:company_search"), {"query": "Empresa"})
+        response = client.get(posted["Location"])
         self.assertEqual(response.status_code, 503)
         self.assertContains(response, "Sandbox no está disponible", status_code=503)
         self.assertNotContains(response, "secret", status_code=503)
@@ -160,9 +198,10 @@ class ColectivosViewTests(TestCase):
     def test_production_error_and_log_are_sanitized(self, service):
         service.return_value.search.side_effect = RuntimeError("private token detail")
         with self.assertLogs("cotizacion_colectivos", level="INFO") as captured:
-            response = self.client.post(
+            posted = self.client.post(
                 reverse("cotizacion_colectivos:company_search"), {"query": "Empresa"}
             )
+            response = self.client.get(posted["Location"])
         self.assertContains(response, "Producción no está disponible", status_code=503)
         output = " ".join(captured.output)
         self.assertIn("profile=production", output)
@@ -175,7 +214,8 @@ class ColectivosViewTests(TestCase):
         self.assertContains(client.post(url, {"query": ""}), "Ingrese un criterio")
         self.assertContains(client.post(url, {"query": "ab"}), "al menos 3 caracteres")
         service.return_value.search.return_value = ()
-        self.assertContains(client.post(url, {"query": "Nada"}), "Sin resultados")
+        posted = client.post(url, {"query": "Nada"})
+        self.assertContains(client.get(posted["Location"]), "Sin resultados")
 
     def test_post_without_csrf_is_rejected(self):
         client = self.authenticated_client(self.admin, csrf=True)

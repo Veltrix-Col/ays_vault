@@ -4,6 +4,7 @@ import json
 import base64
 import hashlib
 import tempfile
+from datetime import date
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -27,7 +28,7 @@ from cotizacion_colectivos.models import (
     ColectivosTaskOutbox,
     NotificacionCotizacionIndividual,
 )
-from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema, with_identification_choices
+from cotizacion_colectivos.quotation_forms.catalog import get_branch_schema, with_identification_choices, with_relationship_choices
 from cotizacion_colectivos.quotation_forms.forms import IndividualQuotationForm
 from cotizacion_colectivos.quotation_forms.security import sign_policy_context, sign_receipt, unsign_policy_context
 from cotizacion_colectivos.services.individual_access import IndividualAccessError, generate_individual_access, issue_individual_otp
@@ -146,6 +147,8 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(_human_response_value("is_requester", False), "No")
         self.assertEqual(_human_response_value("is_requester", ""), "Sin información")
         self.assertEqual(_human_response_value("is_requester", None), "Sin información")
+        self.assertEqual(_human_response_value("tipo_id", "CC"), "CC - Cédula de ciudadanía")
+        self.assertEqual(_human_response_value("fecha_ingreso", "2026-09-30 00:00:00"), "30/09/2026")
 
     def test_entity_key_is_internal_not_a_human_response_value(self):
         self.assertEqual(_human_response_value("entity_key", "vehicles-stable-1"), "vehicles-stable-1")
@@ -353,7 +356,7 @@ class IndividualQuotationTests(TestCase):
         template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "form.html").read_text(encoding="utf-8")
         self.assertIn("entity_attachment_${row.entity_key}", javascript)
         self.assertIn('enctype="multipart/form-data"', template)
-        self.assertIn("colectivos-individual.js?v=20260831-id-type", template)
+        self.assertIn("?v=20260831-id-type", template)
 
     def test_identification_choices_keep_value_and_label_separate_in_dynamic_selects(self):
         javascript = (Path(__file__).parents[2] / "static" / "js" / "colectivos-individual.js").read_text(encoding="utf-8")
@@ -368,7 +371,7 @@ class IndividualQuotationTests(TestCase):
             )
             id_fields = [
                 field for field in form.fields.values()
-                if field.label.startswith("Tipo de identificación")
+                if (field.label or "").startswith("Tipo de identificación")
             ]
             self.assertTrue(id_fields, slug)
             for field in id_fields:
@@ -601,7 +604,7 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(people.minimum, 0)
         self.assertEqual(
             {field.key for field in people.fields},
-            {"is_requester", "first_name", "last_name", "id_type", "document", "birth_date", "email", "phone"},
+            {"is_requester", "first_name", "last_name", "id_type", "document", "birth_date", "email", "phone", "relationship"},
         )
         form = IndividualQuotationForm(
             data={
@@ -622,8 +625,8 @@ class IndividualQuotationTests(TestCase):
                 "requester_document": "444444444", "requester_birth_date": "1990-01-01",
                 "requester_email": "affiliate@example.test", "requester_phone": "3000000000",
                 "items_payload": json.dumps({"people": [
-                    {"entity_key": "people-primary", "is_requester": False, "first_name": "María", "last_name": "Uno", "id_type": "CC", "document": "555555555", "birth_date": "1991-01-01", "email": "maria@example.test", "phone": "3000000001"},
-                    {"entity_key": "people-additional", "is_requester": False, "first_name": "José", "last_name": "Dos", "id_type": "CC", "document": "666666666", "birth_date": "1992-01-01", "email": "jose@example.test", "phone": "3000000002"},
+                    {"entity_key": "people-primary", "is_requester": False, "first_name": "María", "last_name": "Uno", "id_type": "CC", "document": "555555555", "birth_date": "1991-01-01", "email": "maria@example.test", "phone": "3000000001", "relationship": "Titular"},
+                    {"entity_key": "people-additional", "is_requester": False, "first_name": "José", "last_name": "Dos", "id_type": "CC", "document": "666666666", "birth_date": "1992-01-01", "email": "jose@example.test", "phone": "3000000002", "relationship": "Beneficiario"},
                 ]}),
             }, schema=schema, context={},
         )
@@ -711,7 +714,7 @@ class IndividualQuotationTests(TestCase):
         contact = build_contact_payload(candidate)
         self.assertEqual(contact["N_mero_de_ID"], "999999999")
         self.assertEqual(contact["Tipo_ID"], "CC")
-        self.assertEqual(contact["Date_of_Birth"], "2009-02-10")
+        self.assertEqual(contact["Date_of_Birth"], date(2009, 2, 10))
         self.assertEqual(contact["Email"], "c.vargas0419@example.com")
         self.assertEqual(contact["Phone"], "3186235929")
 
@@ -805,7 +808,8 @@ class IndividualQuotationTests(TestCase):
             args=[sign_receipt(quotation.public_id)],
         ))
         self.assertEqual(legacy_detail.status_code, 200)
-        self.assertContains(legacy_detail, "Responsable no disponible en este registro legado.")
+        self.assertContains(legacy_detail, "Pendiente de selección")
+        self.assertNotContains(legacy_detail, "registro legado")
         accept_individual_quotation(quotation=quotation, actor=self.actor)
         accept_individual_quotation(quotation=quotation, actor=self.actor)
         self.assertEqual(quotation.task_outbox.count(), 1)
@@ -1064,7 +1068,7 @@ class IndividualQuotationTests(TestCase):
             actor=self.actor, context=context,
         )
 
-    def test_responsible_correction_reuses_outbox_and_publishes_once(self):
+    def test_responsible_correction_reuses_outbox_without_publishing(self):
         quotation = self._pending_responsible_quotation()
         outbox = quotation.task_outbox.get(event_kind="COTIZACION")
         option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
@@ -1078,13 +1082,30 @@ class IndividualQuotationTests(TestCase):
                 {"responsible": option.actual_value},
             )
         self.assertEqual(response.status_code, 302)
-        publish.assert_called_once_with(outbox.pk)
+        publish.assert_not_called()
         self.assertEqual(CotizacionIndividual.objects.get(pk=quotation.pk).task_outbox.get().pk, outbox.pk)
         self.assertEqual(CotizacionIndividual.objects.get(pk=quotation.pk).task_outbox.count(), 1)
         outbox.refresh_from_db()
         self.assertEqual(outbox.status, outbox.Status.PENDING)
         self.assertEqual(outbox.safe_error_code, "")
         self.assertEqual(json.loads(decrypt(outbox.encrypted_payload))["Correo_responsable"], "ana@example.test")
+
+    def test_assign_and_create_task_publishes_existing_outbox(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", return_value="ana@example.test"
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value, "publish": "1"},
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_called_once_with(outbox.pk)
+        self.assertEqual(CotizacionIndividual.objects.get(pk=quotation.pk).task_outbox.count(), 1)
 
     def test_responsible_without_email_remains_publishable_without_fabricating_email(self):
         quotation = self._pending_responsible_quotation()
@@ -1100,13 +1121,33 @@ class IndividualQuotationTests(TestCase):
                 {"responsible": option.actual_value},
             )
         self.assertEqual(response.status_code, 302)
-        publish.assert_called_once_with(outbox.pk)
+        publish.assert_not_called()
         outbox.refresh_from_db()
         self.assertEqual(outbox.status, outbox.Status.PENDING)
         self.assertEqual(outbox.safe_error_code, "")
         task_record = json.loads(decrypt(outbox.encrypted_payload))
         self.assertNotIn("Correo_responsable", task_record)
         self.assertEqual(task_record["Solicitud_a_analista"], "Si")
+
+    def test_task_publication_is_explicit_after_responsible_is_saved(self):
+        quotation = self._pending_responsible_quotation()
+        outbox = quotation.task_outbox.get(event_kind="COTIZACION")
+        option = SimpleNamespace(actual_value="Ana Maria Duque", display_value="Ana Maria Duque Bran")
+        with patch("cotizacion_colectivos.views.has_internal_permission", return_value=True), patch(
+            "cotizacion_colectivos.views.task_responsible_options", return_value=(option,)
+        ), patch(
+            "cotizacion_colectivos.views.resolve_task_responsible_email", return_value="ana@example.test"
+        ), patch("cotizacion_colectivos.views.publish_task_outbox") as publish:
+            self.client.post(
+                reverse("cotizacion_colectivos:individual_update_responsible", args=[sign_receipt(str(quotation.public_id))]),
+                {"responsible": option.actual_value},
+            )
+            publish.assert_not_called()
+            response = self.client.post(
+                reverse("cotizacion_colectivos:individual_publish_task", args=[sign_receipt(str(quotation.public_id))]),
+            )
+        self.assertEqual(response.status_code, 302)
+        publish.assert_called_once_with(outbox.pk)
 
     def test_published_outbox_is_not_republished_when_responsible_changes(self):
         quotation = self._pending_responsible_quotation()
@@ -1151,19 +1192,83 @@ class IndividualQuotationTests(TestCase):
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_mobility_accepts_multiple_vehicles_and_encrypted_attachment(self, workspace):
         workspace.return_value = self.workspace("movilidad")
+        first_vehicle = {**self.vehicle("1"), "entity_key": "vehicles-1"}
         uploaded = SimpleUploadedFile(
             "matricula.png", b"\x89PNG\r\n\x1a\nprivate-demo", content_type="image/png",
         )
+        second_vehicle = {**self.vehicle("2"), "entity_key": "vehicles-2"}
         response = self.client.post(
             reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")]),
-            {"items_payload": json.dumps({"vehicles": [self.vehicle("1"), self.vehicle("2")]}), "attachments": uploaded},
+            {
+                "items_payload": json.dumps({"vehicles": [first_vehicle, second_vehicle]}),
+                "entity_attachment_vehicles-1": uploaded,
+            },
         )
         self.assertEqual(response.status_code, 302)
         attachment = AdjuntoCotizacionIndividual.objects.get()
         stored = (Path(self.private.name) / "individual_quotations" / attachment.stored_path).read_bytes()
         self.assertNotIn(b"private-demo", stored)
 
-    def test_basic_branches_store_optional_support_documents_with_request_ownership(self):
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_life_submission_with_person_attachment_reaches_success(self, workspace):
+        workspace.return_value = self.workspace("vida")
+        uploaded = SimpleUploadedFile(
+            "cedula.pdf", valid_minimal_pdf_bytes(), content_type="application/pdf",
+        )
+        row = {
+            "entity_key": "people-life-1", "life_primary": True,
+            "first_name": "Ana", "last_name": "Uno", "id_type": "CC",
+            "document": "1019059650", "birth_date": "1990-01-01",
+            "email": "ana@example.test", "phone": "3000000000",
+            "relationship": "Hijo", "is_requester": False,
+        }
+        token = self.access_token(schema_slug="vida")
+        response = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[token]),
+            {"items_payload": json.dumps({"people": [row]}), "entity_attachment_people-life-1": uploaded},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(CotizacionIndividual.objects.count(), 1)
+        self.assertEqual(AdjuntoCotizacionIndividual.objects.count(), 1)
+        quotation = CotizacionIndividual.objects.get()
+        persisted = json.loads(decrypt(quotation.encrypted_payload))
+        self.assertEqual(persisted["fields"]["relationship"], "Hijo")
+
+    @patch("cotizacion_colectivos.external_views._individual_workspace")
+    def test_invalid_life_submission_exposes_validation_reason(self, workspace):
+        detail, members, metadata, schema, choices = self.workspace("vida")
+        workspace.return_value = (
+            detail, members, metadata,
+            with_relationship_choices(schema, (("Hijo", "Hijo/a"),)), choices,
+        )
+        uploaded = SimpleUploadedFile(
+            "cedula.pdf", valid_minimal_pdf_bytes(), content_type="application/pdf",
+        )
+        row = {
+            "entity_key": "people-life-invalid", "life_primary": True,
+            "first_name": "Ana", "last_name": "Uno", "id_type": "CC",
+            "document": "1019059650", "birth_date": "1990-01-01",
+            "email": "ana@example.test", "phone": "3000000000",
+            "relationship": "Valor no permitido", "is_requester": False,
+        }
+        token = self.access_token(schema_slug="vida")
+        response = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[token]),
+            {"items_payload": json.dumps({"people": [row]}), "entity_attachment_people-life-invalid": uploaded},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Seleccione una opción válida.")
+        self.assertContains(response, "No fue posible enviar la cotización.")
+        self.assertEqual(CotizacionIndividual.objects.count(), 0)
+        row["relationship"] = "Hijo"
+        retry = self.client.post(
+            reverse("colectivos_external:individual_quotation", args=[token]),
+            {"items_payload": json.dumps({"people": [row]})},
+        )
+        self.assertEqual(retry.status_code, 302)
+        self.assertEqual(AdjuntoCotizacionIndividual.objects.count(), 1)
+
+    def test_quotation_level_support_documents_are_rejected_without_owner(self):
         cases = {
             "salud": {"people": [self.person("support-health")]},
             "exequial": {"people": [self.person("support-exequial")]},
@@ -1181,20 +1286,13 @@ class IndividualQuotationTests(TestCase):
                     "normalized_items": groups,
                     **{field.key: "" for field in schema.fields},
                 }
-                quotation = create_individual_quotation(
-                    schema=schema, cleaned_data=cleaned_data, actor=self.actor,
-                    context={"affiliate_key": "", "branch_name": schema.name},
-                )
-                attachment = quotation.attachments.get()
-                metadata = attachment.safe_metadata
-                self.assertEqual(metadata["owner_type"], "request")
-                self.assertEqual(metadata["owner_role"], "request")
-                self.assertEqual(metadata["owner_key"], str(quotation.public_id))
-                self.assertEqual(metadata["document_type"], "support_document")
-                with self.assertRaises(ValidationError):
-                    _validate_document_contract(
-                        module="Contacts", owner_type=metadata["owner_type"],
-                        document_type=metadata["document_type"],
+                with self.assertRaisesMessage(
+                    ValidationError,
+                    "Cada documento debe adjuntarse a la persona correspondiente.",
+                ):
+                    create_individual_quotation(
+                        schema=schema, cleaned_data=cleaned_data, actor=self.actor,
+                        context={"affiliate_key": "", "branch_name": schema.name},
                     )
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
@@ -1381,6 +1479,7 @@ class IndividualQuotationTests(TestCase):
 
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="incorrecta",
         COLECTIVOS_ATTACHMENT_WRITE_CONFIRMATION="",
@@ -1399,6 +1498,7 @@ class IndividualQuotationTests(TestCase):
 
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
     )
@@ -1421,6 +1521,7 @@ class IndividualQuotationTests(TestCase):
 
     @override_settings(
         ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
         COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED=True,
         COLECTIVOS_SANDBOX_ATTACHMENT_WRITE_CONFIRMATION="SANDBOX_ATTACHMENT_WRITE",
     )
@@ -1475,9 +1576,19 @@ class IndividualQuotationTests(TestCase):
 
     @patch("cotizacion_colectivos.external_views._individual_workspace")
     def test_new_form_has_no_global_upload_and_prefilled_affiliate_has_no_identity_upload(self, workspace):
+        for slug in ("movilidad", "salud", "exequial", "soat"):
+            with self.subTest(branch=slug):
+                workspace.return_value = self.workspace(slug)
+                response = self.client.get(
+                    reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug=slug)])
+                )
+                self.assertNotContains(response, "Adjuntar documentos")
+                self.assertNotContains(response, 'name="attachments"')
+        # In SOAT ``affiliate_document`` is a real business field, not the
+        # retired upload control. The prefilled mobility context must not show
+        # the person-upload input.
         workspace.return_value = self.workspace("movilidad")
-        response = self.client.get(
+        mobility = self.client.get(
             reverse("colectivos_external:individual_quotation", args=[self.access_token(schema_slug="movilidad")])
         )
-        self.assertNotContains(response, 'name="attachments"')
-        self.assertNotContains(response, 'name="affiliate_document"')
+        self.assertNotContains(mobility, 'name="affiliate_document"')

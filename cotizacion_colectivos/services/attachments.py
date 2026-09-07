@@ -36,7 +36,7 @@ def _detected(extension: str, header: bytes) -> str:
 
 
 @transaction.atomic
-def store_attachment(*, response: RespuestaSolicitudColectivo, uploaded, allow_excel: bool = False) -> AdjuntoSolicitudColectivo:
+def store_attachment(*, response: RespuestaSolicitudColectivo, uploaded, allow_excel: bool = False, change=None, safe_metadata_extra=None) -> AdjuntoSolicitudColectivo:
     name = Path(uploaded.name or "").name
     extension = Path(name).suffix.casefold()
     if extension not in MIME_BY_EXTENSION or (extension == ".xlsx" and not allow_excel) or name.casefold().endswith((".xlsm", ".html", ".svg", ".exe")):
@@ -68,6 +68,10 @@ def store_attachment(*, response: RespuestaSolicitudColectivo, uploaded, allow_e
     content = uploaded.read()
     uploaded.seek(0)
     checksum = hashlib.sha256(content).hexdigest()
+    category = "EXCEL_IMPORT" if allow_excel else "SOPORTE"
+    existing = response.attachments.filter(checksum=checksum, category=category, change=change).first()
+    if existing:
+        return existing
     internal_name = f"{secrets.token_hex(24)}{extension}"
     root = Path(settings.COLECTIVOS_PRIVATE_ROOT).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -82,7 +86,8 @@ def store_attachment(*, response: RespuestaSolicitudColectivo, uploaded, allow_e
         attachment = AdjuntoSolicitudColectivo.objects.create(
             request=response.request, response=response, safe_original_name=_safe_original_name(name, extension), internal_name=internal_name,
             extension=extension, detected_mime=detected, size=size, checksum=checksum,
-            stored_path=str(target.relative_to(root)), safe_metadata={"antivirus": "not_configured"},
+            change=change, stored_path=str(target.relative_to(root)), category=category,
+            safe_metadata={"antivirus": "not_configured", **(safe_metadata_extra or {})},
         )
     except Exception:
         temporary.unlink(missing_ok=True)

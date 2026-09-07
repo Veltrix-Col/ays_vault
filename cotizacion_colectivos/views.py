@@ -8,7 +8,7 @@ import unicodedata
 import uuid
 import base64
 import re
-from urllib.parse import quote
+from urllib.parse import urlencode
 from dataclasses import asdict
 from datetime import datetime, timedelta
 
@@ -17,7 +17,7 @@ from django import forms as django_forms
 from django.contrib import messages
 from django.core import signing
 from django.db import OperationalError, transaction
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, redirect
@@ -31,14 +31,14 @@ from django.template.loader import render_to_string
 from .forms import ClientSearchForm, CompanySearchForm, ExternalAccessPrepareForm, IndividualAccessPrepareForm, MultiPolicyRequestForm, NoveltyEditForm, OptionalAccessEmailForm, PersonCompletionForm, PersonSearchForm, RequestCreateForm, RequestEditForm, RequestFilterForm, RequestTransitionForm, SnapshotRegenerateForm
 from .services import CompanySearchService, EntityDetailService, PersonSearchService, PolicyService, UnifiedClientSearchService
 from .services.common import ColectivosServiceError, sign_record_id, unsign_record_context
-from .services.catalogs import CatalogUnavailable, identification_choice_pairs
+from .services.catalogs import CatalogUnavailable, identification_choice_pairs, identification_display_label, subrisk_relationship_choice_pairs
 from .excel import build_current_policy_workbook
 from .permissions import has_internal_permission, permission_denied_response
-from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
+from .models import AccesoExternoSolicitudColectivo, AdjuntoSolicitudColectivo, CambioSolicitudColectivo, EventoSolicitudColectivo, NovedadIngresoZoho, NotificacionColectivos, RenovacionColectiva, RespuestaSolicitudColectivo, SolicitudColectivo, SolicitudColectivoPoliza
 from .services.operational_settings import monthly_renewals_enabled, set_monthly_renewals_enabled
 from .dto import ClientSearchResult, RequestPolicyOption
-from .services.requests import create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
-from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, generate_access, resolve_token, revoke_access, send_invitation, send_optional_invitation, update_access_recipient
+from .services.requests import _restore_policy_token, create_or_reuse_request_from_policy, create_request_from_policies, create_request_from_policy, regenerate_request_snapshot, request_reference_hashes, request_snapshot, source_reference_hash, transition_request, update_draft_request
+from .services.external import ActiveAccessExistsError, ExternalAccessError, GeneratedAccess, ensure_novelty_ingress_items, generate_access, novelty_ingress_attachments, resolve_token, revoke_access, send_invitation, send_optional_invitation, update_access_recipient
 from .services.excel_roundtrip import (
     build_approved_consolidated,
     build_comparison,
@@ -46,7 +46,7 @@ from .services.excel_roundtrip import (
     build_response_workbook,
 )
 from .services.review import finalize_review, record_reviews
-from .services.preparations import load_builder_preparation, store_builder_preparation
+from .services.preparations import invalidate_policy_preparation, load_builder_preparation, store_builder_preparation
 from .services.invitation_templates import (
     generate_invitation_templates,
     preview_invitation_templates,
@@ -56,14 +56,14 @@ from pathlib import Path
 from django.conf import settings
 from django.http import FileResponse
 from vault.security import audit
-from vault.crypto import decrypt
+from vault.crypto import decrypt, encrypt
 from vault.notifications import mask_email
 from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
 from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, NOVELTIES_MODE, resolve_tool_mode
 from .service_catalog import branch_workspaces
-from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema
+from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema, with_relationship_choices
 from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
     affiliate_options,
@@ -77,14 +77,17 @@ from .services.task_responsibles import resolve_task_responsible_email, task_res
 from .services.task_publisher import publish_task_outbox, read_published_task
 from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
-    contact_missing_fields, get_contacts_publisher,
+    contact_missing_fields, get_contacts_publisher, resolve_contact_by_document,
 )
 from .services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
-from .services.subrisk_sandbox import create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
+from .services.subrisk_sandbox import create_subrisk_sandbox, create_mobility_subrisk_sandbox, SubriskPublicationUncertain, SubriskPublishingDisabled, SubriskPublicationRejected
 from .services.individual_attachment_publisher import IndividualAttachmentBlocked, IndividualAttachmentUncertain, publish_attachment, publish_pending_for_person, publish_pending_for_risk, reconcile_attachment
+from .services.operational_entities import resolve_operational_entities
+from .branches import contract_required_ingress_fields
 from .services.invitation_attachment_publisher import prepare_invitation_attachment
 from .services.write_guards import configured_confirmation
+from .branches import LIFE_GROUP_CONTRACTS, LIFE_GROUP_VALUES, canonical_life_group_value, resolve_branch_family
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
 from .quotation_forms.catalog import get_policy_branch_schema
@@ -92,6 +95,80 @@ from .services.renewals import sync_renewal_cycles, set_renewal_selection, proce
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _publish_novelty_ingress_documents(item, payload, contact_id):
+    """Publish only this ingress' personal documents to its Contact.
+
+    Excel evidence is intentionally excluded by ``novelty_ingress_attachments``;
+    the functional key keeps documents from different people isolated.
+    """
+    if not contact_id:
+        return ()
+    results = []
+    for document in novelty_ingress_attachments(item.request, item.item_key):
+        metadata = document.safe_metadata if isinstance(document.safe_metadata, dict) else {}
+        # Attachments uploaded from the external drawer initially only carry
+        # their functional key.  Always complete the Contact document
+        # contract before invoking the shared publisher (including legacy
+        # rows that happen to have ``document_type`` but lack ``owner_type``).
+        expected_metadata = {
+            "owner_type": "contact",
+            "owner_role": str(payload.get("rol") or "Asegurado")[:24],
+            "owner_key": item.item_key,
+            "document_type": "identity_document",
+            "identification_type": str(payload.get("id_type") or "")[:40],
+            "identification_number": str(payload.get("document") or "")[:80],
+        }
+        if any(str(metadata.get(key) or "") != str(value or "") for key, value in expected_metadata.items()):
+            document.safe_metadata = {
+                **metadata,
+                **expected_metadata,
+            }
+            document.save(update_fields=("safe_metadata",))
+        result = publish_attachment(
+            attachment=document, module="Contacts", record_id=str(contact_id),
+        )
+        status = str(result.get("status") if isinstance(result, dict) else getattr(result, "status", "UPLOADED")).upper()
+        if status not in {"UPLOADED", "PUBLISHED", "SUCCESS"}:
+            raise IndividualAttachmentBlocked("El documento no pudo publicarse en Zoho.")
+        results.append(result)
+    return tuple(results)
+
+
+def _invalidate_novelty_policy_preparation(item) -> None:
+    """Drop only the policy workspace cache after a confirmed remote change.
+
+    The request keeps the signed policy token encrypted; older rows may store
+    the compact policy-reference envelope instead, so support both formats.
+    Fail closed here: cache invalidation must never turn a successful Zoho
+    write into a user-visible error.
+    """
+    request_obj = getattr(item, "request", None)
+    stored = getattr(request_obj, "encrypted_policy_token", "") if request_obj else ""
+    if not stored:
+        return
+    try:
+        stored = decrypt(stored)
+    except (TypeError, ValueError):
+        return
+    token = stored
+    try:
+        unsign_record_context(token, "policy")
+    except Exception:
+        try:
+            token = _restore_policy_token(stored)
+        except Exception:
+            return
+    try:
+        invalidate_policy_preparation(
+            token=token,
+            profile=str(getattr(request_obj, "zoho_profile", "sandbox") or "sandbox"),
+            backend=str(getattr(settings, "ZOHO_BACKEND", "sdk") or "sdk"),
+            source_kind=getattr(request_obj, "source_kind", None),
+        )
+    except Exception:
+        logger.info("colectivos_policy_preparation_invalidation_skipped operation=novelty_ingress")
 
 _MONTH_NAMES_ES = (
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -105,6 +182,25 @@ def _monthly_period_label(period):
     if not match:
         return "Sin periodo"
     return f"{_MONTH_NAMES_ES[int(match.group(2)) - 1]} {match.group(1)}"
+
+
+def _mark_expedient_notifications_read(request, *, collective_request=None, quotation=None):
+    """Mark the current actor's response notification as read on opening it."""
+    try:
+        actor = get_internal_actor(request, create=True)
+    except Exception:
+        # A read-only expediente must remain available for a valid SSO session
+        # even when its local technical actor cannot be materialized.
+        return
+    if collective_request is not None:
+        NotificacionColectivos.objects.filter(
+            user=actor, request=collective_request, read_at__isnull=True,
+            notification_type="CLIENT_RESPONSE",
+        ).update(read_at=timezone.now())
+    if quotation is not None:
+        NotificacionCotizacionIndividual.objects.filter(
+            user=actor, quotation=quotation, read_at__isnull=True,
+        ).update(read_at=timezone.now())
 
 
 def _renewal_response_label(cycle):
@@ -383,9 +479,14 @@ def individual_quotation_confirmation(request, token):
 def client_search(request, mode=None):
     environment = get_colectivos_environment()
     tool_mode = resolve_tool_mode(request, mode or HUB_MODE)
-    form = ClientSearchForm(request.POST or None)
+    query = str(request.GET.get("q") or "").strip() if request.method == "GET" else ""
+    form = ClientSearchForm({"query": query} if query else (request.POST or None))
     results, error, status = None, "", 200
     if request.method == "POST" and form.is_valid():
+        # Searches are read-only. Finish the POST with PRG so browser history
+        # never offers to resubmit the form after navigating back.
+        return redirect(f"{request.path}?{urlencode({'q': form.cleaned_data['query']})}")
+    if request.method == "GET" and query and form.is_valid():
         started = time.monotonic()
         correlation = uuid.uuid4().hex
         error_category = "none"
@@ -438,9 +539,12 @@ def client_detail(request, entity_kind, token, mode=None):
 def _search(request, *, form_class, service_class, entity_kind):
     environment = get_colectivos_environment()
     tool_mode = resolve_tool_mode(request)
-    form = form_class(request.POST or None)
+    query = str(request.GET.get("q") or "").strip() if request.method == "GET" else ""
+    form = form_class({"query": query} if query else (request.POST or None))
     results, error, status = None, "", 200
     if request.method == "POST" and form.is_valid():
+        return redirect(f"{request.path}?{urlencode({'q': form.cleaned_data['query']})}")
+    if request.method == "GET" and query and form.is_valid():
         started = time.monotonic()
         correlation = uuid.uuid4().hex
         error_category = "none"
@@ -603,20 +707,6 @@ def _normalized_choice(value):
     )
 
 
-def _short_invitation_mailto(*, branch_name, client_name, insurer=None, recipient=""):
-    audience = f" para {insurer}" if insurer else ""
-    subject = f"Solicitud de cotización · {branch_name} · {client_name}"
-    body = (
-        "Buenos días,\n\n"
-        f"Compartimos formatos{audience} para solicitud de cotización del ramo "
-        f"{branch_name} correspondiente a {client_name}.\n\n"
-        "Quedamos atentos.\n\nA&S Seguros"
-    )
-    return "mailto:" + quote(recipient or "", safe="@") + "?subject=" + quote(
-        subject, safe="",
-    ) + "&body=" + quote(body, safe="")
-
-
 def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
     client_name = detail.holder or "Cliente"
     actions = []
@@ -636,11 +726,6 @@ def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
                 # Empty means the complete insurer output (XLSX or ZIP), not
                 # one arbitrarily selected template.
                 "template_code": "",
-                "mailto_url": _short_invitation_mailto(
-                    branch_name=detail.branch_name, client_name=client_name,
-                    insurer=preview.template.insurer_name,
-                    recipient=preview.template.recipient_email,
-                ),
             }
             actions.append(action)
         action["previews"].append(preview)
@@ -685,9 +770,6 @@ def _invitation_page_context(detail, previews, metadata, *, active_policies=()):
         "missing_workspaces": tuple(metadata.get("missing_workspaces") or ()),
         "workspace_complete": complete,
         "has_generable": bool(actions),
-        "mailto_url": _short_invitation_mailto(
-            branch_name=detail.branch_name, client_name=client_name,
-        ),
     }
 
 
@@ -723,7 +805,7 @@ def branch_detail(request, entity_kind, token, branch_code):
             "workspace_missing": True,
         } for index, policy in enumerate(active_policies, start=1)),
         "missing_workspaces": (), "workspace_complete": False,
-        "has_generable": False, "mailto_url": "",
+        "has_generable": False,
     }
     if active_policies:
         consolidated_token = sign_branch_invitation_context(
@@ -1030,7 +1112,7 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         ).distinct()
         related_items = list(
             related_queryset.select_related("assigned_to").prefetch_related(
-                "policies", "external_accesses", "events", "responses",
+                "policies", "external_accesses", "events",
             ).order_by("-updated_at", "-created_at", "-pk")[:50]
         )
         exact_policy_items = []
@@ -1098,7 +1180,6 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "source_display_name": detail.source_name or "Ficha del cliente",
         "source_kind": source_kind,
         "can_view_requests": can_view_requests,
-        "can_view_responses": has_internal_permission(request, "view_responses"),
         "policy_requests": policy_requests,
         "active_update": active_update,
         "active_renewal": active_renewal,
@@ -1110,7 +1191,6 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "workspace_activity": _workspace_activity(
             policy_requests, getattr(service, "preparation_metadata", {}),
         ),
-        "workspace_response_count": sum(len(tuple(item.responses.all())) for item in policy_requests),
         "preparation_status": getattr(service, "preparation_status", "disabled"),
         "preparation_metadata": getattr(service, "preparation_metadata", {}),
         "workspace_members": members,
@@ -1382,6 +1462,7 @@ def policy_generate_access(request, token, request_type=None):
             request_type=request_type,
             deadline=timezone.localdate() + timedelta(days=settings.COLECTIVOS_EXTERNAL_LINK_DAYS),
             service=service,
+            force_new=force_new,
         )
         # The prepared policy is reused here; no second remote traversal is
         # needed in the normal path. It keeps the analyst in the workspace.
@@ -1445,14 +1526,17 @@ def policy_generate_access(request, token, request_type=None):
     timings = getattr(service, "timings", {})
     logger.info(
         "colectivos_access_generation application=cotizacion_colectivos operation=generate_access "
-        "profile=%s backend=%s cache=%s result=ok created=%s records=%d correlation=%s "
+        "profile=%s backend=%s cache=%s result=ok force_new=%s request_created=%s "
+        "access_created=%s policy_count=%d source_group_count=%d persisted_registro_count=%d "
+        "snapshot_member_count=%d records=%d correlation=%s "
         "organization_ms=%d policy_lookup_ms=%d risks1_query_ms=%d contacts_query_ms=%d "
         "risks_query_ms=%d grouping_ms=%d snapshot_validation_ms=%d snapshot_serialization_ms=%d "
         "database_insert_ms=%d registro_bulk_create_ms=%d request_creation_ms=%d "
         "access_creation_ms=%d total_ms=%d",
         service.profile, getattr(service, "backend", "test"),
-        getattr(service, "preparation_status", "disabled"), created,
-        item.record_count, correlation,
+        getattr(service, "preparation_status", "disabled"), force_new, created,
+        True, item.policies.count(), len(getattr(service, "last_members", ()) or ()),
+        item.records.count(), item.record_count, item.record_count, correlation,
         timings.get("organization_ms", 0), timings.get("policy_lookup_ms", 0),
         timings.get("risks1_query_ms", 0), timings.get("contacts_query_ms", 0),
         timings.get("risks_query_ms", 0), timings.get("grouping_ms", 0),
@@ -1570,7 +1654,7 @@ def policy_excel(request, token):
 @never_cache
 @require_http_methods(["GET"])
 def policy_invitation_preview(request, token):
-    if not has_internal_permission(request, "export_excel"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     tool_mode = resolve_tool_mode(request, INVITATIONS_MODE)
     try:
@@ -1593,7 +1677,7 @@ def policy_invitation_preview(request, token):
 @never_cache
 @require_http_methods(["GET"])
 def branch_invitation_preview(request, token):
-    if not has_internal_permission(request, "export_excel"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         detail, previews, metadata = preview_invitation_templates(token, consolidated=True)
@@ -1616,7 +1700,7 @@ def branch_invitation_preview(request, token):
 @never_cache
 @require_http_methods(["POST"])
 def branch_invitation_download(request, token):
-    if not has_internal_permission(request, "export_excel"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         content, filename, content_type, errors = generate_invitation_templates(
@@ -1642,7 +1726,7 @@ def branch_invitation_download(request, token):
 @never_cache
 @require_http_methods(["POST"])
 def policy_invitation_download(request, token):
-    if not has_internal_permission(request, "export_excel"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         content, filename, content_type, errors = generate_invitation_templates(
@@ -1790,7 +1874,14 @@ def request_list(request):
             ),
             distinct=True,
         ),
-    ).all()
+    ).filter(
+        responses__status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+    ).annotate(
+        inbox_responded_at=Max(
+            "responses__submitted_at",
+            filter=Q(responses__status=RespuestaSolicitudColectivo.Status.SUBMITTED),
+        ),
+    ).distinct()
     if form.is_valid():
         data = form.cleaned_data
         if data["query"]:
@@ -1863,13 +1954,12 @@ def request_list(request):
         item.inbox_person_label = ""
         item.inbox_public_id = item.public_id
         item.inbox_last_activity = item.updated_at
+        item.inbox_responded_at = item.inbox_responded_at or item.updated_at
         item.inbox_deadline = item.deadline
-        item.inbox_status_label = item.get_status_display()
-        item.inbox_status_tone = item.status_tone
-        item.inbox_requires_attention = item.status == SolicitudColectivo.Status.ANSWERED
-        item.inbox_access_summary = item.current_access_status
-        item.inbox_access_opened = item.current_access_opened
-        item.inbox_otp_verified = item.current_access_otp_verified
+        item.inbox_status_label = "Respondido"
+        item.inbox_status_tone = "novelty"
+        item.inbox_source = "Novedades"
+        item.inbox_requires_attention = True
         item.inbox_detail_url = reverse(
             "cotizacion_colectivos:request_detail", args=[item.public_id],
         )
@@ -1889,7 +1979,7 @@ def request_list(request):
         operational_entries.append(item)
 
     individual_entries = []
-    if actor is not None and has_internal_permission(request, "view_individual_quotation"):
+    if actor is not None and has_internal_permission(request, "view_requests"):
         unread_quotation_ids = set(
             NotificacionCotizacionIndividual.objects.filter(
                 user=actor, read_at__isnull=True,
@@ -1904,21 +1994,16 @@ def request_list(request):
             except (TypeError, ValueError, json.JSONDecodeError):
                 context = {}
             quotation = access.quotation
+            # The operational inbox is deliberately a response queue.  Links
+            # that were merely opened or verified remain in audit history but
+            # must not compete with customer responses that need attention.
+            if quotation is None:
+                continue
             branch_code = quotation.branch_code if quotation else ""
             branch_name = (
                 context.get("branch_name") or access.safe_metadata.get("branch") or "Ramo"
             )
-            if quotation:
-                status_code = SolicitudColectivo.Status.ANSWERED
-                status_label = "Respondido"
-            elif access.status == access.Status.EXPIRED:
-                status_code, status_label = SolicitudColectivo.Status.EXPIRED, "Vencido"
-            elif access.status == access.Status.REVOKED:
-                status_code, status_label = SolicitudColectivo.Status.CANCELLED, "Revocado"
-            elif access.first_access_at or access.status == access.Status.VERIFIED:
-                status_code, status_label = SolicitudColectivo.Status.OPENED, "Abierto por cliente"
-            else:
-                status_code, status_label = SolicitudColectivo.Status.SENT, "Enlace activo"
+            status_code, status_label = SolicitudColectivo.Status.ANSWERED, "Respondido"
 
             data = form.cleaned_data if form.is_valid() else {}
             searchable = " ".join(str(value or "") for value in (
@@ -1988,15 +2073,11 @@ def request_list(request):
             access.inbox_person_label = context.get("affiliate_label") or "Nuevo afiliado"
             access.inbox_public_id = str(quotation.public_id) if quotation else ""
             access.inbox_last_activity = max(activity_candidates)
+            access.inbox_responded_at = quotation.submitted_at
             access.inbox_deadline = access.expires_at
             access.inbox_status_label = status_label
-            access.inbox_status_tone = (
-                "attention" if requires_attention else
-                "success" if latest_outbox and latest_outbox.status == ColectivosTaskOutbox.Status.PUBLISHED else
-                "opened" if status_code == SolicitudColectivo.Status.OPENED else
-                "muted" if status_code in {SolicitudColectivo.Status.EXPIRED, SolicitudColectivo.Status.CANCELLED} else
-                "neutral"
-            )
+            access.inbox_status_tone = "individual"
+            access.inbox_source = "Cotización Individual"
             access.inbox_requires_attention = requires_attention
             access.inbox_access_summary = access.get_status_display()
             access.inbox_access_opened = bool(access.first_access_at)
@@ -2125,6 +2206,7 @@ def request_detail(request, public_id):
         ),
         public_id=public_id,
     )
+    _mark_expedient_notifications_read(request, collective_request=item)
     try:
         snapshot = request_snapshot(item)
     except ValidationError:
@@ -2218,9 +2300,11 @@ def request_detail(request, public_id):
                 "values": [],
                 "change_id": None,
                 "edit_values": {},
+                "attachments": [],
             })
             if change.functional_field == "accion":
                 novelty["change_id"] = change.pk
+                novelty["attachments"] = list(change.attachments.all())
                 edit_values = operational_edits.get(str(change.pk), {})
                 novelty["edit_values"] = dict(edit_values.get("fields") or {}) if isinstance(edit_values, dict) else {}
                 continue
@@ -2262,7 +2346,10 @@ def request_detail(request, public_id):
                 ):
                     candidate = payload.get(source_key)
                     if candidate not in (None, "") and not any(item["label"] == label for item in novelty["values"]):
-                        novelty["values"].append({"label": label, "value": candidate})
+                        novelty["values"].append({
+                            "label": label,
+                            "value": _human_response_value(source_key, candidate),
+                        })
             elif change.encrypted_branch_payload:
                 try:
                     payload = json.loads(decrypt(change.encrypted_branch_payload))
@@ -2276,7 +2363,10 @@ def request_detail(request, public_id):
                 ):
                     candidate = payload.get(source_key)
                     if candidate not in (None, "") and not any(item["label"] == label for item in novelty["values"]):
-                        novelty["values"].append({"label": label, "value": candidate})
+                        novelty["values"].append({
+                            "label": label,
+                            "value": _human_response_value(source_key, candidate),
+                        })
             edit_value = novelty.get("edit_values", {}).get(change.functional_field)
             display_value = edit_value if edit_value is not None else value
             if change.functional_field == "observaciones" and change.encrypted_observation:
@@ -2296,7 +2386,7 @@ def request_detail(request, public_id):
                     change.functional_field,
                     change.functional_field.replace("_", " ").strip().capitalize() or "Información",
                 ),
-                "value": display_value,
+                "value": _human_response_value(change.functional_field, display_value),
             })
         novelties = tuple(item for item in novelties.values() if item.get("values"))
         response_summary = {
@@ -2324,8 +2414,11 @@ def request_detail(request, public_id):
                 remote_id = "No disponible"
         task_record = read_published_task(remote_id) if remote_id else None
         local_responsible = ""
+        task_subject = ""
         try:
-            local_responsible = str(json.loads(decrypt(outbox.encrypted_payload)).get("Responsable") or "").strip()
+            task_payload = json.loads(decrypt(outbox.encrypted_payload))
+            local_responsible = str(task_payload.get("Responsable") or "").strip()
+            task_subject = str(task_payload.get("Subject") or "").strip()
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
         remote_responsible = task_record.get("Responsable") if isinstance(task_record, dict) else ""
@@ -2334,20 +2427,21 @@ def request_detail(request, public_id):
         zoho_tasks.append({
             "outbox_id": outbox.pk,
             "kind": outbox.event_kind,
-            "type": {"INCLUSION": "Ingresos", "RETIRO": "Retiros", "COTIZACION": "Cotización"}.get(outbox.event_kind, outbox.event_kind),
+            "type": {"INCLUSION": "Ingreso", "RETIRO": "Retiro", "COTIZACION": "Cotización"}.get(outbox.event_kind, outbox.event_kind),
+            "subject": task_subject,
             "status": outbox.get_status_display(),
             "task_id": remote_id,
             "responsible": str(remote_responsible or local_responsible).strip(),
             "remote_state": str(task_record.get("Estado") or "").strip() if isinstance(task_record, dict) else "",
             "last_attempt": outbox.updated_at if outbox.attempts else None,
             "attempts": outbox.attempts,
-            "safe_error": outbox.safe_error_code,
+            "safe_error": _human_task_error(outbox.safe_error_code),
         })
     zoho_summary = {
         "status": latest_outbox.get_status_display() if latest_outbox else "No preparada",
         "last_attempt": latest_outbox.updated_at if latest_outbox and latest_outbox.attempts else None,
         "attempts": latest_outbox.attempts if latest_outbox else 0,
-        "safe_error": latest_outbox.safe_error_code if latest_outbox else "",
+        "safe_error": _human_task_error(latest_outbox.safe_error_code) if latest_outbox else "",
         "task_id": "",
         "contract_ready": False,
     }
@@ -2373,6 +2467,115 @@ def request_detail(request, public_id):
         target for target in SolicitudColectivo.TRANSITIONS.get(item.status, set())
         if has_internal_permission(request, _transition_permission(target))
     )
+    ingress_items = tuple(ensure_novelty_ingress_items(item)) if response_summary else ()
+    for ingress in ingress_items:
+        ingress.policy_reference = item.primary_policy_reference
+        ingress.individual_documents = novelty_ingress_attachments(item, ingress.item_key)
+        ingress.review_status_display = ingress.review_status
+        ingress.status_display = _human_ingress_status(ingress.status)
+        ingress.review_error_display = ingress.review_error
+        ingress.has_persisted_contact = bool(str(ingress.contact_zoho_id or "").strip())
+        ingress.is_published = ingress.status == NovedadIngresoZoho.Status.PUBLISHED
+        try:
+            ingress_payload = json.loads(decrypt(ingress.encrypted_payload)) if ingress.encrypted_payload else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            ingress_payload = {}
+        ingress.operational_payload = ingress_payload
+        ingress.edit_payload = ingress_payload
+        ingress.life_ramo = str(
+            ingress_payload.get("ramo") or ingress_payload.get("Ramo") or item.branch_name or ""
+        ).strip()
+        ingress.branch_family = resolve_branch_family(ingress.branch_code or item.branch_code, ingress.life_ramo)
+        ingress.is_mobility = ingress.branch_family == "movilidad"
+        ingress.contract_fields = contract_required_ingress_fields(ingress.branch_code or item.branch_code, ingress.life_ramo)
+        # Even when the downstream Riesgos1 contract is pending, the Contact
+        # stage remains an explicit, useful operation for the analyst.
+        ingress.can_process_zoho = True
+        ingress.can_create_contact = bool(
+            ingress.review_status == "NOT_FOUND" and not ingress.has_persisted_contact
+        )
+        ingress.person_status_display = "Encontrada en Zoho." if ingress.has_persisted_contact else "Pendiente de revisión"
+        if not ingress.has_persisted_contact:
+            ingress.policy_status_display = "Pendiente de resolver persona."
+            ingress.can_register_policy = False
+        elif ingress.subrisk_zoho_id:
+            ingress.policy_status_display = "Registrado en póliza."
+            ingress.can_register_policy = False
+        elif ingress.status == NovedadIngresoZoho.Status.BLOCKED and "contrato" in str(ingress.safe_error or "").lower():
+            ingress.policy_status_display = "Contrato pendiente de validación."
+            ingress.can_register_policy = False
+        else:
+            ingress.policy_status_display = "Pendiente."
+            ingress.can_register_policy = bool(ingress.has_persisted_contact and ingress.can_process_zoho)
+        if ingress.has_persisted_contact and not ingress.is_published and ingress.can_process_zoho:
+            ingress.status_display = "Pendiente de registrar ingreso"
+            ingress.get_status_display = lambda: ingress.status_display
+        ingress.display_name = str(
+            ingress_payload.get("display_name")
+            or ingress_payload.get("insured_name")
+            or ingress_payload.get("associate_name")
+            or ""
+        ).strip()
+        ingress.document = str(
+            ingress_payload.get("document")
+            or ingress_payload.get("documento")
+            or ingress_payload.get("insured_document")
+            or ingress_payload.get("associate_document")
+            or ""
+        ).strip()
+        ingress.id_type = str(
+            ingress_payload.get("id_type")
+            or ingress_payload.get("Tipo_ID")
+            or ingress_payload.get("insured_id_type")
+            or ingress_payload.get("associate_id_type")
+            or ""
+        ).strip()
+        ingress.id_type_display = identification_display_label(ingress.id_type)
+        field_labels = (
+            ("Nombres", "first_name"), ("Apellidos", "last_name"),
+            ("Tipo de identificación", "id_type"), ("Identificación", "document"),
+            ("Fecha de nacimiento", "birth_date"), ("Correo", "email"),
+            ("Teléfono", "phone"), ("Fecha de ingreso", "entry_date"),
+            ("Parentesco", "parentesco"), ("Plan", "plan"),
+            ("Placa", "plate"), ("Marca / referencia", "brand"),
+            ("Modelo", "model"), ("Clase", "vehicle_class"),
+            ("Ciudad", "city"), ("Tipo de uso", "use"),
+        )
+        if not ingress.is_mobility:
+            field_labels = tuple((label, key) for label, key in field_labels if key not in {"plate", "brand", "model", "vehicle_class", "city", "use"})
+        ingress.operational_fields = tuple(
+            (label, ingress.id_type_display if key == "id_type" else str(ingress_payload.get(key) or "").strip())
+            for label, key in field_labels if str(ingress_payload.get(key) or "").strip()
+        )
+        raw_error = str(ingress.safe_error or "").strip()
+        if raw_error.startswith("[") and raw_error.endswith("]"):
+            raw_error = ", ".join(
+                part.strip().strip("'\"") for part in raw_error[1:-1].split(",") if part.strip()
+            )
+        ingress.display_error = _human_ingress_error(raw_error)
+        if (
+            ingress.review_status in {"FOUND", "NOT_FOUND"}
+            and ingress.status == NovedadIngresoZoho.Status.BLOCKED
+            and raw_error in {
+                "No fue posible preparar los datos para enviarlos a Zoho.",
+                # Legacy rows may still contain the pre-diagnostic generic
+                # message from this same local TYPEERROR failure.
+                "Zoho rechazó la consulta.",
+            }
+        ):
+            ingress.status_display = "Pendiente · Reintento disponible"
+            ingress.get_status_display = lambda: ingress.status_display
+    ingress_pending = tuple(ingress for ingress in ingress_items if not ingress.is_published)
+    ingress_payload = (
+        getattr(ingress_items[0], "operational_payload", {})
+        if ingress_items else {}
+    )
+    try:
+        identification_choices = identification_choice_pairs()
+    except CatalogUnavailable:
+        # The review screen remains usable if the dynamic catalog cannot be
+        # refreshed. The edit endpoint remains the fail-closed authority.
+        identification_choices = ()
     return render(request, "cotizacion_colectivos/request_detail.html", {
         "item": item, "snapshot": snapshot,
         "transition_form": RequestTransitionForm(
@@ -2389,6 +2592,10 @@ def request_detail(request, public_id):
         "can_approve": has_internal_permission(request, "approve_requests"),
         "can_view_responses": can_view_responses,
         "response_summary": response_summary,
+        "ingress_items": ingress_items,
+        "ingress_pending": ingress_pending,
+        "ingress_payload": ingress_payload,
+        "identification_choices": identification_choices,
         "zoho_summary": zoho_summary,
         "zoho_tasks": tuple(zoho_tasks),
         "task_responsibles": task_responsibles,
@@ -2396,6 +2603,300 @@ def request_detail(request, public_id):
         "has_request_actions": has_request_actions,
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def novelty_ingress_review(request, public_id, item_id):
+    """Read-only Contact lookup for an ingress; never creates or updates Zoho."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
+    try:
+        payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+        data = {
+            "document": payload.get("document") or payload.get("N_mero_de_ID") or payload.get("documento") or "",
+            "document_type": payload.get("id_type") or payload.get("Tipo_ID") or payload.get("tipo_id") or "",
+        }
+        lookup = resolve_contact_by_document(
+            document=str(data["document"]), document_type=str(data["document_type"]),
+        )
+        if lookup.get("status") == "FOUND":
+            item.review_status = "FOUND"
+            item.review_contact_id = str(lookup.get("record_id") or "")
+            item.review_error = ""
+            try:
+                _publish_novelty_ingress_documents(item, payload, item.review_contact_id)
+                item.safe_error = ""
+                item.reconcile_required = False
+            except IndividualAttachmentUncertain:
+                item.safe_error = "El documento requiere conciliación antes de reintentar."
+                item.reconcile_required = True
+            except (IndividualAttachmentBlocked, ValidationError, ZohoError) as exc:
+                item.safe_error = str(exc)[:240]
+            messages.info(request, "Persona encontrada en Zoho.")
+        elif lookup.get("status") == "NOT_FOUND":
+            item.review_status = "NOT_FOUND"
+            item.review_contact_id = ""
+            item.review_error = ""
+            messages.info(request, "Persona no encontrada en Zoho. Puede crearla con la acción explícita.")
+        else:
+            item.review_status = "ERROR"
+            item.review_contact_id = ""
+            item.review_error = "No fue posible consultar la persona en Zoho."
+            messages.warning(request, "No fue posible confirmar la consulta de la persona en Zoho.")
+        item.reviewed_at = timezone.now()
+        item.save(update_fields=("review_status", "review_contact_id", "review_error", "reviewed_at", "safe_error", "reconcile_required", "updated_at"))
+    except Exception:
+        item.review_status = "ERROR"
+        item.review_contact_id = ""
+        item.review_error = "No fue posible consultar la persona en Zoho."
+        item.reviewed_at = timezone.now()
+        item.save(update_fields=("review_status", "review_contact_id", "review_error", "reviewed_at", "updated_at"))
+        messages.warning(request, "No fue posible consultar la persona en Zoho.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def novelty_ingress_edit(request, public_id, item_id):
+    """Persist analyst corrections for the operational ingress payload only."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
+    if item.status == item.Status.PUBLISHED:
+        messages.info(request, "El ingreso ya está publicado y no requiere edición.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    try:
+        payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    allowed = (
+        "first_name", "last_name", "id_type", "document", "birth_date", "email", "phone",
+        "entry_date", "plate", "brand", "model", "vehicle_class", "city", "use",
+        "parentesco", "plan", "rol", "observaciones",
+    )
+    if item.contact_zoho_id:
+        # Once the Contact is confirmed, its identity is immutable here;
+        # operational edits may only complete non-identity fields.
+        allowed = tuple(key for key in allowed if key not in {"id_type", "document"})
+    for key in allowed:
+        if key in request.POST:
+            payload[key] = str(request.POST.get(key) or "").strip()
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    item.encrypted_payload = encrypt(serialized)
+    item.payload_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    item.review_status = ""
+    item.review_contact_id = ""
+    item.review_error = ""
+    item.reviewed_at = None
+    item.save(update_fields=("encrypted_payload", "payload_hash", "review_status", "review_contact_id", "review_error", "reviewed_at", "updated_at"))
+    messages.success(request, "Datos operativos guardados. La respuesta original permanece intacta.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def novelty_ingress_process(request, public_id, item_id):
+    """Explicitly create/reuse the Contact and continue the ingress workflow."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
+    # Older ingress rows may have been materialized before the protected
+    # policy-reference format was restored correctly.  Re-run the local,
+    # idempotent materialization before resolving entities so the canonical
+    # policy ID is recovered without another Zoho lookup or any write.
+    if not item.policy_remote_id:
+        ensure_novelty_ingress_items(item.request)
+        item.refresh_from_db(fields=("policy_remote_id", "contact_zoho_id", "risk_zoho_id", "subrisk_zoho_id", "status", "safe_error", "reconcile_required", "review_status", "review_contact_id"))
+    if item.review_status == "NOT_FOUND" and not item.contact_zoho_id:
+        messages.warning(request, "La persona no existe en Zoho. Créela primero con la acción explícita.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.review_status not in {"FOUND", "NOT_FOUND"} and not item.contact_zoho_id:
+        messages.warning(request, "Revise primero el ingreso en Zoho antes de continuar.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.review_status == "FOUND" and not item.review_contact_id:
+        messages.warning(request, "La revisión de la persona no tiene un Contact confirmado.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.review_status == "FOUND" and item.review_contact_id:
+        item.contact_zoho_id = item.review_contact_id
+    contact_write_expected = False
+    try:
+        payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    life_ramo = canonical_life_group_value(
+        payload.get("ramo") or payload.get("Ramo") or getattr(item.request, "branch_name", "") or ""
+    )
+    life_subrisk_required = life_ramo in LIFE_GROUP_VALUES and LIFE_GROUP_CONTRACTS.get(life_ramo, {}).get("write_enabled", False)
+    branch_key = str(item.branch_code or "").strip().lower()
+    exequial_contract_blocked = branch_key in {"exequial", "86"}
+    if item.status == item.Status.PUBLISHED and item.contact_zoho_id and (not life_subrisk_required or item.subrisk_zoho_id) and not exequial_contract_blocked:
+        messages.info(request, "El ingreso ya fue procesado en Zoho.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    try:
+        profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        if branch_key in {"movilidad", "autos", "40"}:
+            required_entities = ("contact", "risk", "subrisk")
+        elif branch_key in {"salud", "91"}:
+            required_entities = ("contact", "subrisk")
+        elif branch_key in {"exequial", "86"}:
+            # Exequial has no validated Riesgos1 write contract in this flow.
+            # Resolve Contact only, then keep the ingress explicitly blocked.
+            required_entities = ("contact",)
+        elif life_ramo in LIFE_GROUP_VALUES:
+            # Vida Grupo uses Riesgos1 directly for the contracts explicitly
+            # enabled in the central family configuration; it never creates a
+            # Riesgo.  Non-enabled VG products remain Contact-only/blocked.
+            required_entities = ("contact", "subrisk") if LIFE_GROUP_CONTRACTS.get(life_ramo, {}).get("write_enabled") else ("contact",)
+        else:
+            required_entities = ("contact",)
+        subrisk_confirmation = configured_confirmation(
+            "subrisk", profile, legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION"
+        )
+        resolved = resolve_operational_entities(
+            payload=payload, state=item, profile=profile,
+            confirmation=configured_confirmation("contact", profile, legacy_setting="COLECTIVOS_CONTACT_WRITE_CONFIRMATION"),
+            required=required_entities, branch_name=life_ramo,
+            subrisk_confirmation=subrisk_confirmation,
+            on_contact_resolved=lambda contact_id: _publish_novelty_ingress_documents(item, payload, contact_id),
+        )
+        entities = resolved["entities"]
+        item.contact_zoho_id = entities.get("contact", "")
+        item.risk_zoho_id = entities.get("risk", "")
+        item.subrisk_zoho_id = entities.get("subrisk", "")
+        # Person documents from the ingress row use the same guarded,
+        # idempotent attachment publisher as Cotización Individual.  The
+        # client Excel remains response evidence and is excluded by the
+        # attachment lookup helper.
+        item.status = resolved["status"]
+        if life_ramo in LIFE_GROUP_VALUES and not LIFE_GROUP_CONTRACTS.get(life_ramo, {}).get("write_enabled", False):
+            item.status = item.Status.BLOCKED
+            item.safe_error = f"El contrato Zoho de {life_ramo} está pendiente de validación."
+        elif branch_key in {"exequial", "86"}:
+            item.status = item.Status.BLOCKED
+            item.safe_error = "El contrato Zoho de Exequial está pendiente de validación."
+        elif branch_key not in {"", "movilidad", "autos", "40", "salud", "91"} and life_ramo not in LIFE_GROUP_VALUES:
+            item.status = item.Status.BLOCKED
+            item.safe_error = "El contrato Zoho de este ramo está pendiente de validación."
+        else:
+            item.safe_error = ""
+        item.save(update_fields=("contact_zoho_id", "risk_zoho_id", "subrisk_zoho_id", "status", "safe_error", "updated_at"))
+        if item.status == item.Status.PUBLISHED:
+            # A future force_new link must not reuse the pre-write workspace
+            # snapshot.  Invalidate only this policy's preparation cache.
+            _invalidate_novelty_policy_preparation(item)
+        messages.success(request, "Ingreso procesado en Zoho.")
+    except Exception as exc:
+        item.status = item.Status.RECONCILE_REQUIRED if getattr(exc, "request_sent", None) else item.Status.BLOCKED
+        item.reconcile_required = item.status == item.Status.RECONCILE_REQUIRED
+        messages_list = getattr(exc, "messages", None)
+        if getattr(exc, "sdk_code", "") == "TYPEERROR" and getattr(exc, "request_sent", None) is None:
+            item.safe_error = "No fue posible preparar los datos para enviarlos a Zoho."
+        else:
+            item.safe_error = "; ".join(str(message) for message in messages_list)[:240] if messages_list else str(exc)[:240]
+        # Keep the diagnostic useful without logging payloads or personal data.
+        # The SDK facade may normalize an SDKException before it reaches this
+        # view, so include only its safe message/cause metadata when available.
+        cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+        safe_message = " ".join(str(exc).split())[:240]
+        safe_cause = " ".join(str(cause).split())[:240] if cause else ""
+        logger.warning(
+            "colectivos_novelty_ingress_write_failed operation=records.create module=Contacts "
+            "exception=%s category=%s status_code=%s sdk_code=%s zoho_code=%s request_sent=%s "
+            "message=%s detail_field=%s detail_accepted_type=%s detail_given_type=%s "
+            "detail_class=%s detail_index=%s cause_class=%s cause_message=%s "
+            "payload_type=dict records_type=tuple",
+            exc.__class__.__name__, getattr(exc, "category", None),
+            getattr(exc, "status_code", None), getattr(exc, "sdk_code", None),
+            getattr(exc, "zoho_code", None), getattr(exc, "request_sent", None),
+            safe_message, getattr(exc, "detail_field", None),
+            getattr(exc, "detail_accepted_type", None), getattr(exc, "detail_given_type", None),
+            getattr(exc, "detail_class", None), getattr(exc, "detail_index", None),
+            cause.__class__.__name__ if cause else "", safe_cause,
+        )
+        item.save(update_fields=("contact_zoho_id", "risk_zoho_id", "subrisk_zoho_id", "status", "reconcile_required", "safe_error", "updated_at"))
+        if contact_write_expected:
+            messages.warning(request, "No fue posible crear la persona en Zoho; revise el estado operativo.")
+        else:
+            messages.warning(request, "No fue posible continuar el procesamiento en Zoho; revise el estado operativo.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def novelty_ingress_create_person(request, public_id, item_id):
+    """Explicitly create the Contact after a read-only NOT_FOUND review."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
+    if item.contact_zoho_id:
+        messages.info(request, "La persona ya está resuelta en Zoho.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.review_status != "NOT_FOUND":
+        messages.warning(request, "Revise primero la persona y confirme que no existe en Zoho.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    try:
+        payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+        data = {
+            "First_Name": payload.get("first_name") or payload.get("First_Name") or payload.get("nombres") or "",
+            "Last_Name": payload.get("last_name") or payload.get("Last_Name") or payload.get("apellidos") or "",
+            "Tipo_ID": payload.get("id_type") or payload.get("Tipo_ID") or payload.get("tipo_id") or "",
+            "N_mero_de_ID": payload.get("document") or payload.get("N_mero_de_ID") or payload.get("documento") or "",
+            "Date_of_Birth": payload.get("birth_date") or payload.get("Date_of_Birth") or "",
+            "Email": payload.get("email") or payload.get("correo") or payload.get("correo_electronico") or payload.get("Email") or payload.get("email_address") or "",
+            "Phone": payload.get("phone") or payload.get("telefono") or payload.get("telefono_contacto") or payload.get("Phone") or "",
+            "Mobile": payload.get("mobile") or payload.get("celular") or payload.get("Mobile") or "",
+        }
+        required_contract_fields = contract_required_ingress_fields(
+            item.branch_code,
+            payload.get("ramo") or payload.get("Ramo") or item.request.branch_name,
+        )
+        field_labels = {"parentesco": "Parentesco", "plate": "Placa", "model": "Modelo"}
+        missing_contract_fields = [
+            field_labels[field] for field in required_contract_fields if not str(payload.get(field) or "").strip()
+        ]
+        if missing_contract_fields:
+            raise ValidationError(
+                "Completa los siguientes datos antes de registrar el ingreso: "
+                + ", ".join(missing_contract_fields) + "."
+            )
+        profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
+        result = get_contacts_publisher(
+            profile=profile,
+            confirmation=configured_confirmation("contact", profile, legacy_setting="COLECTIVOS_CONTACT_WRITE_CONFIRMATION"),
+        ).create(data, status="Cliente")
+        item.contact_zoho_id = str(result["record_id"])
+        item.review_status = "FOUND"
+        item.review_contact_id = item.contact_zoho_id
+        item.review_error = ""
+        item.reviewed_at = timezone.now()
+        item.status = item.Status.PROCESSING
+        item.safe_error = ""
+        item.reconcile_required = False
+        item.save(update_fields=("contact_zoho_id", "review_status", "review_contact_id", "review_error", "reviewed_at", "status", "safe_error", "reconcile_required", "updated_at"))
+        try:
+            _publish_novelty_ingress_documents(item, payload, item.contact_zoho_id)
+        except IndividualAttachmentUncertain:
+            item.reconcile_required = True
+            item.safe_error = "El documento requiere conciliación antes de reintentar."
+            item.save(update_fields=("reconcile_required", "safe_error", "updated_at"))
+        except (IndividualAttachmentBlocked, ValidationError, ZohoError) as exc:
+            item.safe_error = str(exc)[:240]
+            item.save(update_fields=("safe_error", "updated_at"))
+        messages.success(request, "Persona creada en Zoho. Ahora puede registrar el ingreso en la póliza.")
+    except ContactPublicationUncertain:
+        item.status = item.Status.RECONCILE_REQUIRED
+        item.reconcile_required = True
+        item.safe_error = "El resultado de la creación no pudo confirmarse; requiere conciliación."
+        item.save(update_fields=("status", "reconcile_required", "safe_error", "updated_at"))
+        messages.warning(request, item.safe_error)
+    except (ContactPublishingDisabled, ContactPublicationRejected, ValidationError, ZohoError) as exc:
+        item.status = item.Status.BLOCKED
+        item.safe_error = str(exc)[:240]
+        item.save(update_fields=("status", "safe_error", "updated_at"))
+        messages.warning(request, "No fue posible crear la persona en Zoho. Revise los datos y la configuración.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
 
 
 @never_cache
@@ -2508,7 +3009,7 @@ def request_publish_task(request, public_id, outbox_id):
             return redirect("cotizacion_colectivos:request_detail", public_id=item.public_id)
         outbox.refresh_from_db()
         if outbox.status == outbox.Status.PUBLISHED:
-            messages.success(request, "Tarea publicada correctamente en Zoho Sandbox.")
+            messages.success(request, "Tarea publicada correctamente en Zoho.")
         elif outbox.status == outbox.Status.RECONCILE:
             messages.warning(request, "Resultado incierto: requiere conciliación antes de reintentar.")
         elif not getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
@@ -2524,6 +3025,42 @@ def _access_status_display(access) -> str:
     if access.status in {access.Status.ACTIVE, access.Status.VERIFIED} and access.expires_at <= timezone.now():
         return access.Status.EXPIRED.label
     return access.get_status_display()
+
+
+def _human_ingress_status(status: str) -> str:
+    return {
+        "PENDING": "Pendiente",
+        "PROCESSING": "Procesando",
+        "FOUND": "Encontrado en Zoho",
+        "NOT_FOUND": "No encontrado en Zoho",
+        "PUBLISHED": "Publicado en Zoho",
+        "FAILED": "No se pudo completar",
+        "BLOCKED": "Requiere revisión",
+        "RECONCILE_REQUIRED": "Requiere validación",
+    }.get(str(status or "").strip().upper(), "Pendiente")
+
+
+def _human_ingress_error(value: object) -> str:
+    raw = " ".join(str(value or "").split())
+    if not raw:
+        return ""
+    lowered = raw.casefold()
+    if "contrato zoho" in lowered or "pendiente de validación" in lowered:
+        return "La asociación con la póliza requiere validación antes de continuar."
+    if any(token in lowered for token in ("sdk", "serializer", "policy_remote_id", "reconcile_required", "backend", "production", "sandbox", "legacy")):
+        return "No fue posible completar el registro en Zoho. Revise la información e intente nuevamente."
+    if raw.startswith("Error de procesamiento:"):
+        raw = raw.split(":", 1)[1].strip()
+    return raw[:240]
+
+
+def _human_task_error(value: object) -> str:
+    raw = " ".join(str(value or "").split())
+    if not raw:
+        return ""
+    if any(token in raw.casefold() for token in ("sdk", "serializer", "reconcile_required", "backend", "production", "sandbox", "legacy")):
+        return "No fue posible completar la Tarea. Revise el estado operativo."
+    return raw[:240]
 
 
 @never_cache
@@ -2679,7 +3216,14 @@ def request_novelties_template(request, public_id):
     item = get_object_or_404(SolicitudColectivo, public_id=public_id)
     if not has_internal_permission(request, "export_excel"):
         return permission_denied_response()
-    response = HttpResponse(build_novelties_template(item), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    try:
+        content = build_novelties_template(
+            item,
+            identification_choices=identification_choice_pairs(),
+        )
+    except CatalogUnavailable:
+        return HttpResponse("El catálogo de identificación no está disponible.", status=503)
+    response = HttpResponse(content, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     response["Content-Disposition"] = f'attachment; filename="{download_filename("Novedades", origin=item.client_label, request_id=item.public_id)}"'
     response["Cache-Control"] = "no-store, private"
     return response
@@ -2908,7 +3452,7 @@ def individual_accept(request, token):
     quotation = accept_individual_quotation(quotation=quotation, actor=actor)
     try:
         resolve_accepted_person(quotation=quotation)
-        entity_result = resolve_mobility_entities(quotation=quotation) if quotation.branch_slug == "movilidad" else resolve_common_people_entities(quotation=quotation)
+        entity_result = resolve_mobility_entities(quotation=quotation) if quotation.branch_slug == "movilidad" else resolve_common_people_entities(quotation=quotation, include_subrisk=quotation.branch_slug in {"vida", "salud"})
         if entity_result and entity_result.get("status") == "error":
             messages.warning(request, "Cotización aceptada; no fue posible resolver las entidades de Movilidad.")
         else:
@@ -3061,16 +3605,29 @@ def individual_create_person(request, token):
                 })
         if entity_people:
             entities["people"] = entity_people
-            metadata["zoho_entities"] = entities
+        metadata["zoho_entities"] = entities
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
+        # Re-run the accepted-quotation resolver after a confirmed Contact
+        # CREATE so the next entity in the ramo contract is immediately
+        # recalculated (Vida Grupo: Riesgos1; Movilidad: Riesgo/Riesgos1).
+        try:
+            if quotation.branch_slug == "movilidad":
+                resolve_mobility_entities(quotation=quotation)
+            else:
+                resolve_common_people_entities(
+                    quotation=quotation,
+                    include_subrisk=quotation.branch_slug in {"vida", "salud"},
+                )
+        except Exception:
+            logger.warning("individual_next_entity_resolution_failed quotation_id=%s", quotation.public_id)
         entity_label = "Asegurado" if str(selected.get("role") or "").lower().startswith("asegur") else "Afiliado"
         try:
             publish_pending_for_person(
                 quotation=quotation, document=selected_document, record_id=contact_id,
                 owner_key=str(selected.get("owner_key") or ""),
             )
-            messages.success(request, f"{entity_label} creado y documento procesado en Zoho Sandbox.")
+            messages.success(request, f"{entity_label} creado y documento procesado en Zoho.")
         except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
             messages.warning(request, f"{entity_label} creado. El documento requiere atención: {exc}")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
@@ -3133,6 +3690,11 @@ def individual_complete_person(request, token):
         resolve_accepted_person(quotation=quotation)
         if quotation.branch_slug == "movilidad":
             resolve_mobility_entities(quotation=quotation)
+        else:
+            resolve_common_people_entities(
+                quotation=quotation,
+                include_subrisk=quotation.branch_slug in {"vida", "salud"},
+            )
         messages.success(request, "Datos de la persona guardados; se volvió a validar en Zoho.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
@@ -3181,7 +3743,13 @@ def individual_update_entity(request, token, entity, vehicle_index):
         metadata["zoho_entity_corrections"] = corrections
         quotation.safe_metadata = metadata
         quotation.save(update_fields=("safe_metadata",))
-        resolve_mobility_entities(quotation=quotation)
+        if quotation.branch_slug == "movilidad":
+            resolve_mobility_entities(quotation=quotation)
+        else:
+            resolve_common_people_entities(
+                quotation=quotation,
+                include_subrisk=quotation.branch_slug in {"vida", "salud"},
+            )
         messages.success(request, "Datos propuestos guardados y nuevamente validados.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError):
         raise Http404("Respuesta no encontrada")
@@ -3222,14 +3790,14 @@ def individual_create_risk(request, token, vehicle_index):
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
         try:
             publish_pending_for_risk(quotation=quotation, vehicle_index=vehicle_index, record_id=result["record_id"])
-            messages.success(request, "Riesgo creado y documento procesado en Zoho Sandbox.")
+            messages.success(request, "Riesgo creado y documento procesado en Zoho.")
         except (IndividualAttachmentBlocked, IndividualAttachmentUncertain, ValidationError, ZohoError) as exc:
             messages.warning(request, f"Riesgo creado. El documento requiere atención: {exc}")
     except (RiskPublishingDisabled, RiskPublicationRejected, ValidationError) as exc:
         code = "BLOCKED" if isinstance(exc, RiskPublishingDisabled) else "REJECTED" if isinstance(exc, RiskPublicationRejected) else "VALIDATION"
         if 'item' in locals():
             error_message = (
-                "La creación del Riesgo está bloqueada por la configuración de escritura de Sandbox."
+                "La creación del Riesgo está bloqueada por la configuración de escritura."
                 if code == "BLOCKED" else str(exc)
             )
             item.update({"error_code": code, "error": error_message})
@@ -3293,19 +3861,27 @@ def individual_create_subrisk(request, token, vehicle_index):
         if item.get("status") != "not_found" or item.get("created") or item.get("remote_id") or item.get("riesgos1_id"):
             raise ValidationError("La asociación requiere resolución antes de crear.")
         active_profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox"))
-        result = create_mobility_subrisk_sandbox(
-            item.get("candidate") or {}, profile=active_profile,
-            confirmation=configured_confirmation(
-                "subrisk", active_profile,
-                legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION",
-            ),
-            operational=True,
+        confirmation = configured_confirmation(
+            "subrisk", active_profile,
+            legacy_setting="COLECTIVOS_SUBRISK_WRITE_CONFIRMATION",
         )
+        if quotation.branch_slug in {"salud", "vida"}:
+            # Person branches use the closed Riesgos1 contract directly;
+            # they never pass through a vehicle Risk.
+            result = create_subrisk_sandbox(
+                item.get("candidate") or {}, profile=active_profile,
+                confirmation=confirmation,
+            )
+        else:
+            result = create_mobility_subrisk_sandbox(
+                item.get("candidate") or {}, profile=active_profile,
+                confirmation=confirmation, operational=True,
+            )
         confirmed_id = str(result["record_id"])
         item.update({"status": "created", "created": True, "remote_id": confirmed_id, "riesgos1_id": confirmed_id, "created_at": timezone.now().isoformat()})
         metadata = dict(quotation.safe_metadata or {}); metadata["zoho_entities"]["subrisks"] = subrisks
         quotation.safe_metadata = metadata; quotation.save(update_fields=("safe_metadata",))
-        messages.success(request, "Riesgo asociado a la póliza en Zoho Sandbox.")
+        messages.success(request, "Registro asociado a la póliza en Zoho.")
     except (SubriskPublishingDisabled, SubriskPublicationRejected, ValidationError) as exc:
         item["last_error"] = str(exc)[:180]
         item["last_error_code"] = exc.__class__.__name__[:40]
@@ -3338,7 +3914,10 @@ def individual_create_subrisk(request, token, vehicle_index):
 @never_cache
 @require_http_methods(["POST"])
 def individual_update_responsible(request, token):
-    if not has_internal_permission(request, "approve_responses"):
+    # Choosing the owner of an already prepared Task is normal Colectivos
+    # work, not an approval-only operation.  The publisher still enforces all
+    # independent Zoho write guards when the user later chooses to publish.
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
@@ -3355,38 +3934,21 @@ def individual_update_responsible(request, token):
             email = ""
         update_quotation_responsible(quotation=quotation, option=option, email=email)
         outbox = quotation.task_outbox.filter(event_kind="COTIZACION").order_by("-pk").first()
-        publish_scheduled = False
-        publish_result = "none"
-        if outbox is not None and outbox.status == outbox.Status.PENDING:
-            publish_scheduled = True
+        logger.info(
+            "individual_responsible_updated quotation_id=%s outbox_existing=%s responsible_resolved=%s email_resolved=%s",
+            str(quotation.public_id), bool(outbox), bool(getattr(option, "actual_value", "")), bool(email),
+        )
+        if request.POST.get("publish") == "1" and outbox is not None:
             publish_task_outbox(outbox.pk)
             outbox.refresh_from_db()
             if outbox.status == outbox.Status.PUBLISHED:
-                publish_result = "published"
+                messages.success(request, "Responsable asignado y Tarea publicada correctamente.")
             elif outbox.status == outbox.Status.RECONCILE:
-                publish_result = "reconcile"
-            elif outbox.status == outbox.Status.BLOCKED:
-                publish_result = "blocked"
+                messages.warning(request, "La publicación quedó en conciliación; no se reintentará automáticamente.")
             else:
-                publish_result = "none"
-        elif outbox is not None and outbox.status == outbox.Status.RECONCILE:
-            publish_result = "reconcile"
-        elif outbox is not None and outbox.status == outbox.Status.PUBLISHED:
-            publish_result = "published"
-        elif outbox is not None and outbox.status == outbox.Status.BLOCKED:
-            publish_result = "blocked"
-        logger.info(
-            "individual_responsible_publish quotation_id=%s outbox_existing=%s responsible_resolved=%s email_resolved=%s publish_scheduled=%s publish_result=%s",
-            str(quotation.public_id), bool(outbox), bool(getattr(option, "actual_value", "")), bool(email), publish_scheduled, publish_result,
-        )
-        if publish_result == "published":
-            messages.success(request, "Responsable actualizado y Tarea publicada correctamente.")
-        elif publish_result == "reconcile":
-            messages.warning(request, "Responsable actualizado; la Tarea requiere conciliación y no se reintentará automáticamente.")
-        elif publish_result == "blocked":
-            messages.warning(request, "Responsable actualizado; la Tarea permanece bloqueada por una causa operativa previa.")
+                messages.warning(request, "La Tarea no pudo publicarse; revise el estado operativo.")
         else:
-            messages.success(request, "Responsable actualizado; la Tarea quedó lista para publicación controlada.")
+            messages.success(request, "Responsable actualizado. La Tarea está lista para publicación controlada.")
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError):
         raise Http404("Respuesta no encontrada")
     except ValidationError as exc:
@@ -3397,7 +3959,7 @@ def individual_update_responsible(request, token):
 @never_cache
 @require_http_methods(["POST"])
 def individual_publish_task(request, token):
-    if not has_internal_permission(request, "approve_responses"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
@@ -3428,13 +3990,33 @@ def _human_response_value(key, value):
         return "Sí" if value else "No"
     if value is None or value == "":
         return "Sin información"
+    if key in {
+        "tipo_id", "id_type", "Tipo_ID", "requester_id_type",
+        "affiliate_id_type", "insured_id_type",
+    }:
+        return identification_display_label(value)
+    # Responses and imported workbooks historically persist ISO values as
+    # strings.  Django's ``date`` template filter cannot format those strings,
+    # so normalize only the human-facing response projection here; the signed
+    # source payload remains intact.
+    raw = str(value).strip()
+    if key in {"fecha_nacimiento", "fecha_efectiva", "fecha_ingreso", "fecha_retiro", "birth_date", "entry_date"}:
+        candidate = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            try:
+                parsed = datetime.strptime(raw, "%Y-%m-%d")
+            except ValueError:
+                return value
+        return parsed.strftime("%d/%m/%Y")
     return value
 
 
 @never_cache
 @require_http_methods(["GET"])
 def individual_expedient(request, token):
-    if not has_internal_permission(request, "view_individual_quotation"):
+    if not has_internal_permission(request, "view_requests"):
         return permission_denied_response()
     try:
         public_id = unsign_receipt(token)
@@ -3444,7 +4026,17 @@ def individual_expedient(request, token):
         payload = json.loads(decrypt(quotation.encrypted_payload))
     except (signing.BadSignature, CotizacionIndividual.DoesNotExist, ValueError, json.JSONDecodeError) as exc:
         raise Http404("Respuesta no encontrada") from exc
+    _mark_expedient_notifications_read(request, quotation=quotation)
     schema = get_branch_schema(quotation.branch_slug)
+    relationship_choices = ()
+    if schema.slug in {"vida", "salud"}:
+        try:
+            relationship_choices = subrisk_relationship_choice_pairs()
+            schema = with_relationship_choices(schema, relationship_choices)
+        except CatalogUnavailable:
+            # Keep the review page usable while failing closed on unknown
+            # relationship values; no fabricated options are rendered.
+            relationship_choices = ()
     field_labels = {item.key: item.label for item in schema.fields}
     # Sólo aparece al leer respuestas históricas; el formulario nuevo ya no
     # lo ofrece porque usa Nombres y Apellidos separados.
@@ -3536,7 +4128,7 @@ def individual_expedient(request, token):
             logger.warning("individual_entities_resolution_failed quotation_id=%s", quotation.public_id)
     elif acceptance.get("status") == "accepted" and quotation.branch_slug in {"salud", "vida", "exequial"}:
         try:
-            zoho_entities = resolve_common_people_entities(quotation=quotation)
+            zoho_entities = resolve_common_people_entities(quotation=quotation, include_subrisk=quotation.branch_slug in {"vida", "salud"})
             safe_metadata = quotation.safe_metadata or {}
         except Exception:
             logger.warning("individual_people_resolution_failed quotation_id=%s", quotation.public_id)
@@ -3560,6 +4152,8 @@ def individual_expedient(request, token):
     if people_lookup:
         person_lookup = people_lookup[0]
     for person in people_lookup:
+        candidate = person.get("candidate") if isinstance(person.get("candidate"), dict) else {}
+        person["id_type_display"] = identification_display_label(candidate.get("Tipo_ID") or person.get("id_type"))
         owner_keys = [str(person.get("owner_key") or "")]
         owner_keys.extend(str(key) for key in (person.get("owner_keys") or ()) if key)
         if person.get("role") == "Afiliado":
@@ -3587,6 +4181,8 @@ def individual_expedient(request, token):
                 document.can_publish = _attachment_can_publish(document, risk_remote_id)
             insured = risk.get("insured") if isinstance(risk.get("insured"), dict) else None
             if insured is not None:
+                candidate = insured.get("candidate") if isinstance(insured.get("candidate"), dict) else {}
+                insured["id_type_display"] = identification_display_label(candidate.get("Tipo_ID") or insured.get("id_type"))
                 insured["documents"] = tuple(documents_by_owner.get(f"{owner_key}-insured", ()))
                 insured_remote_id = str(insured.get("remote_id") or insured.get("contact_id") or "").strip()
                 for document in insured["documents"]:
@@ -3615,7 +4211,12 @@ def individual_expedient(request, token):
     outboxes = tuple(quotation.task_outbox.all())
     latest_outbox = max(outboxes, key=lambda row: (row.updated_at, row.pk)) if outboxes else None
     task_responsibles = ()
-    if latest_outbox and not (context.get("task_responsible") or safe_metadata.get("task_responsible")):
+    task_requires_responsible = bool(
+        latest_outbox
+        and latest_outbox.status == latest_outbox.Status.PENDING
+        and not (context.get("task_responsible") or safe_metadata.get("task_responsible"))
+    )
+    if task_requires_responsible:
         try:
             task_responsibles = task_responsible_options(collective_only=True)
         except Exception:
@@ -3650,6 +4251,11 @@ def individual_expedient(request, token):
         attachment for attachment in individual_attachments
         if getattr(attachment, "is_request_support", False)
     )
+    try:
+        identification_choices = identification_choice_pairs()
+    except CatalogUnavailable:
+        # Never fabricate identity types when the dynamic catalog is absent.
+        identification_choices = ()
     return render(request, "cotizacion_colectivos/individual/detail.html", {
         "quotation": quotation,
         "schema": schema,
@@ -3680,6 +4286,9 @@ def individual_expedient(request, token):
         "individual_attachments": individual_attachments,
         "support_attachments": support_attachments,
         "task_responsibles": task_responsibles,
+        "task_requires_responsible": task_requires_responsible,
+        "identification_choices": identification_choices,
+        "relationship_choices": relationship_choices,
         "individual_token": token,
         "person_creation_blocked": True,
         "policy_creation_blocked": True,

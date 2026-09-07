@@ -26,16 +26,71 @@ class CollectiveBranch:
     special_rules: tuple[str, ...] = ()
 
 
+# Vida Grupo is one functional family for capture and Contact resolution.
+# Write support is intentionally tracked separately because only VG deudores
+# has a profiled Riesgos1 record-level contract in this repository.
+LIFE_GROUP_VALUES = (
+    "VG deudores", "VG patronal", "VG voluntario", "VG legal", "VG mixto",
+    "VG flexibilizacion", "VG flexibilización",
+)
+LIFE_GROUP_CONTRACTS = {
+    value: {
+        "write_enabled": value == "VG deudores",
+        "required_ingress_fields": ("parentesco",) if value == "VG deudores" else (),
+    }
+    for value in LIFE_GROUP_VALUES
+}
+
+
+def contract_required_ingress_fields(branch_code: object = "", branch_name: object = "") -> tuple[str, ...]:
+    """Return fields required by the already-confirmed write contract.
+
+    This is deliberately derived from the central branch contracts.  It is
+    consumed by both the external form and pre-write validation so the UI
+    cannot drift from the builder requirements.
+    """
+    code = str(branch_code or "").strip().lower()
+    ramo = canonical_life_group_value(branch_name)
+    if ramo in LIFE_GROUP_CONTRACTS:
+        return tuple(LIFE_GROUP_CONTRACTS[ramo].get("required_ingress_fields", ()))
+    if code in {"40", "movilidad", "autos"}:
+        # build_risk_payload requires a valid plate and model; the remaining
+        # vehicle attributes are optional in the confirmed Risk contract.
+        return ("plate", "model")
+    return ()
+
+
+def canonical_life_group_value(value: object) -> str:
+    """Return the contract key for a Vida Grupo product when it is known.
+
+    Policy snapshots may carry the human branch label (for example
+    ``Vida grupo de deudores``) while the Zoho contract is keyed by the
+    canonical ``VG deudores`` value.  Keeping this normalization here avoids
+    each workflow inventing its own branch matching rules.
+    """
+    normalized = _normalize_branch_value(value)
+    aliases = {
+        _normalize_branch_value("Vida grupo de deudores"): "VG deudores",
+        _normalize_branch_value("Vida grupo deudores"): "VG deudores",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    for candidate in LIFE_GROUP_VALUES:
+        if _normalize_branch_value(candidate) == normalized:
+            return candidate
+    return str(value or "").strip()
+
+
 COLLECTIVE_BRANCH_CONFIG: dict[str, CollectiveBranch] = {
     "91": CollectiveBranch("91", "salud-colectivo", "Salud colectivo", "Colectivos", ("Salud colectivo",), "people_group", "person"),
     "86": CollectiveBranch("86", "exequial-colectivo", "Exequial colectivo", "Colectivos", ("Exequial colectivo",), "family_group", "person", special_rules=("El codigo 86 tambien existe para Exequial individual; exigir valor Zoho exacto.",)),
     "28": CollectiveBranch("28", "hogar-colectivo", "Hogar colectivo", "Colectivos", ("Hogar colectivo",), "property", "property"),
     "83": CollectiveBranch(
         "83", "vida-grupo-deudores", "Vida grupo deudores", "Colectivos",
-        (
-            "VG deudores", "Vida grupo deudores", "VG voluntario", "VG voluntaria",
-            "VG flexibilización", "VG legal", "VG mixto", "VG patronal",
-        ),
+        # Keep only one accent variant in the Zoho allowlist; the unaccented
+        # spelling remains a local alias recognized by the family resolver.
+        ("VG deudores", "VG patronal", "VG voluntario", "VG legal", "VG mixto",
+         "VG flexibilización", "Vida grupo deudores", "VG voluntaria"),
         "debtor_group", "obligation",
         special_rules=("Zoho usa actualmente el valor de picklist VG deudores.", "Obligacion, saldo y entidad acreedora siguen pendientes de API name confirmado."),
     ),
@@ -109,10 +164,7 @@ def _normalize_branch_value(value: object) -> str:
 
 _BRANCH_FAMILY_ALIASES = {
     _normalize_branch_value(value): "vida"
-    for value in (
-        "VG deudores", "Vida grupo deudores", "VG voluntario", "VG voluntaria",
-        "VG flexibilización", "VG legal", "VG mixto", "VG patronal",
-    )
+    for value in (*LIFE_GROUP_VALUES, "Vida grupo deudores", "VG voluntaria")
 }
 
 
