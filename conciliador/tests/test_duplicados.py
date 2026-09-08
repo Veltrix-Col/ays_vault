@@ -6,7 +6,11 @@ from datetime import date
 import pandas as pd
 
 from conciliador.rules.base import RuleContext
-from conciliador.rules.duplicados import IdentidadInconsistenteRule, NovedadContradictoriaRule
+from conciliador.rules.duplicados import (
+    IdentidadInconsistenteRule,
+    NovedadContradictoriaRule,
+    detectar_inconsistencias_identidad,
+)
 
 NOVEDADES_COLUMNAS = ["placa", "documento", "nombre", "estado_novedad", "fecha_novedad",
                        "fecha_ingreso", "fecha_retiro", "valor_novedad", "observaciones"]
@@ -124,6 +128,57 @@ class IdentidadInconsistenteRuleTests(unittest.TestCase):
 
     def test_dataframes_vacios_no_falla(self):
         self.assertEqual(self.regla.generar(_ctx()), [])
+
+    def test_reporta_subriesgo_distinto_para_el_mismo_asegurado(self):
+        # Caso B: mismo afiliado+asegurado (A1, P1), subriesgo "1" solo en el
+        # cobro y subriesgo "2" solo en Zoho -- debe consolidarse en UN incidente,
+        # no en un "huerfano" y un "ausente" separados.
+        cobro = self._cobro([
+            {"documento_titular": "A1", "subriesgo": "1", "documento": "P1", "clave": "A1_P1_1"},
+        ])
+        relacion = self._relacion([
+            {"documento_titular": "A1", "subriesgo": "2", "documento": "P1", "nombre": "P1",
+             "nombre_titular": "A1", "parentesco": "Titular", "estado_asegurado": "Activo",
+             "valor_zoho": 100.0, "clave": "A1_P1_2"},
+        ])
+        incidentes = self.regla.generar(_ctx(cobro=cobro, relacion=relacion))
+        self.assertEqual(len(incidentes), 1)
+        incidente = incidentes[0]
+        self.assertIn("subriesgo", incidente.tipo_incidente.lower())
+        self.assertIn("A1", incidente.observacion)
+        self.assertIn("P1", incidente.observacion)
+        self.assertIn("1", incidente.observacion)
+        self.assertIn("2", incidente.observacion)
+
+    def test_no_reporta_subriesgo_distinto_si_el_asegurado_no_coincide(self):
+        # Subriesgos distintos, pero tambien aseguradores distintos: no es un
+        # cambio de subriesgo de la misma persona, son dos huerfanos/ausentes
+        # genuinamente independientes -- no debe consolidarse.
+        cobro = self._cobro([
+            {"documento_titular": "A1", "subriesgo": "1", "documento": "P1", "clave": "A1_P1_1"},
+        ])
+        relacion = self._relacion([
+            {"documento_titular": "A1", "subriesgo": "2", "documento": "Q1", "nombre": "Q1",
+             "nombre_titular": "A1", "parentesco": "Conyuge", "estado_asegurado": "Activo",
+             "valor_zoho": 100.0, "clave": "A1_Q1_2"},
+        ])
+        self.assertEqual(self.regla.generar(_ctx(cobro=cobro, relacion=relacion)), [])
+
+    def test_detectar_inconsistencias_devuelve_claves_a_excluir(self):
+        cobro = self._cobro([
+            {"documento_titular": "A1", "subriesgo": "1", "documento": "P1", "clave": "A1_P1_1"},
+        ])
+        relacion = self._relacion([
+            {"documento_titular": "A1", "subriesgo": "2", "documento": "P1", "nombre": "P1",
+             "nombre_titular": "A1", "parentesco": "Titular", "estado_asegurado": "Activo",
+             "valor_zoho": 100.0, "clave": "A1_P1_2"},
+        ])
+        incidentes, claves_cobro, claves_relacion = detectar_inconsistencias_identidad(
+            _ctx(cobro=cobro, relacion=relacion)
+        )
+        self.assertEqual(len(incidentes), 1)
+        self.assertEqual(claves_cobro, {"A1_P1_1"})
+        self.assertEqual(claves_relacion, {"A1_P1_2"})
 
 
 if __name__ == "__main__":

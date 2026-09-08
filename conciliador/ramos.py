@@ -18,6 +18,7 @@ from conciliador.rules.ingresos import IngresoNuevoSinPersonaRule
 from conciliador.rules.presencia import (
     ActivoAusenteEnCobroRule,
     DatoIncompletoExcluidoConCobroRule,
+    ExcluidoConCobroSinActualizarRule,
     ExcluidoIndebidoEnCobroRule,
     HuerfanoEnCobroRule,
 )
@@ -37,6 +38,7 @@ from conciliador.sources.zoho_api import cargar_novedades_api, cargar_personas_a
 
 _REGLAS_PRESENCIA = [
     DatoIncompletoExcluidoConCobroRule(),
+    ExcluidoConCobroSinActualizarRule(),
     ActivoAusenteEnCobroRule(),
     ExcluidoIndebidoEnCobroRule(),
     HuerfanoEnCobroRule(),

@@ -18,16 +18,26 @@ from conciliador.rules.base import IncidentRule, RuleContext
 
 def esperado_en_cobro(fila, mes: int, anio: int) -> bool:
     """Politica de negocio comun a todos los ramos: cuando un registro de
-    la relacion de Zoho deberia aparecer facturado este periodo."""
+    la relacion de Zoho deberia aparecer facturado este periodo.
+
+    Estados reales del picklist `Riesgos1.Estado` (docs/zoho/*/latest/
+    picklists.json): Activo, Activo con ajuste, Activo sin cobro, Excluido
+    con cobro, Excluido, Cancelado, Congelado. "Activo con ajuste" factura
+    igual que "Activo" (solo cambia el valor, no si debe aparecer en el
+    cobro) -- antes solo se reconocia "Activo" exacto, asi que cualquier
+    registro "Activo con ajuste" caia al `return False` final y se reportaba
+    como "Excluido en Zoho pero sigue apareciendo en el cobro" en vez de,
+    correctamente, una diferencia de valor. "Activo sin cobro" es justo lo
+    opuesto: activo pero deliberadamente sin facturar, se mantiene en False."""
     estado = strip_accents(fila["estado_asegurado"]).lower()
-    if estado == "activo":
+    if estado in ("activo", "activo con ajuste"):
         return True
     if estado.startswith("excluido con cobro"):
         fecha_retiro = fila["fecha_retiro"]
         if pd.isna(fecha_retiro):
             return True  # dato incompleto: se asume que sigue facturando; DatoIncompletoExcluidoConCobroRule lo marca aparte
         return fecha_retiro.month == mes and fecha_retiro.year == anio
-    return False  # Excluido normal, u otro estado no facturable
+    return False  # Excluido, Activo sin cobro, Cancelado, Congelado, u otro estado no facturable
 
 
 def con_columna_esperado(relacion: pd.DataFrame, mes: int, anio: int) -> pd.DataFrame:

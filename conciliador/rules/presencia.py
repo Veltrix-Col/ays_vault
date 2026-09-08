@@ -1,12 +1,13 @@
-"""Reglas sobre presencia/ausencia de registros entre Zoho y el cobro
-(las 4 diferencias que se piden en cualquier ramo: activos que no aparecen,
-excluidos que siguen apareciendo, y registros del cobro sin relacion)."""
+"""Reglas sobre presencia/ausencia de registros entre Zoho y el cobro: activos
+que no aparecen, excluidos que siguen apareciendo, registros del cobro sin
+relacion, y 'excluido con cobro' que ya paso su mes de gracia."""
 
 from __future__ import annotations
 
 from conciliador.domain.models import Incidente
 from conciliador.parsing.normalizadores import strip_accents
 from conciliador.rules.base import RuleContext, buscar_novedad, incidente_base
+from conciliador.rules.duplicados import detectar_inconsistencias_identidad
 
 
 class DatoIncompletoExcluidoConCobroRule:
@@ -30,11 +31,47 @@ class DatoIncompletoExcluidoConCobroRule:
         return incidentes
 
 
+class ExcluidoConCobroSinActualizarRule:
+    """'Excluido con cobro' cuyo mes de gracia (fecha_retiro) ya paso y que
+    ya no aparece en el cobro del asegurador.
+
+    Esto es lo esperado -- el asegurador ya dejo de cobrarlo, ver
+    `conciliador.engine.esperado_en_cobro` -- pero significa que la baja ya
+    quedo confirmada y el estado en Zoho deberia actualizarse de 'Excluido
+    con cobro' a 'Excluido' llano. Sin esta regla, `ActivoAusenteEnCobroRule`
+    no lo reporta (no es 'esperado' fuera del mes de gracia) y el registro
+    queda colgado en 'Excluido con cobro' sin que nadie lo note."""
+
+    def generar(self, ctx: RuleContext) -> list[Incidente]:
+        es_excluido_con_cobro = ctx.relacion["estado_asegurado"].apply(
+            lambda e: strip_accents(e).lower().startswith("excluido con cobro")
+        )
+        vencidos = ctx.relacion[
+            es_excluido_con_cobro & ctx.relacion["fecha_retiro"].notna() & ~ctx.relacion["esperado"]
+            & ~ctx.relacion[ctx.clave_col].isin(ctx.claves_cobro)
+        ]
+        incidentes = []
+        for _, fila in vencidos.iterrows():
+            reportado, detalle = buscar_novedad(fila[ctx.clave_col], fila["documento"], ctx)
+            incidentes.append(incidente_base(
+                ctx, fila, "Excluido con cobro que ya no aparece en el cobro: actualizar estado a Excluido en Zoho",
+                reportado_en_novedades=reportado, detalle_novedad=detalle,
+                observacion=("El asegurador ya dejo de cobrar este registro (su mes de gracia como 'Excluido con "
+                              "cobro' ya paso). El estado en Zoho deberia actualizarse a 'Excluido'."),
+            ))
+        return incidentes
+
+
 class ActivoAusenteEnCobroRule:
     """Activo (o excluido-con-cobro vigente) en Zoho que no aparece en el cobro."""
 
     def generar(self, ctx: RuleContext) -> list[Incidente]:
-        faltantes = ctx.relacion[ctx.relacion["esperado"] & ~ctx.relacion[ctx.clave_col].isin(ctx.claves_cobro)]
+        _, _, claves_relacion_excl = detectar_inconsistencias_identidad(ctx)
+        faltantes = ctx.relacion[
+            ctx.relacion["esperado"]
+            & ~ctx.relacion[ctx.clave_col].isin(ctx.claves_cobro)
+            & ~ctx.relacion[ctx.clave_col].isin(claves_relacion_excl)
+        ]
         incidentes = []
         for _, fila in faltantes.iterrows():
             reportado, detalle = buscar_novedad(fila[ctx.clave_col], fila["documento"], ctx)
@@ -70,7 +107,11 @@ class HuerfanoEnCobroRule:
     """Registro en el cobro que no existe en la relacion de asegurados de Zoho."""
 
     def generar(self, ctx: RuleContext) -> list[Incidente]:
-        huerfanas = ctx.cobro[~ctx.cobro[ctx.clave_col].isin(ctx.claves_relacion)]
+        _, claves_cobro_excl, _ = detectar_inconsistencias_identidad(ctx)
+        huerfanas = ctx.cobro[
+            ~ctx.cobro[ctx.clave_col].isin(ctx.claves_relacion)
+            & ~ctx.cobro[ctx.clave_col].isin(claves_cobro_excl)
+        ]
         incidentes = []
         for _, fila in huerfanas.iterrows():
             reportado, detalle = buscar_novedad(fila[ctx.clave_col], fila["documento"], ctx)
