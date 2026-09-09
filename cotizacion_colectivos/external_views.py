@@ -80,6 +80,29 @@ from .services.preparations import load_policy_preparation
 from .zoho import get_colectivos_profile
 
 
+_ACTIONABLE_DRAFT_ACTIONS = (
+    CambioSolicitudColectivo.Action.INCLUDE,
+    CambioSolicitudColectivo.Action.RETIRE,
+    CambioSolicitudColectivo.Action.MODIFY,
+)
+
+
+def _prepared_draft_markers(response):
+    """Return only functional actions explicitly prepared in the draft.
+
+    Policy records are rendered as context elsewhere in the portal.  A
+    ``SIN_CAMBIOS`` marker is a valid representation of that context, but it
+    is not a client-prepared novelty and must never contribute to the prepared
+    counter or cards.
+    """
+    if response is None:
+        return ()
+    return response.changes.filter(
+        functional_field="accion",
+        action__in=_ACTIONABLE_DRAFT_ACTIONS,
+    ).order_by("position", "id")
+
+
 logger = logging.getLogger("cotizacion_colectivos")
 
 
@@ -593,7 +616,10 @@ def portal(request):
     prepared_changes = []
     prepared_edit_rows = []
     if latest:
-        for change in latest.changes.all():
+        actionable_markers = _prepared_draft_markers(latest)
+        for change in latest.changes.filter(
+            action__in=_ACTIONABLE_DRAFT_ACTIONS,
+        ).all():
             if not change.encrypted_new_value:
                 continue
             try:
@@ -602,7 +628,7 @@ def portal(request):
                 value = ""
             if value:
                 saved_preview.append({"action": change.get_action_display(), "field": change.functional_field, "value": value})
-        for marker in latest.changes.filter(functional_field="accion").order_by("position", "id"):
+        for marker in actionable_markers:
             values = {}
             for field_change in latest.changes.filter(position=marker.position, action=marker.action).exclude(functional_field="accion"):
                 try:
