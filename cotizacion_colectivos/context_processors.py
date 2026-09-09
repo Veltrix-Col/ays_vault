@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from django.core.exceptions import ImproperlyConfigured
+
 from .models import NotificacionColectivos, NotificacionCotizacionIndividual
-from .actors import get_internal_actor, public_internal_access_enabled
+from .actors import get_internal_actor
 from .permissions import has_internal_permission
 
 
@@ -18,26 +20,23 @@ def colectivos_navigation(request):
         ),
         "billing_exceptions": has_internal_permission(request, "view_billing_exceptions"),
     }
-    if public_internal_access_enabled():
+    # Use the same actor boundary as Colectivos views.  In Production a
+    # valid Intranet/SSO request may carry an AnonymousUser while
+    # ``delegated_access`` identifies the already-authorized internal actor.
+    # ``create=False`` keeps this read-only context processor from provisioning
+    # actors or weakening the access gate.
+    try:
         actor = get_internal_actor(request, create=False)
-        if actor is None:
-            return {"colectivos_unread_notifications": 0, "colectivos_navigation": navigation}
-        return {
-            "colectivos_unread_notifications": NotificacionColectivos.objects.filter(
-                user=actor, read_at__isnull=True, notification_type="CLIENT_RESPONSE",
-            ).count() + NotificacionCotizacionIndividual.objects.filter(
-                user=actor, read_at__isnull=True,
-            ).count(),
-            "colectivos_navigation": navigation,
-        }
-    if not request.user.is_authenticated or not request.user.is_active:
+    except ImproperlyConfigured:
+        actor = None
+    if actor is None:
         return {"colectivos_unread_notifications": 0, "colectivos_navigation": navigation}
     return {
         "colectivos_unread_notifications": NotificacionColectivos.objects.filter(
-            user=request.user, read_at__isnull=True,
+            user=actor, read_at__isnull=True,
             notification_type="CLIENT_RESPONSE",
         ).count() + NotificacionCotizacionIndividual.objects.filter(
-            user=request.user, read_at__isnull=True,
+            user=actor, read_at__isnull=True,
         ).count(),
         "colectivos_navigation": navigation,
     }

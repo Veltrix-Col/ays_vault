@@ -297,12 +297,21 @@
     if (summary) summary.textContent = "Editar información";
     const form = edit.querySelector("form");
     if (!form) return;
+    const fieldPlaceholders = {
+      documento: "Ej. 1030123456", document: "Ej. 1030123456",
+      nombres: "Ej. Juan Carlos", apellidos: "Ej. Pérez Gómez",
+      correo: "Ej. usuario@correo.com", email: "Ej. usuario@correo.com",
+      phone: "Ej. 3001234567", telefono: "Ej. 3001234567",
+      fecha_nacimiento: "AAAA-MM-DD", fecha_ingreso: "AAAA-MM-DD",
+      fecha_retiro: "AAAA-MM-DD", observaciones: "Información adicional (opcional)",
+    };
     const addField = (name, labelText, type, value) => {
       if (form.querySelector(`[name="${name}"]`)) return;
       const label = document.createElement("label");
       label.textContent = labelText;
       const input = document.createElement("input");
       input.name = name; input.type = type || "text"; input.value = value || "";
+      if (fieldPlaceholders[name]) input.placeholder = fieldPlaceholders[name];
       label.appendChild(input);
       const submit = form.querySelector('button[type="submit"]');
       form.insertBefore(label, submit || null);

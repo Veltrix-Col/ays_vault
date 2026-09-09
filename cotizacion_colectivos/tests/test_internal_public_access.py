@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from cotizacion_colectivos.actors import get_internal_actor
+from cotizacion_colectivos.context_processors import colectivos_navigation
 from cotizacion_colectivos.forms import RequestCreateForm, RequestEditForm, RequestFilterForm
+from cotizacion_colectivos.models import NotificacionColectivos, SolicitudColectivo
 from cotizacion_colectivos.permissions import has_internal_permission
 
 
@@ -72,3 +77,62 @@ class InternalPublicAccessTests(TestCase):
     @override_settings(COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False)
     def test_future_inherited_mode_keeps_normal_permission_checks(self):
         self.assertFalse(has_internal_permission(self.request, "view_requests"))
+
+
+@override_settings(
+    COLECTIVOS_INTERNAL_PUBLIC_ACCESS=False,
+    COLECTIVOS_TECHNICAL_ACTOR_USERNAME="colectivos-technical-test",
+)
+class NotificationNavigationActorTests(TestCase):
+    def _notification(self, user):
+        request = SolicitudColectivo.objects.create(
+            public_id="COL-NOTIFICATION-TEST",
+            source_kind="company",
+            source_reference_hash="a" * 64,
+            policy_reference_hash="b" * 64,
+            encrypted_policy_token="token",
+            masked_policy_reference="Póliza 1234",
+            client_label="Cliente de prueba",
+            branch_code="91",
+            branch_name="VG deudores",
+            request_type=SolicitudColectivo.RequestType.UPDATE,
+            assigned_to=user,
+            deadline=timezone.localdate(),
+            zoho_profile="sandbox",
+            encrypted_snapshot="{}",
+            created_by=user,
+        )
+        return NotificacionColectivos.objects.create(
+            user=user,
+            request=request,
+            notification_type="CLIENT_RESPONSE",
+            title="Respuesta recibida",
+            message="Nueva respuesta",
+            deduplication_key="notification-test",
+        )
+
+    def test_authenticated_user_gets_unread_count(self):
+        user = get_user_model().objects.create_user("internal-user", is_active=True)
+        request = RequestFactory().get("/")
+        request.user = user
+        self._notification(user)
+
+        self.assertEqual(colectivos_navigation(request)["colectivos_unread_notifications"], 1)
+
+    def test_valid_delegated_anonymous_request_gets_unread_count(self):
+        actor = get_user_model().objects.create_user("colectivos-technical-test", is_active=True)
+        actor.set_unusable_password()
+        actor.save(update_fields=("password",))
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+        request.delegated_access = SimpleNamespace(allowed=True)
+        request.inherited_tool_application = "cotizacion_colectivos"
+        self._notification(actor)
+
+        self.assertEqual(colectivos_navigation(request)["colectivos_unread_notifications"], 1)
+
+    def test_anonymous_request_without_delegation_gets_zero(self):
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+
+        self.assertEqual(colectivos_navigation(request)["colectivos_unread_notifications"], 0)
