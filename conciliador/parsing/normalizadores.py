@@ -54,6 +54,25 @@ def parse_cop(valor) -> float:
         return 0.0
 
 
+def parse_cop_es(valor) -> float:
+    """Parsea montos en formato colombiano/es: '.' separador de miles, ','
+    separador decimal (ej. '$26.478,95' -> 26478.95, '$529.579' -> 529579.0).
+    Distinto de `parse_cop`, que asume el formato inverso (',' miles, '.'
+    decimales, ej. 'CO$ 167,171.00')."""
+    if pd.isna(valor):
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = re.sub(r"[^\d,.\-]", "", str(valor))
+    if not texto:
+        return 0.0
+    texto = texto.replace(".", "").replace(",", ".")
+    try:
+        return float(texto)
+    except ValueError:
+        return 0.0
+
+
 def parse_miles_punto(valor) -> float:
     """Parsea numeros de texto donde '.' se usa como separador de miles
     (ej. '167.171' -> 167171.0), salvo que el ultimo grupo no tenga 3 digitos,

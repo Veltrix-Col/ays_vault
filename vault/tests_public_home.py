@@ -60,13 +60,14 @@ class PublicHomeTests(TestCase):
     def test_catalog_renders_authorized_applications_without_system_information(self):
         response = self.client.get("/")
         self.assertContains(response, 'class="application-card area-package"', count=3)
-        self.assertContains(response, 'data-tool-card', count=6)
+        self.assertContains(response, 'data-tool-card', count=7)
         self.assertContains(response, "CardManager")
         self.assertContains(response, ">SOAT<")
         self.assertContains(response, ">Reporte de clientes con novedades<")
         self.assertContains(response, ">Cotización Individual<")
         self.assertContains(response, ">Invitaciones a Aseguradoras<")
         self.assertContains(response, "Conciliador de Facturación")
+        self.assertContains(response, "Excepciones de Facturación")
         self.assertNotContains(response, "Solicitudes y Renovaciones")
         self.assertNotContains(response, "Cotización – Colectivos")
         self.assertNotContains(response, 'class="application-logo application-logo--cardmanager"')
@@ -96,6 +97,7 @@ class PublicHomeTests(TestCase):
                     "Cotización Individual",
                     "Invitaciones a Aseguradoras",
                     "Conciliador de Facturación",
+                    "Excepciones de Facturación",
                 ),
             },
         )
@@ -111,7 +113,7 @@ class PublicHomeTests(TestCase):
         self.assertContains(response, f'href="{reverse("area_home", args=["operaciones"])}"')
         self.assertContains(response, f'href="{reverse("area_home", args=["colectivos"])}"')
         self.assertContains(response, "1 herramientas")
-        self.assertContains(response, "4 herramientas")
+        self.assertContains(response, "5 herramientas")
 
     def test_area_subhomes_have_the_exact_taxonomy(self):
         expected = {
@@ -122,6 +124,7 @@ class PublicHomeTests(TestCase):
                 "Cotización Individual",
                 "Invitaciones a Aseguradoras",
                 "Conciliador de Facturación",
+                "Excepciones de Facturación",
             ),
         }
         for slug, names in expected.items():
@@ -141,7 +144,7 @@ class PublicHomeTests(TestCase):
             colectivos,
             f'href="{reverse("cotizacion_colectivos:request_list")}"',
         )
-        self.assertContains(colectivos, 'class="application-card"', count=4)
+        self.assertContains(colectivos, 'class="application-card"', count=5)
         cartera = self.client.get(reverse("area_home", args=["cartera"]))
         self.assertNotContains(cartera, "Centro operativo")
         self.assertNotContains(cartera, "SOAT")
@@ -159,6 +162,7 @@ class PublicHomeTests(TestCase):
         self.assertEqual(urls["Reporte de clientes con novedades"], reverse("cotizacion_colectivos:novelties_index"))
         self.assertEqual(urls["Cotización Individual"], reverse("cotizacion_colectivos:individual_index"))
         self.assertEqual(urls["Invitaciones a Aseguradoras"], reverse("cotizacion_colectivos:invitations_index"))
+        self.assertEqual(urls["Excepciones de Facturación"], reverse("cotizacion_colectivos:billing_exception_list"))
         for route_name in (
             "cotizacion_colectivos:novelties_client_search",
             "cotizacion_colectivos:individual_client_search",

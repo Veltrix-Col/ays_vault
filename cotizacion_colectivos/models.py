@@ -151,7 +151,11 @@ class ColectivosTaskOutbox(models.Model):
         CotizacionIndividual, null=True, blank=True, on_delete=models.CASCADE,
         related_name="task_outbox",
     )
-    event_kind = models.CharField(max_length=16)
+    billing_case = models.ForeignKey(
+        "BillingOperationalCase", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="task_outbox",
+    )
+    event_kind = models.CharField(max_length=24)
     event_version = models.PositiveIntegerField(default=1)
     idempotency_key = models.CharField(max_length=96, unique=True, editable=False)
     encrypted_payload = models.TextField(editable=False)
@@ -166,9 +170,154 @@ class ColectivosTaskOutbox(models.Model):
     class Meta:
         constraints = (
             models.CheckConstraint(
-                condition=(models.Q(request__isnull=False, quotation__isnull=True) | models.Q(request__isnull=True, quotation__isnull=False)),
+                condition=(
+                    models.Q(request__isnull=False, quotation__isnull=True, billing_case__isnull=True)
+                    | models.Q(request__isnull=True, quotation__isnull=False, billing_case__isnull=True)
+                    | models.Q(request__isnull=True, quotation__isnull=True, billing_case__isnull=False)
+                ),
                 name="colect_task_outbox_one_source",
             ),
+        )
+
+
+class BillingExceptionRefreshRun(models.Model):
+    """Ejecución completa; sólo SUCCESS puede cambiar el snapshot vigente."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pendiente"
+        RUNNING = "RUNNING", "En curso"
+        SUCCESS = "SUCCESS", "Completada"
+        FAILED = "FAILED", "Fallida"
+
+    profile = models.CharField(max_length=12, default="production")
+    as_of = models.DateField()
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="billing_exception_refreshes",
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    counts = models.JSONField(default=dict, blank=True)
+    safe_error = models.CharField(max_length=240, blank=True)
+
+    class Meta:
+        ordering = ("-requested_at", "-pk")
+        constraints = (
+            models.UniqueConstraint(
+                fields=("profile",),
+                condition=models.Q(status__in=("PENDING", "RUNNING")),
+                name="colect_bill_one_active_run",
+            ),
+        )
+
+
+class BillingTechnicalException(models.Model):
+    class DetectionStatus(models.TextChoices):
+        DETECTED = "DETECTED", "Detectada"
+        NOT_DETECTED = "NOT_DETECTED", "Ya no detectada"
+
+    exception_key = models.CharField(max_length=500, unique=True)
+    source = models.CharField(max_length=40)
+    exception_type = models.CharField(max_length=40, db_index=True)
+    rule_code = models.CharField(max_length=120)
+    reason = models.CharField(max_length=500)
+    source_reference = models.CharField(max_length=255)
+    policy_id = models.CharField(max_length=40, blank=True)
+    policy_number = models.CharField(max_length=120, db_index=True)
+    client_name = models.CharField(max_length=255, blank=True)
+    insurer = models.CharField(max_length=255, blank=True, db_index=True)
+    branch = models.CharField(max_length=160, blank=True, db_index=True)
+    analyst = models.CharField(max_length=160, blank=True)
+    operation_id = models.CharField(max_length=40, blank=True)
+    operation_name = models.CharField(max_length=255, blank=True)
+    installment_number = models.PositiveSmallIntegerField(null=True, blank=True)
+    relevant_date = models.DateField(null=True, blank=True)
+    billing_date = models.DateField(null=True, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+    detection_status = models.CharField(
+        max_length=16, choices=DetectionStatus.choices,
+        default=DetectionStatus.DETECTED, db_index=True,
+    )
+    first_detected_at = models.DateTimeField()
+    last_detected_at = models.DateTimeField()
+    detection_count = models.PositiveIntegerField(default=1)
+    reappearance_count = models.PositiveIntegerField(default=0)
+    last_run = models.ForeignKey(
+        BillingExceptionRefreshRun, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="technical_exceptions",
+    )
+
+    class Meta:
+        ordering = ("exception_key",)
+        indexes = (
+            models.Index(fields=("detection_status", "exception_type"), name="colect_bill_exc_state_type"),
+            models.Index(fields=("policy_id", "operation_id"), name="colect_bill_exc_subject"),
+        )
+
+    @property
+    def functional_name(self) -> str:
+        from .excepciones_facturacion.domain import EXCEPTION_CATALOG
+        return next(
+            (item.functional_name for item in EXCEPTION_CATALOG if item.exception_type.value == self.exception_type),
+            self.exception_type,
+        )
+
+
+class BillingOperationalCase(models.Model):
+    class DetectionStatus(models.TextChoices):
+        DETECTED = "DETECTED", "Detectado"
+        NOT_DETECTED = "NOT_DETECTED", "Ya no detectado"
+
+    class Kind(models.TextChoices):
+        OPERATION = "OPERATION", "Operación"
+        MISSING_OPERATION = "MISSING_OPERATION", "Operación faltante"
+        POLICY_GAP = "POLICY_GAP", "Cobro faltante"
+
+    case_key = models.CharField(max_length=500, unique=True)
+    kind = models.CharField(max_length=24, choices=Kind.choices)
+    policy_id = models.CharField(max_length=40, blank=True)
+    policy_number = models.CharField(max_length=120, db_index=True)
+    client_name = models.CharField(max_length=255, blank=True)
+    insurer = models.CharField(max_length=255, blank=True, db_index=True)
+    branch = models.CharField(max_length=160, blank=True, db_index=True)
+    analyst = models.CharField(max_length=160, blank=True)
+    operation_id = models.CharField(max_length=40, blank=True)
+    operation_name = models.CharField(max_length=255, blank=True)
+    installment_number = models.PositiveSmallIntegerField(null=True, blank=True)
+    relevant_date = models.DateField(null=True, blank=True)
+    billing_date = models.DateField(null=True, blank=True)
+    local_priority = models.PositiveSmallIntegerField(db_index=True)
+    detection_status = models.CharField(
+        max_length=16, choices=DetectionStatus.choices,
+        default=DetectionStatus.DETECTED, db_index=True,
+    )
+    first_detected_at = models.DateTimeField()
+    last_detected_at = models.DateTimeField()
+    detection_count = models.PositiveIntegerField(default=1)
+    reappearance_count = models.PositiveIntegerField(default=0)
+    last_run = models.ForeignKey(
+        BillingExceptionRefreshRun, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="operational_cases",
+    )
+    exceptions = models.ManyToManyField(BillingTechnicalException, related_name="operational_cases")
+    zoho_task_id = models.CharField(max_length=40, blank=True)
+    zoho_task_status = models.CharField(max_length=120, blank=True)
+    zoho_task_responsible = models.CharField(max_length=160, blank=True)
+    zoho_task_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("local_priority", "relevant_date", "policy_number", "case_key")
+        permissions = (
+            ("view_billing_exceptions", "Puede ver Excepciones de Facturación"),
+            ("refresh_billing_exceptions", "Puede actualizar Excepciones de Facturación"),
+            ("manage_billing_exception_tasks", "Puede gestionar Tasks de Excepciones de Facturación"),
+        )
+        indexes = (
+            models.Index(fields=("detection_status", "local_priority"), name="colect_bill_case_state_pri"),
+            models.Index(fields=("zoho_task_id",), name="colect_bill_case_task"),
         )
 
 

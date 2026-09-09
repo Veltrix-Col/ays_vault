@@ -22,7 +22,7 @@ AREA_DEFINITIONS = (
     {
         "slug": "colectivos",
         "name": "Colectivos",
-        "description": "Operación contextual de novedades, cotizaciones, invitaciones y conciliación.",
+        "description": "Operación contextual de novedades, cotizaciones, invitaciones, conciliación y excepciones.",
         "icon_path": "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8-1a2.5 2.5 0 1 0 0-5M3 20v-2a5 5 0 0 1 10 0v2m1-7a4 4 0 0 1 7 3v4",
         "search_terms": "novedades cotización individual invitaciones aseguradoras conciliador facturación",
     },
@@ -113,6 +113,16 @@ def application_catalog():
             "active": True,
             "external": bool(external_conciliacion_url),
             "search_terms": "conciliación facturas asegurados cobros",
+        },
+        {
+            "name": "Excepciones de Facturación",
+            "area": "Colectivos",
+            "description": "Consulte y priorice inconsistencias de facturación reconstruidas desde Zoho CRM.",
+            "logo": "", "logo_class": "",
+            "icon_path": "M4 5h16v14H4V5Zm4 4h8M8 13h8M8 17h5M6 9h.01M6 13h.01M6 17h.01",
+            "url": reverse("cotizacion_colectivos:billing_exception_list"),
+            "active": True, "external": False,
+            "search_terms": "excepciones facturación operaciones faltantes cobros certificados",
         },
     ]
 

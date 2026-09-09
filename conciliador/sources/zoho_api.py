@@ -108,6 +108,43 @@ def resolver_cobros_poliza(zoho: ZohoFacade, *, poliza: str) -> list[dict[str, s
     ]
 
 
+_CAMPOS_CREDITO_RIESGOS = "id, Name, N_mero_cr_dito"
+_LOTE_RIESGOS_CREDITO = 200
+
+
+def resolver_creditos_riesgos(
+    zoho: ZohoFacade, *, poliza: str, subriesgos: Iterable[str]
+) -> dict[str, dict[str, str | None]]:
+    """Para cada Subriesgo (campo `Name` de `Riesgos1`, ver `cargar_relacion_api`)
+    de la lista dada, resuelve su id de registro y el valor actual de
+    "Número crédito" (`N_mero_cr_dito`), filtrado por poliza.
+
+    Usado por `conciliacion.services.processor.actualizar_numero_credito` (VG
+    Deudores, export de Riesgos vigentes): antes de escribir el "Código de
+    Crédito" del archivo, se necesita saber si el riesgo ya tiene uno
+    asignado en Zoho para no sobreescribirlo. No incluye entrada para los
+    subriesgos que no se encuentren."""
+    poliza_segura = _escapar_coql(poliza)
+    normalizados = sorted({str(valor).strip() for valor in subriesgos} - {""})
+    if not normalizados:
+        return {}
+
+    resultado: dict[str, dict[str, str | None]] = {}
+    for lote in _lotes(normalizados, _LOTE_RIESGOS_CREDITO):
+        valores_in = ", ".join(f"'{_escapar_coql(valor)}'" for valor in lote)
+        query = (
+            f"select {_CAMPOS_CREDITO_RIESGOS} from Riesgos1 where P_liza.Name = '{poliza_segura}' "
+            f"and Name in ({valores_in})"
+        )
+        pagina = zoho.coql.execute(query, limit=len(lote))
+        for fila in pagina.records:
+            resultado[str(fila.get("Name"))] = {
+                "id": str(fila["id"]),
+                "numero_credito": fila.get("N_mero_cr_dito") or None,
+            }
+    return resultado
+
+
 def cargar_personas_api(zoho: ZohoFacade, *, documentos: Iterable[str]) -> set[str]:
     """De los documentos recibidos (tipicamente la union de la relacion de
     asegurados y el archivo de cobro), devuelve el subconjunto que ya existe

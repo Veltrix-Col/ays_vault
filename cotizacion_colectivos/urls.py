@@ -1,9 +1,13 @@
 from django.urls import path
 
 from . import views
+from . import billing_exception_views
 
 app_name = "cotizacion_colectivos"
 urlpatterns = [
+    path("excepciones-facturacion/", billing_exception_views.billing_exception_list, name="billing_exception_list"),
+    path("excepciones-facturacion/actualizar/", billing_exception_views.billing_exception_refresh, name="billing_exception_refresh"),
+    path("excepciones-facturacion/<int:case_id>/", billing_exception_views.billing_exception_detail, name="billing_exception_detail"),
     path("", views.index, name="index"),
     path("novedades/", views.index, {"mode": "novelties"}, name="novelties_index"),
     path("novedades/seguimiento/", views.renewal_tracking, name="renewal_tracking"),

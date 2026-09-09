@@ -25,7 +25,7 @@ import sys
 from conciliador.domain.exceptions import ArchivoNoEncontradoError, ConciliadorError
 from conciliador.engine import ReconciliationEngine
 from conciliador.parsing.periodo import etiqueta_periodo, nombre_mes
-from conciliador.ramos import RAMOS, obtener_ramo
+from conciliador.ramos import COMPANIA_DEFECTO, RAMOS, obtener_ramo
 from conciliador.reporting.excel_writer import escribir_reporte_excel
 from conciliador.rules.valor import ComparacionEstadisticaRule
 from conciliador.sources.foundry_recibo import extraer_recibo
@@ -75,7 +75,7 @@ def _zoho_facade(perfil: str):
 
 
 def _ejecutar(codigo_ramo: str, args: argparse.Namespace) -> None:
-    ramo = obtener_ramo(codigo_ramo)
+    ramo = obtener_ramo(codigo_ramo, args.compania)
     fuente_asegurados = args.fuente_asegurados
     if fuente_asegurados == "api" and (not ramo.cargar_personas_api or not ramo.cargar_relacion_api):
         raise ConciliadorError(f"El ramo '{codigo_ramo}' todavia no soporta --fuente-asegurados api.")
@@ -87,6 +87,7 @@ def _ejecutar(codigo_ramo: str, args: argparse.Namespace) -> None:
     archivos = _resolver_archivos(ramo, args.carpeta, overrides, fuente_asegurados=fuente_asegurados)
 
     mes, anio = ramo.inferir_periodo(archivos["cobro"], args.mes, args.anio)
+    print(f"Compañía: {args.compania}")
     print(f"Periodo detectado: {etiqueta_periodo(mes, anio)}")
     print(f"Fuente asegurados/personas: {fuente_asegurados}" + (f" (poliza {args.poliza})" if fuente_asegurados == "api" else ""))
     for rol, ruta in archivos.items():
@@ -142,8 +143,10 @@ def _armar_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="ramo", required=True)
 
-    for codigo, ramo in RAMOS.items():
+    for codigo, companias in RAMOS.items():
+        ramo = companias[COMPANIA_DEFECTO]  # referencia para el help/flags: hoy todas las companias son Sura
         sub = subparsers.add_parser(codigo, help=f"Conciliar {ramo.nombre}")
+        sub.add_argument("--compania", choices=sorted(companias), default=COMPANIA_DEFECTO)
         sub.add_argument("--carpeta", default=_CARPETAS_POR_DEFECTO.get(codigo, ramo.nombre))
         sub.add_argument("--personas", default=None)
         sub.add_argument("--cobro", default=None)
