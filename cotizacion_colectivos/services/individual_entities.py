@@ -22,6 +22,7 @@ from .risk_sandbox import normalize_plate
 from .subrisk_sandbox import (
     build_life_group_subrisk_payload,
     build_subrisk_payload,
+    resolve_people_subrisk_relation,
     resolve_mobility_subrisk_relation,
     resolve_policy_by_number,
 )
@@ -484,11 +485,36 @@ def _resolve_life_group_subrisks(*, quotation, payload: Mapping[str, object],
                     plan=plan,
                     parentesco=parentesco,
                 )
-            # Resolution is read-only.  Publication belongs exclusively to
-            # ``individual_create_subrisk`` (POST + CSRF + write guards).
-            # Keeping this stage as NOT_FOUND makes the next operational
-            # action explicit after a Contact or correction is resolved.
-            item.update({"status": "not_found", "candidate": sub_payload})
+            # Resolve an existing person/policy relation before exposing the
+            # CREATE action.  This is READ-only and uses the same lookups as
+            # the payload contract, so a previously published relation is not
+            # offered again as a duplicate.
+            relation = {"status": "NOT_FOUND"}
+            if facade is not None and hasattr(facade, "search"):
+                try:
+                    relation = resolve_people_subrisk_relation(
+                        policy_id=policy_id, affiliate_contact_id=contact_id,
+                        insured_contact_id=contact_id, zoho=facade,
+                        role=str(person.get("role") or ""),
+                    )
+                except Exception:
+                    relation = {"status": "NOT_FOUND"}
+            if relation.get("status") == "ALREADY_EXISTS":
+                item.update({
+                    "status": "already_exists", "created": True,
+                    "remote_id": relation.get("record_id", ""),
+                    "riesgos1_id": relation.get("record_id", ""),
+                    "candidate": sub_payload,
+                })
+            elif relation.get("status") == "AMBIGUOUS":
+                item.update({"status": "ambiguous", "candidate": sub_payload,
+                             "reason": "Se encontraron varias asociaciones para esta persona y póliza."})
+            else:
+                # Resolution is read-only.  Publication belongs exclusively to
+                # ``individual_create_subrisk`` (POST + CSRF + write guards).
+                # Keeping this stage as NOT_FOUND makes the next operational
+                # action explicit after a Contact or correction is resolved.
+                item.update({"status": "not_found", "candidate": sub_payload})
         except Exception as exc:
             item.update({"status": "error", "reason": str(exc)[:240], "candidate": sub_payload if "sub_payload" in locals() else {}})
         subrisks.append(item)

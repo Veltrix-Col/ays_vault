@@ -1,15 +1,18 @@
 from datetime import date, datetime
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase
-from integrations.zoho.exceptions import ZohoSDKError
+from django.test import SimpleTestCase, override_settings
+from integrations.zoho.exceptions import ZohoInvalidResponseError, ZohoSDKError
 
 from cotizacion_colectivos.services.person_contract import (
     ContactsDryRunPublisher,
+    ContactPublicationUncertain,
+    GuardedContactPublisher,
     build_contact_payload,
     resolve_contact_by_document,
+    safe_contact_error_context,
 )
 
 
@@ -90,3 +93,46 @@ class PersonContractTests(SimpleTestCase):
         self.assertEqual(result["writes"], 0)
         with self.assertRaises(ValidationError):
             build_contact_payload({"First_Name": "Sólo nombre", "Tipo_ID": "CC", "N_mero_de_ID": "123"})
+
+    def test_safe_contact_error_context_excludes_exception_message_and_pii(self):
+        diagnostic = safe_contact_error_context(ZohoSDKError(
+            "private person@example.test 123456789",
+            status_code=400, zoho_code="INVALID_DATA",
+            operation="records.create", module="Contacts", request_sent=True,
+            detail_field="Tipo_ID", detail_keys=("api_name",),
+        ))
+        self.assertEqual(diagnostic["module"], "Contacts")
+        self.assertEqual(diagnostic["request_sent"], True)
+        self.assertNotIn("message", diagnostic)
+        self.assertNotIn("person@example.test", repr(diagnostic))
+        self.assertNotIn("123456789", repr(diagnostic))
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
+        COLECTIVOS_CONTACT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_CONTACT_WRITE_CONFIRMATION="SANDBOX_CONTACT_WRITE",
+    )
+    @patch("cotizacion_colectivos.services.person_contract.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    def test_sdk_error_after_request_is_uncertain_and_not_retried(self, _resolve):
+        error = ZohoSDKError("opaque", operation="records.create", request_sent=True, status_code=500)
+        zoho = Mock()
+        zoho.records.create.side_effect = error
+        publisher = GuardedContactPublisher(profile="sandbox", confirmation="SANDBOX_CONTACT_WRITE")
+        with self.assertRaises(ContactPublicationUncertain):
+            publisher.create({"Last_Name": "Vargas", "Tipo_ID": "CC", "N_mero_de_ID": "123"}, zoho=zoho)
+        zoho.records.create.assert_called_once()
+
+    @override_settings(
+        ZOHO_ACTIVE_PROFILE="sandbox",
+        ZOHO_SANDBOX_WRITE_ENABLED=True,
+        COLECTIVOS_CONTACT_PUBLISH_ENABLED=True,
+        COLECTIVOS_SANDBOX_CONTACT_WRITE_CONFIRMATION="SANDBOX_CONTACT_WRITE",
+    )
+    @patch("cotizacion_colectivos.services.person_contract.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
+    def test_invalid_response_after_create_is_uncertain(self, _resolve):
+        zoho = Mock()
+        zoho.records.create.side_effect = ZohoInvalidResponseError("opaque")
+        publisher = GuardedContactPublisher(profile="sandbox", confirmation="SANDBOX_CONTACT_WRITE")
+        with self.assertRaises(ContactPublicationUncertain):
+            publisher.create({"Last_Name": "Vargas", "Tipo_ID": "CC", "N_mero_de_ID": "123"}, zoho=zoho)

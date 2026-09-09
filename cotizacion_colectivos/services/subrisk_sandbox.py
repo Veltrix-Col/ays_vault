@@ -279,6 +279,45 @@ def resolve_mobility_subrisk_relation(*, policy_id: str, risk_id: str,
     return {"status": "NOT_FOUND"}
 
 
+def resolve_people_subrisk_relation(*, policy_id: str, affiliate_contact_id: str,
+                                    insured_contact_id: str, zoho,
+                                    role: str = "") -> dict[str, object]:
+    """Find an existing person/policy Riesgos1 relation without writing.
+
+    Salud and Vida Grupo do not require a Riesgo lookup.  Matching the same
+    policy and Contact lookups prevents the operational CREATE action from
+    offering a duplicate association after a successful remote publication.
+    """
+    page = zoho.search.by_criteria(
+        module=SUBRISK_MODULE,
+        criteria=f"(P_liza:equals:{policy_id})",
+        fields=("id", "P_liza", "Contacto_facturaci_n_dividida_colectivas", "Asegurado", "Beneficiario"),
+        page=1, limit=20,
+    )
+    records = tuple(getattr(page, "records", ()) or ())
+
+    def lookup_id(record: Mapping[str, object], field: str) -> str:
+        value = record.get(field)
+        return str(value.get("id") if isinstance(value, Mapping) else value or "").strip()
+
+    exact = []
+    for record in records:
+        if lookup_id(record, "P_liza") != str(policy_id).strip():
+            continue
+        if lookup_id(record, "Asegurado") != str(insured_contact_id).strip():
+            continue
+        if lookup_id(record, "Contacto_facturaci_n_dividida_colectivas") != str(affiliate_contact_id).strip():
+            continue
+        if str(role or "").strip() == "Beneficiario" and lookup_id(record, "Beneficiario") != str(insured_contact_id).strip():
+            continue
+        exact.append(record)
+    if len(exact) > 1:
+        return {"status": "AMBIGUOUS", "count": len(exact)}
+    if exact:
+        return {"status": "ALREADY_EXISTS", "record_id": str(exact[0].get("id") or "").strip()}
+    return {"status": "NOT_FOUND"}
+
+
 def masked_remote_id(value: object) -> str:
     text = str(value or "")
     return f"***{text[-4:]}" if len(text) >= 4 else "***"
