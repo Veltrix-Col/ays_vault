@@ -78,6 +78,7 @@ from .services.task_publisher import publish_task_outbox, read_published_task
 from .services.person_contract import (
     ContactPublicationRejected, ContactPublicationUncertain, ContactPublishingDisabled,
     contact_missing_fields, get_contacts_publisher, resolve_contact_by_document,
+    safe_contact_error_context,
 )
 from .services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from .services.risk_sandbox import create_sandbox_risk, RiskPublicationUncertain, RiskPublishingDisabled, RiskPublicationRejected
@@ -3634,7 +3635,20 @@ def individual_create_person(request, token):
         raise Http404("Respuesta no encontrada")
     except ContactPublicationUncertain:
         messages.warning(request, "El resultado de la creación no pudo confirmarse. Requiere conciliación.")
-    except ZohoError:
+    except ZohoError as exc:
+        diagnostic = safe_contact_error_context(exc)
+        logger.warning(
+            "individual_contact_create_failed category=%s status_code=%s zoho_code=%s "
+            "zoho_status=%s backend=%s operation=%s module=%s sdk_exception_class=%s "
+            "sdk_code=%s request_sent=%s detail_field=%s detail_accepted_type=%s "
+            "detail_given_type=%s detail_class=%s detail_index=%s detail_keys=%s",
+            diagnostic["category"], diagnostic["status_code"], diagnostic["zoho_code"],
+            diagnostic["zoho_status"], diagnostic["backend"], diagnostic["operation"],
+            diagnostic["module"], diagnostic["sdk_exception_class"], diagnostic["sdk_code"],
+            diagnostic["request_sent"], diagnostic["detail_field"],
+            diagnostic["detail_accepted_type"], diagnostic["detail_given_type"],
+            diagnostic["detail_class"], diagnostic["detail_index"], diagnostic["detail_keys"],
+        )
         messages.warning(request, "Zoho no pudo crear la persona. Revise los datos o intente nuevamente.")
     except (ContactPublishingDisabled, ContactPublicationRejected, ValidationError) as exc:
         messages.warning(request, str(exc))
