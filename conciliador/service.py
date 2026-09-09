@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from conciliador.domain.exceptions import ConciliadorError
 from conciliador.domain.models import ReporteConciliacion
 from conciliador.engine import ReconciliationEngine
-from conciliador.ramos import obtener_ramo
+from conciliador.ramos import COMPANIA_DEFECTO, obtener_ramo
 from conciliador.reporting.excel_writer import reporte_a_bytes
 from conciliador.sources.foundry_recibo import ReciboExtraido, extraer_recibo
 
@@ -85,10 +85,10 @@ class ConciliacionService:
 
     def ejecutar(
         self, ramo_codigo: str, archivos: ConciliacionArchivos,
-        *, mes: int | None = None, anio: int | None = None,
+        *, compania_codigo: str = COMPANIA_DEFECTO, mes: int | None = None, anio: int | None = None,
     ) -> ConciliacionResultado:
         try:
-            ramo = obtener_ramo(ramo_codigo)
+            ramo = obtener_ramo(ramo_codigo, compania_codigo)
             mes_final, anio_final = ramo.inferir_periodo(str(archivos.cobro), mes, anio)
             cobro = ramo.cargar_cobro(archivos.cobro)
 

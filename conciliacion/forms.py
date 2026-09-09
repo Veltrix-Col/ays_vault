@@ -1,12 +1,14 @@
 """Formulario de carga del Conciliador de Facturación.
 
-Un único formulario con el selector de ramo, el número de póliza (metadata) y los
-slots de archivo. Relación de asegurados y Personas ya no se suben: se
-consultan siempre directo a Zoho (Full API) filtradas por la póliza. La
-validación es defensiva pero liviana: tamaño, extensión coherente con el ramo
-y una inspección anti–zip-bomb para los .xlsx (mismo criterio que la app
-`soat`). El PDF se valida por firma. La lógica de negocio (estructura interna
-de cada archivo) la valida el motor `conciliador`.
+Un único formulario con el selector de ramo, el selector de compañía
+aseguradora (el formato del archivo de cobro lo define la aseguradora, no el
+ramo), el número de póliza (metadata) y los slots de archivo. Relación de
+asegurados y Personas ya no se suben: se consultan siempre directo a Zoho
+(Full API) filtradas por la póliza. La validación es defensiva pero liviana:
+tamaño, extensión coherente con el ramo+compañía y una inspección
+anti–zip-bomb para los .xlsx (mismo criterio que la app `soat`). El PDF se
+valida por firma. La lógica de negocio (estructura interna de cada archivo)
+la valida el motor `conciliador`.
 """
 
 from __future__ import annotations
@@ -17,7 +19,12 @@ from zipfile import BadZipFile, ZipFile
 from django import forms
 from django.conf import settings
 
-from .ramos_ui import RAMO_CHOICES, ramo_soporta_api, slots_de_ramo
+from .ramos_ui import NOMBRE_COMPANIA, RAMO_CHOICES, companias_de_ramo_ui, ramo_soporta_api, slots_de_ramo
+
+# Choices "planas" para el campo de compañía: la validacion real de que la
+# compañía elegida aplique al ramo elegido ocurre en clean() (via
+# `companias_de_ramo_ui`), el JS filtra las opciones visibles segun el ramo.
+_COMPANIA_CHOICES = sorted(NOMBRE_COMPANIA.items())
 
 _EXT_POR_ACCEPT = {
     ".xlsx": {".xlsx"},
@@ -84,6 +91,7 @@ def _validar_pdf(archivo) -> None:
 
 class ConciliacionUploadForm(forms.Form):
     ramo = forms.ChoiceField(choices=RAMO_CHOICES, label="Ramo")
+    compania = forms.ChoiceField(choices=_COMPANIA_CHOICES, label="Compañía")
     poliza = forms.CharField(
         label="Número de póliza",
         max_length=60,
@@ -108,10 +116,15 @@ class ConciliacionUploadForm(forms.Form):
         if ramo not in dict(RAMO_CHOICES):
             return cleaned
 
-        if not ramo_soporta_api(ramo):
+        compania = cleaned.get("compania")
+        if compania not in dict(companias_de_ramo_ui(ramo)):
+            self.add_error("compania", "Esta compañía no está disponible para el ramo seleccionado.")
+            return cleaned
+
+        if not ramo_soporta_api(ramo, compania):
             self.add_error("ramo", "Este ramo todavía no soporta la conexión directa a Zoho.")
 
-        accept_por_campo = {slot["campo"]: slot["accept"] for slot in slots_de_ramo(ramo)}
+        accept_por_campo = {slot["campo"]: slot["accept"] for slot in slots_de_ramo(ramo, compania)}
         for campo, accept in accept_por_campo.items():
             archivo = cleaned.get(campo)
             if archivo in (None, False):

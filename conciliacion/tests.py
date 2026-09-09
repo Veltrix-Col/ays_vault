@@ -14,7 +14,7 @@ from openpyxl import Workbook
 from ays_zoho_sdk.exceptions import ZohoAuthenticationError
 
 from .forms import ConciliacionUploadForm
-from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CODIGOS, catalogo_slots
+from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CODIGOS, catalogo_slots, companias_de_ramo_ui
 
 # Datos de ejemplo del proyecto Conciliador (fuera del repo). Las pruebas
 # end-to-end se ejecutan solo si están disponibles localmente.
@@ -37,15 +37,21 @@ def _archivo(nombre, contenido, tipo):
 
 
 class CatalogoSlotsTests(TestCase):
-    def test_todos_los_ramos_tienen_slots_completos(self):
+    def test_todos_los_ramos_tienen_al_menos_una_compania(self):
+        for ramo in RAMO_CODIGOS:
+            self.assertTrue(companias_de_ramo_ui(ramo), ramo)
+
+    def test_todas_las_combinaciones_ramo_compania_tienen_slots_completos(self):
         catalogo = catalogo_slots()
         self.assertEqual(set(catalogo), set(RAMO_CODIGOS))
-        for ramo, slots in catalogo.items():
-            campos = {slot["campo"] for slot in slots}
-            self.assertEqual(campos, set(CAMPOS_ARCHIVO), ramo)
-            for slot in slots:
-                for clave in ("label", "help", "accept", "required", "temporal", "nota_temporal"):
-                    self.assertIn(clave, slot)
+        for ramo, por_compania in catalogo.items():
+            self.assertEqual(set(por_compania), {codigo for codigo, _ in companias_de_ramo_ui(ramo)}, ramo)
+            for compania, slots in por_compania.items():
+                campos = {slot["campo"] for slot in slots}
+                self.assertEqual(campos, set(CAMPOS_ARCHIVO), f"{ramo}/{compania}")
+                for slot in slots:
+                    for clave in ("label", "help", "accept", "required", "temporal", "nota_temporal"):
+                        self.assertIn(clave, slot)
 
 
 class FormularioTests(TestCase):
@@ -53,6 +59,7 @@ class FormularioTests(TestCase):
         xlsx = _xlsx_bytes()
         return {
             "ramo": "salud",
+            "compania": "sura",
             "poliza": "12345",
         }, {
             "cobro": _archivo("Porchat.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -93,6 +100,13 @@ class FormularioTests(TestCase):
         form = ConciliacionUploadForm(data=data, files=files)
         self.assertFalse(form.is_valid())
         self.assertIn("recibo", form.errors)
+
+    def test_compania_inexistente_se_rechaza(self):
+        data, files = self._datos_validos_salud()
+        data["compania"] = "aseguradora-inventada"
+        form = ConciliacionUploadForm(data=data, files=files)
+        self.assertFalse(form.is_valid())
+        self.assertIn("compania", form.errors)
 
 
 class VistaTests(TestCase):
@@ -138,7 +152,7 @@ class VistaTests(TestCase):
                 ext = os.path.splitext(ruta)[1].lower()
                 files[slot] = _archivo(os.path.basename(ruta), fh.read(), tipos.get(ext, "application/octet-stream"))
         response = self.client.post(reverse("conciliacion:index"),
-                                    {"ramo": "salud", "poliza": "12345", **files})
+                                    {"ramo": "salud", "compania": "sura", "poliza": "12345", **files})
         self.assertEqual(response.status_code, 200, getattr(response, "content", b"")[:300])
         self.assertIn("X-Conciliacion-Summary", response)
         self.assertEqual(

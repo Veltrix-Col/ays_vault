@@ -26,7 +26,7 @@
       <h1>Conciliador de Facturación</h1>
       <p>Concilie la relación de asegurados contra el cobro de la aseguradora por ramo.
          El proceso es efímero: los archivos no se almacenan.</p>
-      <div class="tool-banner is-warn">Por el momento, esta herramienta solo soporta la conciliación de facturación de pólizas de <strong>SURA</strong>.</div>
+      <div class="tool-banner is-warn">Por el momento, esta herramienta solo tiene configurada la compañía <strong>Sura</strong>; el selector queda listo para nuevas aseguradoras.</div>
     </section>
 
     <section class="tool-card" aria-labelledby="form-title">
@@ -39,6 +39,11 @@
             <label for="{{ form.ramo.id_for_label }}">Ramo</label>
             {{ form.ramo }}
             {% if form.ramo.errors %}<p class="tool-error" role="alert">{{ form.ramo.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="tool-field">
+            <label for="{{ form.compania.id_for_label }}">Compañía</label>
+            {{ form.compania }}
+            {% if form.compania.errors %}<p class="tool-error" role="alert">{{ form.compania.errors|striptags }}</p>{% endif %}
           </div>
           <div class="tool-field">
             <label for="{{ form.poliza.id_for_label }}">Número de póliza</label>
@@ -102,6 +107,7 @@
     </section>
   </main>
 
+  <script type="application/json" id="conc-companias-catalog">{{ companias_catalog_json|safe }}</script>
   <script type="application/json" id="conc-slots-catalog">{{ slots_catalog_json|safe }}</script>
   <script type="application/json" id="conc-novedades-catalog">{{ novedades_api_catalog_json|safe }}</script>
 </body>

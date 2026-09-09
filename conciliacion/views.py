@@ -10,7 +10,15 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .forms import ConciliacionUploadForm
-from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CHOICES, catalogo_novedades_api, catalogo_slots, slots_de_ramo
+from .ramos_ui import (
+    CAMPOS_ARCHIVO,
+    RAMO_CHOICES,
+    catalogo_companias,
+    catalogo_novedades_api,
+    catalogo_slots,
+    companias_de_ramo_ui,
+    slots_de_ramo,
+)
 from .services import (
     CobroNotFound,
     CobroPrefillDisabled,
@@ -33,12 +41,17 @@ _MAX_CREDITO_PENDIENTES = 2000
 
 def _contexto_base():
     ramo_inicial = RAMO_CHOICES[0][0]
-    slots_iniciales = slots_de_ramo(ramo_inicial)
+    companias_iniciales = companias_de_ramo_ui(ramo_inicial)
+    compania_inicial = companias_iniciales[0][0] if companias_iniciales else ""
+    slots_iniciales = slots_de_ramo(ramo_inicial, compania_inicial) if compania_inicial else []
     return {
         "ramos": RAMO_CHOICES,
         "ramo_inicial": ramo_inicial,
+        "companias_iniciales": companias_iniciales,
+        "compania_inicial": compania_inicial,
         "slots_iniciales": slots_iniciales,
         "slots_iniciales_map": {slot["campo"]: slot for slot in slots_iniciales},
+        "companias_catalog_json": json.dumps(catalogo_companias(), ensure_ascii=False),
         "slots_catalog_json": json.dumps(catalogo_slots(), ensure_ascii=False),
         "novedades_api_catalog_json": json.dumps(catalogo_novedades_api(), ensure_ascii=False),
     }
@@ -55,6 +68,7 @@ def upload(request):
         try:
             resultado = procesar_conciliacion(
                 ramo=form.cleaned_data["ramo"],
+                compania=form.cleaned_data["compania"],
                 poliza=form.cleaned_data["poliza"],
                 archivos=archivos,
             )

@@ -2,6 +2,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const form = document.querySelector("[data-conc-form]");
   if (!form) return;
 
+  const companiasCatalogEl = document.getElementById("conc-companias-catalog");
+  let companiasCatalog = {};
+  try { companiasCatalog = JSON.parse(companiasCatalogEl?.textContent || "{}"); } catch (_) { companiasCatalog = {}; }
+
+  // Nombre visible por codigo de compañía, aplanado del catalogo por ramo
+  // (el mismo codigo de compañía siempre tiene el mismo nombre en todos los
+  // ramos que la soportan): usado para mostrar "Compañía" en el resultado.
+  const nombresCompania = {};
+  Object.values(companiasCatalog).forEach((companias) => {
+    (companias || []).forEach(([codigo, nombre]) => { nombresCompania[codigo] = nombre; });
+  });
+
   const catalogEl = document.getElementById("conc-slots-catalog");
   let catalog = {};
   try { catalog = JSON.parse(catalogEl?.textContent || "{}"); } catch (_) { catalog = {}; }
@@ -11,6 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
   try { novedadesCatalog = JSON.parse(novedadesCatalogEl?.textContent || "{}"); } catch (_) { novedadesCatalog = {}; }
 
   const ramoSelect = form.querySelector('select[name="ramo"]');
+  const companiaSelect = form.querySelector('select[name="compania"]');
   const submit = form.querySelector("[data-conc-submit]");
   const progress = form.querySelector("[data-conc-progress]");
 
@@ -33,9 +46,26 @@ document.addEventListener("DOMContentLoaded", () => {
   let outputName = "Reporte_Conciliacion.xlsx";
   let lastSummary = {};
 
-  // --- Slots dinámicos por ramo -------------------------------------------
-  function updateSlots(ramo) {
-    const slots = catalog[ramo] || [];
+  // --- Compañía dinámica por ramo ------------------------------------------
+  // El formato del archivo de cobro lo define la aseguradora, no el ramo: al
+  // cambiar de ramo se repueblan las compañías que ese ramo tiene configuradas
+  // (hoy siempre Sura) antes de refrescar los slots, que dependen de ambos.
+  function updateCompanias(ramo) {
+    if (!companiaSelect) return;
+    const seleccionPrevia = companiaSelect.value;
+    const companias = companiasCatalog[ramo] || [];
+    companiaSelect.replaceChildren(...companias.map(([codigo, nombre]) => {
+      const option = document.createElement("option");
+      option.value = codigo; option.textContent = nombre;
+      return option;
+    }));
+    const sigueValida = companias.some(([codigo]) => codigo === seleccionPrevia);
+    if (sigueValida) companiaSelect.value = seleccionPrevia;
+  }
+
+  // --- Slots dinámicos por ramo + compañía ---------------------------------
+  function updateSlots(ramo, compania) {
+    const slots = (catalog[ramo] || {})[compania] || [];
     slots.forEach((slot) => {
       const zone = form.querySelector(`.tool-slot[data-slot="${slot.campo}"]`);
       if (!zone) return;
@@ -58,14 +88,27 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  ramoSelect?.addEventListener("change", () => { updateSlots(ramoSelect.value); updateNovedades(); });
-  if (ramoSelect) updateSlots(ramoSelect.value);
+  ramoSelect?.addEventListener("change", () => {
+    updateCompanias(ramoSelect.value);
+    updateSlots(ramoSelect.value, companiaSelect?.value);
+    updateNovedades();
+  });
+  companiaSelect?.addEventListener("change", () => {
+    updateSlots(ramoSelect?.value, companiaSelect.value);
+    updateNovedades();
+  });
+  if (ramoSelect) {
+    updateCompanias(ramoSelect.value);
+    updateSlots(ramoSelect.value, companiaSelect?.value);
+  }
 
-  // --- Novedades: se oculta el upload solo si el ramo la resuelve por Zoho
-  // API (vg_deudores no: su novedad viene del banco, sigue pidiendo el archivo).
+  // --- Novedades: se oculta el upload solo si el (ramo, compañía) la resuelve
+  // por Zoho API (vg_deudores/Sura no: su novedad viene del banco, sigue
+  // pidiendo el archivo).
   function updateNovedades() {
     const ramo = ramoSelect?.value;
-    const ocultarNovedades = !!novedadesCatalog[ramo];
+    const compania = companiaSelect?.value;
+    const ocultarNovedades = !!(novedadesCatalog[ramo] || {})[compania];
     const novedadesZone = form.querySelector('.tool-slot[data-slot="novedades"]');
     if (novedadesZone) {
       novedadesZone.hidden = ocultarNovedades;
@@ -127,6 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const advertencias = summary.total_advertencias ?? 0;
     meta.replaceChildren(
       metaItem("Ramo", summary.ramo),
+      metaItem("Compañía", nombresCompania[summary.compania] || summary.compania),
       metaItem("Periodo", summary.periodo),
       metaItem("Póliza", summary.poliza),
       metaItem("Incidentes", String(summary.total_incidentes ?? 0)),

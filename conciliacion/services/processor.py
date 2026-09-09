@@ -22,7 +22,7 @@ from ays_zoho_sdk.exceptions import ZohoError
 from django.conf import settings
 from openpyxl import load_workbook
 
-from conciliador.ramos import obtener_ramo
+from conciliador.ramos import COMPANIA_DEFECTO, obtener_ramo
 from conciliador.rules.valor import ComparacionExactaRule
 from conciliador.service import (
     ConciliacionArchivos,
@@ -314,27 +314,33 @@ def _endurecer_xlsx(contenido: bytes) -> bytes:
         workbook.close()
 
 
-def _aplicar_umbral_valor_exacto(ramo_codigo: str) -> None:
+def _aplicar_umbral_valor_exacto(ramo_codigo: str, compania_codigo: str) -> None:
     """Sobreescribe `ComparacionExactaRule.umbral_pesos` (diferencia en pesos
     por debajo de la cual una diferencia de valor no es incidente) con lo que
     haya en `settings.CONCILIACION_UMBRAL_VALOR_EXACTO`, para poder ajustar el
     umbral por configuracion sin tocar codigo. Mismo patron que ya usa
     `cli.py` con `ComparacionEstadisticaRule.zscore_umbral`."""
     umbral = settings.CONCILIACION_UMBRAL_VALOR_EXACTO
-    for regla in obtener_ramo(ramo_codigo).reglas:
+    for regla in obtener_ramo(ramo_codigo, compania_codigo).reglas:
         if isinstance(regla, ComparacionExactaRule):
             regla.umbral_pesos = umbral
 
 
-def procesar_conciliacion(*, ramo: str, poliza: str, archivos: dict) -> ConciliacionOutput:
+def procesar_conciliacion(
+    *, ramo: str, poliza: str, archivos: dict, compania: str = COMPANIA_DEFECTO,
+) -> ConciliacionOutput:
     """`archivos` es {slot: UploadedFile|None} con las claves cobro, recibo,
     novedades (recibo/novedades pueden faltar). Relación de asegurados y
     Personas siempre se consultan directo a Zoho (Full API), filtradas por
     `poliza`. El perfil (sandbox o producción) lo decide `settings.ZOHO_ACTIVE_PROFILE`
     de forma global para toda la aplicación: esta función no lo recibe como
-    parámetro ni lo deja elegir por request."""
+    parámetro ni lo deja elegir por request.
+
+    `compania` selecciona que loaders/reglas de `conciliador.ramos.RAMOS` usar
+    para este ramo -- el formato del archivo de cobro lo define la
+    aseguradora, no el ramo. Por defecto Sura (unica compañía configurada hoy)."""
     started = monotonic()
-    _aplicar_umbral_valor_exacto(ramo)
+    _aplicar_umbral_valor_exacto(ramo, compania)
 
     with TemporaryDirectory(prefix="ays-conciliacion-") as directorio:
         raiz = Path(directorio)
@@ -361,7 +367,7 @@ def procesar_conciliacion(*, ramo: str, poliza: str, archivos: dict) -> Concilia
             poliza=poliza,
         )
         try:
-            resultado = ConciliacionService().ejecutar(ramo, entrada)
+            resultado = ConciliacionService().ejecutar(ramo, entrada, compania_codigo=compania)
         except ConciliacionServiceError as exc:
             raise ConciliacionProcessingError(str(exc)) from exc
         except ZohoError as exc:
@@ -384,6 +390,7 @@ def procesar_conciliacion(*, ramo: str, poliza: str, archivos: dict) -> Concilia
         creditos_pendientes = resultado.codigos_credito_pendientes if reporte.esta_vacio else None
         summary = {
             "ramo": reporte.ramo,
+            "compania": compania,
             "periodo": reporte.periodo,
             "poliza": poliza,
             "total_incidentes": int(reporte.total_incidentes),
