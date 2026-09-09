@@ -12,6 +12,7 @@ from django.urls import resolve
 from cotizacion_colectivos.services.individual_entities import effective_candidate, promote_created_people, resolve_common_people_entities, resolve_mobility_entities, synchronize_risk_insured
 from cotizacion_colectivos.services.operational_entities import resolve_operational_entities
 from cotizacion_colectivos.services.person_contract import build_contact_payload
+from cotizacion_colectivos.services.subrisk_sandbox import resolve_people_subrisk_relation
 
 
 class _Page:
@@ -36,6 +37,20 @@ class _Facade:
 
 
 class IndividualEntityResolutionTests(SimpleTestCase):
+    def test_existing_people_policy_relation_is_detected_read_only(self):
+        facade = SimpleNamespace(search=SimpleNamespace(by_criteria=Mock(return_value=_Page(({
+            "id": "4991513000270954999",
+            "P_liza": {"id": "4991513000270954040"},
+            "Contacto_facturaci_n_dividida_colectivas": {"id": "4991513000270954001"},
+            "Asegurado": {"id": "4991513000270954001"},
+        },)))))
+        result = resolve_people_subrisk_relation(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954001",
+            insured_contact_id="4991513000270954001",
+            zoho=facade,
+        )
+        self.assertEqual(result, {"status": "ALREADY_EXISTS", "record_id": "4991513000270954999"})
     @patch("cotizacion_colectivos.services.operational_entities.get_contacts_publisher")
     @patch("cotizacion_colectivos.services.operational_entities.resolve_contact_by_document", return_value={"status": "NOT_FOUND"})
     def test_novelty_contact_create_uses_shared_individual_contract(self, resolve, factory):

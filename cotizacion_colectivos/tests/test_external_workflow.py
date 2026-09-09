@@ -688,6 +688,53 @@ class ExternalWorkflowTests(TestCase):
         self.assertContains(portal, "Ana Uno")
         self.assertContains(portal, "Bea Dos")
 
+    def test_portal_does_not_render_unchanged_policy_records_as_prepared_novelties(self):
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        self.enter_with_otp(generated)
+        save_response(
+            access=generated.access,
+            rows=[{"record": str(self.record.public_key), "action": "SIN_CAMBIOS"}],
+            observations="",
+        )
+
+        portal = self.client.get(reverse("colectivos_external:portal"))
+
+        self.assertEqual(portal.status_code, 200)
+        self.assertContains(portal, "Novedades preparadas")
+        self.assertContains(portal, "Aún no ha preparado novedades.")
+        self.assertNotContains(portal, "Sin cambios")
+        self.assertNotContains(portal, "Preparado")
+
+    @patch("cotizacion_colectivos.services.external.identification_type_values", return_value=frozenset({"CC"}))
+    def test_portal_counts_only_actionable_draft_markers(self, _types):
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        self.enter_with_otp(generated)
+        save_response(
+            access=generated.access,
+            rows=[
+                {"record": str(self.record.public_key), "action": "SIN_CAMBIOS"},
+                {
+                    "record": "", "action": "INCLUIR", "tipo_id": "CC",
+                    "documento": "1019059650", "nombres": "Ana",
+                    "apellidos": "Prueba", "rol": "Asegurado",
+                    "fecha_ingreso": "2026-10-01", "functional_key": "ingreso-real",
+                },
+            ],
+            observations="",
+        )
+
+        portal = self.client.get(reverse("colectivos_external:portal"))
+
+        self.assertEqual(portal.status_code, 200)
+        self.assertContains(portal, "1 novedad(es) lista(s) para revisar.")
+        self.assertContains(portal, "Ana Prueba")
+        self.assertEqual(portal.content.decode().count("prepared-novelty\""), 1)
+        self.assertNotContains(portal, "Sin cambios")
+
     @patch("cotizacion_colectivos.external_views.identification_choice_pairs", return_value=(("CC", "CC - Cédula de ciudadanía"),))
     def test_template_download_is_a_real_xlsx_response(self, _choices):
         generated = self.access()
