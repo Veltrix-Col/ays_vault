@@ -13,6 +13,10 @@ from .processor import (
     CobroPrefillNoData,
     ConciliacionProcessingError,
     ConciliacionOutput,
+    CreditoUpdateDisabled,
+    CreditoUpdateError,
+    CreditoUpdateNoData,
+    actualizar_numero_credito,
     prellenar_cobro,
     procesar_conciliacion,
 )
@@ -24,6 +28,10 @@ __all__ = [
     "CobroPrefillNoData",
     "ConciliacionProcessingError",
     "ConciliacionOutput",
+    "CreditoUpdateDisabled",
+    "CreditoUpdateError",
+    "CreditoUpdateNoData",
+    "actualizar_numero_credito",
     "prellenar_cobro",
     "procesar_conciliacion",
 ]

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from conciliador.domain.exceptions import ConciliadorError
 from conciliador.domain.models import ReporteConciliacion
 from conciliador.engine import ReconciliationEngine
-from conciliador.ramos import obtener_ramo
+from conciliador.ramos import COMPANIA_DEFECTO, obtener_ramo
 from conciliador.reporting.excel_writer import reporte_a_bytes
 from conciliador.sources.foundry_recibo import ReciboExtraido, extraer_recibo
 
@@ -60,6 +60,24 @@ class ConciliacionResultado:
     # para el incidente 'N/D' que cubre esos casos). Lo usa `conciliacion.services.
     # processor` para ofrecer el prellenado de campos del Cobro en Zoho.
     recibo: ReciboExtraido | None = None
+    # Filas del cobro que traen 'codigo_credito' (VG Deudores, export de
+    # Riesgos vigentes -- ver `conciliador.sources.vg`): None si el cobro no
+    # tiene esa columna, [] si la tiene pero ninguna fila trae valor. Lo usa
+    # `conciliacion.services.processor` para, al facturar, asignar el
+    # "Número crédito" en Zoho a los riesgos que aun no lo tengan.
+    codigos_credito_pendientes: list[dict[str, str]] | None = None
+
+
+def _codigos_credito_pendientes(cobro) -> list[dict[str, str]] | None:
+    """None si el cobro no tiene 'codigo_credito' (solo lo produce el export
+    de Riesgos vigentes de VG Deudores, ver `conciliador.sources.vg`); lista
+    (posiblemente vacia) de {documento_titular, documento, subriesgo,
+    codigo_credito} para las filas que si traen valor, en cualquier otro
+    caso."""
+    if "codigo_credito" not in cobro.columns:
+        return None
+    pendientes = cobro[cobro["codigo_credito"] != ""]
+    return pendientes[["documento_titular", "documento", "subriesgo", "codigo_credito"]].to_dict("records")
 
 
 class ConciliacionService:
@@ -67,10 +85,10 @@ class ConciliacionService:
 
     def ejecutar(
         self, ramo_codigo: str, archivos: ConciliacionArchivos,
-        *, mes: int | None = None, anio: int | None = None,
+        *, compania_codigo: str = COMPANIA_DEFECTO, mes: int | None = None, anio: int | None = None,
     ) -> ConciliacionResultado:
         try:
-            ramo = obtener_ramo(ramo_codigo)
+            ramo = obtener_ramo(ramo_codigo, compania_codigo)
             mes_final, anio_final = ramo.inferir_periodo(str(archivos.cobro), mes, anio)
             cobro = ramo.cargar_cobro(archivos.cobro)
 
@@ -131,4 +149,5 @@ class ConciliacionService:
             nombre_archivo=f"Reporte_Conciliacion_{ramo.nombre.replace(' ', '_')}_{marca}.xlsx",
             resumen=reporte.resumen_por_tipo(),
             recibo=recibo_extraido,
+            codigos_credito_pendientes=_codigos_credito_pendientes(cobro),
         )

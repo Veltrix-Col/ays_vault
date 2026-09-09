@@ -27,3 +27,9 @@ class ColumnaFaltanteError(ConciliadorError):
 
 class RamoNoRegistradoError(ConciliadorError):
     """Se pidio un ramo que no existe en el registro de RamoConfig."""
+
+
+class FormatoArchivoNoReconocidoError(ConciliadorError):
+    """El archivo no coincide con ninguno de los formatos conocidos para su
+    rol (p. ej. un ramo con mas de un formato de cobro posible segun de
+    donde se descargue)."""

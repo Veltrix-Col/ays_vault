@@ -126,6 +126,13 @@ CONCILIACION_UMBRAL_VALOR_EXACTO=float(os.getenv('CONCILIACION_UMBRAL_VALOR_EXAC
 # redirigir. Interruptor propio, independiente de ZOHO_PRODUCTION_WRITE_ENABLED
 # (que sigue siendo el gate real de la escritura en el SDK).
 CONCILIACION_COBRO_PREFILL_ENABLED=env_bool('CONCILIACION_COBRO_PREFILL_ENABLED',False)
+# Escritura del boton "Facturar cobro" para VG Deudores: si el cobro (export
+# de Riesgos vigentes) trajo 'Codigo de Credito' para algun riesgo y en Zoho
+# Produccion su "Numero credito" (Riesgos1) todavia esta vacio, lo asigna
+# antes de redirigir. Nunca sobreescribe uno ya asignado. Interruptor propio,
+# independiente de ZOHO_PRODUCTION_WRITE_ENABLED (que sigue siendo el gate
+# real de la escritura en el SDK).
+CONCILIACION_CREDITO_UPDATE_ENABLED=env_bool('CONCILIACION_CREDITO_UPDATE_ENABLED',False)
 REPORT_XLSX_MAX_ROWS=int(os.getenv('REPORT_XLSX_MAX_ROWS','5000'))
 REPORT_PDF_MAX_ROWS=int(os.getenv('REPORT_PDF_MAX_ROWS','1000'))
 COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS=email_env_int('COLECTIVOS_EXTERNAL_LINK_TTL_SECONDS',172800,300,604800)

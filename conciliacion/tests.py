@@ -14,7 +14,7 @@ from openpyxl import Workbook
 from ays_zoho_sdk.exceptions import ZohoAuthenticationError
 
 from .forms import ConciliacionUploadForm
-from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CODIGOS, catalogo_slots
+from .ramos_ui import CAMPOS_ARCHIVO, RAMO_CODIGOS, catalogo_slots, companias_de_ramo_ui
 
 # Datos de ejemplo del proyecto Conciliador (fuera del repo). Las pruebas
 # end-to-end se ejecutan solo si están disponibles localmente.
@@ -37,15 +37,21 @@ def _archivo(nombre, contenido, tipo):
 
 
 class CatalogoSlotsTests(TestCase):
-    def test_todos_los_ramos_tienen_slots_completos(self):
+    def test_todos_los_ramos_tienen_al_menos_una_compania(self):
+        for ramo in RAMO_CODIGOS:
+            self.assertTrue(companias_de_ramo_ui(ramo), ramo)
+
+    def test_todas_las_combinaciones_ramo_compania_tienen_slots_completos(self):
         catalogo = catalogo_slots()
         self.assertEqual(set(catalogo), set(RAMO_CODIGOS))
-        for ramo, slots in catalogo.items():
-            campos = {slot["campo"] for slot in slots}
-            self.assertEqual(campos, set(CAMPOS_ARCHIVO), ramo)
-            for slot in slots:
-                for clave in ("label", "help", "accept", "required", "temporal", "nota_temporal"):
-                    self.assertIn(clave, slot)
+        for ramo, por_compania in catalogo.items():
+            self.assertEqual(set(por_compania), {codigo for codigo, _ in companias_de_ramo_ui(ramo)}, ramo)
+            for compania, slots in por_compania.items():
+                campos = {slot["campo"] for slot in slots}
+                self.assertEqual(campos, set(CAMPOS_ARCHIVO), f"{ramo}/{compania}")
+                for slot in slots:
+                    for clave in ("label", "help", "accept", "required", "temporal", "nota_temporal"):
+                        self.assertIn(clave, slot)
 
 
 class FormularioTests(TestCase):
@@ -53,6 +59,7 @@ class FormularioTests(TestCase):
         xlsx = _xlsx_bytes()
         return {
             "ramo": "salud",
+            "compania": "sura",
             "poliza": "12345",
         }, {
             "cobro": _archivo("Porchat.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -93,6 +100,13 @@ class FormularioTests(TestCase):
         form = ConciliacionUploadForm(data=data, files=files)
         self.assertFalse(form.is_valid())
         self.assertIn("recibo", form.errors)
+
+    def test_compania_inexistente_se_rechaza(self):
+        data, files = self._datos_validos_salud()
+        data["compania"] = "aseguradora-inventada"
+        form = ConciliacionUploadForm(data=data, files=files)
+        self.assertFalse(form.is_valid())
+        self.assertIn("compania", form.errors)
 
 
 class VistaTests(TestCase):
@@ -138,7 +152,7 @@ class VistaTests(TestCase):
                 ext = os.path.splitext(ruta)[1].lower()
                 files[slot] = _archivo(os.path.basename(ruta), fh.read(), tipos.get(ext, "application/octet-stream"))
         response = self.client.post(reverse("conciliacion:index"),
-                                    {"ramo": "salud", "poliza": "12345", **files})
+                                    {"ramo": "salud", "compania": "sura", "poliza": "12345", **files})
         self.assertEqual(response.status_code, 200, getattr(response, "content", b"")[:300])
         self.assertIn("X-Conciliacion-Summary", response)
         self.assertEqual(
@@ -151,6 +165,18 @@ def _write_result(succeeded=True, record_id="7000000000001", code="SUCCESS"):
     return SimpleNamespace(records=(SimpleNamespace(
         succeeded=succeeded, record_id=record_id, code=code,
     ),))
+
+
+def _write_result_multi(n, succeeded=True):
+    return SimpleNamespace(records=tuple(
+        SimpleNamespace(succeeded=succeeded, record_id=f"id-{i}", code="SUCCESS") for i in range(n)
+    ))
+
+
+def _creditos_riesgos(mapa):
+    """mapa: {subriesgo: numero_credito_actual_o_None} -> forma que devuelve
+    `resolver_creditos_riesgos`."""
+    return {subriesgo: {"id": f"id-{subriesgo}", "numero_credito": valor} for subriesgo, valor in mapa.items()}
 
 
 def _cobros_candidatos(cobro_id="7000000000001"):
@@ -276,3 +302,122 @@ class PrellenarCobroViewTests(TestCase):
                 "Valor_de_cuota": 150000.5,
             },),
         )
+
+
+class ActualizarCreditoViewTests(TestCase):
+    """El botón "Facturar cobro" (VG Deudores) asigna el "Número crédito" en
+    Riesgos1 para los riesgos que el cobro (export de Riesgos vigentes) trajo
+    con 'Código de Crédito' y aún no lo tengan -- ver
+    `conciliacion.services.processor.actualizar_numero_credito`. Siempre
+    mockeado: no hay credenciales de Zoho Producción disponibles (ni deberían
+    usarse) para correr esta suite."""
+
+    def setUp(self):
+        self.url = reverse("conciliacion:actualizar_credito")
+        self.payload = {
+            "poliza": "083002914855",
+            "pendientes": [
+                {"subriesgo": "27147", "codigo_credito": "26000195"},
+                {"subriesgo": "27148", "codigo_credito": "26000285"},
+            ],
+        }
+
+    def _post(self, payload):
+        return self.client.post(
+            self.url, data=json.dumps(payload), content_type="application/json",
+        )
+
+    def test_deshabilitado_por_defecto_rechaza_sin_llamar_a_zoho(self):
+        with patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 409)
+        get_zoho.assert_not_called()
+
+    def test_metodo_get_no_permitido(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_json_invalido_se_rechaza(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True):
+            response = self.client.post(self.url, data=b"no es json", content_type="application/json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_sin_pendientes_validos_no_escribe_nada(self):
+        payload = {"poliza": "083002914855", "pendientes": []}
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(payload)
+        self.assertEqual(response.status_code, 400)
+        get_zoho.assert_not_called()
+
+    def test_asigna_numero_credito_cuando_esta_vacio(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": None, "27148": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(2)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertTrue(body["ok"])
+        self.assertCountEqual(body["actualizados"], ["27147", "27148"])
+        self.assertEqual(body["omitidos"], [])
+        get_zoho.assert_called_once_with(profile="production")
+        update.assert_called_once_with(
+            module="Riesgos1",
+            records=(
+                {"id": "id-27147", "N_mero_cr_dito": "26000195"},
+                {"id": "id-27148", "N_mero_cr_dito": "26000285"},
+            ),
+        )
+
+    def test_omite_riesgo_que_ya_tiene_numero_credito(self):
+        # Nunca sobreescribe un Número crédito ya asignado en Zoho.
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": "26000195", "27148": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(1)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["omitidos"], ["27147"])
+        self.assertEqual(body["actualizados"], ["27148"])
+        update.assert_called_once_with(
+            module="Riesgos1",
+            records=({"id": "id-27148", "N_mero_cr_dito": "26000285"},),
+        )
+
+    def test_riesgo_no_encontrado_se_reporta_pero_no_falla(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(1)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["no_encontrados"], ["27148"])
+        self.assertEqual(body["actualizados"], ["27147"])
+
+    def test_no_escribe_nada_si_todos_estan_asignados_u_omitidos(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": "26000195", "27148": "26000285"})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["actualizados"], [])
+        self.assertCountEqual(body["omitidos"], ["27147", "27148"])
+        get_zoho.return_value.records.update.assert_not_called()
+
+    def test_error_de_autenticacion_zoho_se_traduce_a_502(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.get_zoho",
+                   side_effect=ZohoAuthenticationError("sin credenciales")):
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 502)
