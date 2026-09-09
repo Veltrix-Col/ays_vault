@@ -17,7 +17,9 @@ from django.core.exceptions import ValidationError
 
 from integrations.zoho.exceptions import ZohoError
 from integrations.zoho import get_zoho
-from integrations.zoho.exceptions import ZohoAPIError, ZohoTimeoutError
+from integrations.zoho.exceptions import (
+    ZohoAPIError, ZohoInvalidResponseError, ZohoSDKError, ZohoTimeoutError,
+)
 from integrations.zoho.settings import ZohoSettings
 
 from .common import colectivos_zoho, escape_criteria_value, sign_record_id, translate_zoho_error
@@ -229,6 +231,28 @@ class ContactPublishingDisabled(RuntimeError):
     pass
 
 
+def safe_contact_error_context(exc: ZohoError) -> dict[str, object]:
+    """Return only normalized, non-PII fields suitable for diagnostics."""
+    return {
+        "category": getattr(exc, "category", ""),
+        "status_code": getattr(exc, "status_code", None),
+        "zoho_code": getattr(exc, "zoho_code", ""),
+        "zoho_status": getattr(exc, "zoho_status", ""),
+        "backend": getattr(exc, "backend", ""),
+        "operation": getattr(exc, "operation", ""),
+        "module": getattr(exc, "module", ""),
+        "sdk_exception_class": getattr(exc, "sdk_exception_class", ""),
+        "sdk_code": getattr(exc, "sdk_code", ""),
+        "request_sent": getattr(exc, "request_sent", None),
+        "detail_field": getattr(exc, "detail_field", ""),
+        "detail_accepted_type": getattr(exc, "detail_accepted_type", ""),
+        "detail_given_type": getattr(exc, "detail_given_type", ""),
+        "detail_class": getattr(exc, "detail_class", ""),
+        "detail_index": getattr(exc, "detail_index", None),
+        "detail_keys": tuple(getattr(exc, "detail_keys", ()) or ()),
+    }
+
+
 _CONTACT_WRITE_LOCK = threading.Lock()
 
 
@@ -279,6 +303,14 @@ class GuardedContactPublisher:
                 raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
             except ZohoAPIError as exc:
                 if getattr(exc, "request_sent", None) is True and (getattr(exc, "status_code", 0) or 0) >= 500:
+                    raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
+                raise
+            except ZohoInvalidResponseError as exc:
+                # A response that cannot be decoded after records.create may
+                # represent a remote CREATE that already happened.
+                raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
+            except (ZohoSDKError, ZohoError) as exc:
+                if getattr(exc, "request_sent", None) is True:
                     raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
                 raise
         records = tuple(getattr(result, "records", ()) or ())
