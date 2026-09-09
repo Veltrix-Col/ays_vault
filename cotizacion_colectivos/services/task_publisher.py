@@ -11,6 +11,7 @@ from typing import Mapping, Protocol
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoAPIError, ZohoError, ZohoTimeoutError
@@ -20,6 +21,7 @@ from ..zoho import cached_metadata_fields
 from .common import colectivos_zoho
 
 from ..models import ColectivosTaskOutbox
+from .billing_exception_tasks import BILLING_TASK_FIELDS
 
 
 logger = logging.getLogger("cotizacion_colectivos")
@@ -111,6 +113,8 @@ class ColectivosTaskPublisher(Protocol):
     def publish(self, payload: ColectivosTaskPayload) -> Mapping[str, object]: ...
 
     def publish_test_task(self) -> Mapping[str, object]: ...
+
+    def publish_billing_exception(self, record: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
 def build_task_record(payload: ColectivosTaskPayload) -> dict[str, str]:
@@ -230,6 +234,10 @@ class DisabledColectivosTaskPublisher:
     def publish_test_task(self) -> Mapping[str, object]:
         raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
 
+    def publish_billing_exception(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        del record
+        raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
+
 
 class GuardedTaskPublisher:
     """Único punto de escritura Tasks, cerrado por barreras independientes.
@@ -258,6 +266,9 @@ class GuardedTaskPublisher:
 
     def publish_test_task(self) -> Mapping[str, object]:
         return self._create_one(SYNTHETIC_TEST_TASK, allowed_fields=TEST_TASK_ALLOWED_FIELDS)
+
+    def publish_billing_exception(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        return self._create_one(record, allowed_fields=BILLING_TASK_FIELDS)
 
     def _create_one(
         self, record: Mapping[str, object], *, allowed_fields: frozenset[str] = ALLOWED_TASK_FIELDS,
@@ -326,37 +337,38 @@ def publish_task_outbox(outbox_id: int) -> None:
         item.save(update_fields=("attempts", "updated_at"))
         try:
             record = json.loads(decrypt(item.encrypted_payload))
-            analyst_request = str(record.get("Solicitud_a_analista") or "").strip()
-            if not analyst_request and item.request_id and item.request.request_type != "COTIZACION":
-                analyst_request = NOVELTIES_ANALYST_REQUEST
-            payload = ColectivosTaskPayload(
-                request_kind=item.event_kind,
-                source_kind="quotation" if item.quotation_id else "request",
-                policy_context="",
-                branch_code="",
-                local_reference=str(getattr(item.quotation, "public_id", "") or getattr(item.request, "public_id", "")),
-                subject=str(record.get("Subject") or ""),
-                area=str(record.get("rea") or ""),
-                observations=str(record.get("Observaciones") or ""),
-                responsible=str(record.get("Responsable") or ""),
-                responsible_email=str(record.get("Correo_responsable") or ""),
-                requested_date=str(record.get("Fecha_de_solicitud_del_cliente") or ""),
-                seller=str(record.get("Vendedor") or ""),
-                analyst_request=analyst_request,
-            )
-            logger.info(
-                "task_publish_payload outbox_id=%s source=%s has_analyst_request=%s has_area=%s",
-                outbox_id, "quotation" if item.quotation_id else "novelties",
-                bool(analyst_request), bool(str(record.get("rea") or "").strip()),
-            )
-            result = get_task_publisher(
+            publisher = get_task_publisher(
                 profile=str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
                 confirmation=configured_confirmation(
                     "task",
                     str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")),
                     legacy_setting="COLECTIVOS_TASK_WRITE_CONFIRMATION",
                 ),
-            ).publish(payload)
+            )
+            if item.billing_case_id:
+                result = publisher.publish_billing_exception(record)
+            else:
+                analyst_request = str(record.get("Solicitud_a_analista") or "").strip()
+                if not analyst_request and item.request_id and item.request.request_type != "COTIZACION":
+                    analyst_request = NOVELTIES_ANALYST_REQUEST
+                payload = ColectivosTaskPayload(
+                    request_kind=item.event_kind,
+                    source_kind="quotation" if item.quotation_id else "request",
+                    policy_context="", branch_code="",
+                    local_reference=str(getattr(item.quotation, "public_id", "") or getattr(item.request, "public_id", "")),
+                    subject=str(record.get("Subject") or ""), area=str(record.get("rea") or ""),
+                    observations=str(record.get("Observaciones") or ""),
+                    responsible=str(record.get("Responsable") or ""),
+                    responsible_email=str(record.get("Correo_responsable") or ""),
+                    requested_date=str(record.get("Fecha_de_solicitud_del_cliente") or ""),
+                    seller=str(record.get("Vendedor") or ""), analyst_request=analyst_request,
+                )
+                logger.info(
+                    "task_publish_payload outbox_id=%s source=%s has_analyst_request=%s has_area=%s",
+                    outbox_id, "quotation" if item.quotation_id else "novelties",
+                    bool(analyst_request), bool(str(record.get("rea") or "").strip()),
+                )
+                result = publisher.publish(payload)
         except TaskPublicationUncertain:
             item.status = item.Status.RECONCILE
             item.safe_error_code = "UNCERTAIN"
@@ -379,3 +391,11 @@ def publish_task_outbox(outbox_id: int) -> None:
         item.encrypted_remote_id = encrypt(remote_id)
         item.safe_error_code = ""
         item.save(update_fields=("status", "encrypted_remote_id", "safe_error_code", "updated_at"))
+        if item.billing_case_id:
+            item.billing_case.zoho_task_id = remote_id
+            item.billing_case.zoho_task_status = "No iniciado"
+            item.billing_case.zoho_task_responsible = str(record.get("Responsable") or "")
+            item.billing_case.zoho_task_synced_at = timezone.now()
+            item.billing_case.save(update_fields=(
+                "zoho_task_id", "zoho_task_status", "zoho_task_responsible", "zoho_task_synced_at",
+            ))

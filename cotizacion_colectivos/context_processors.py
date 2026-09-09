@@ -16,6 +16,7 @@ def colectivos_navigation(request):
         "inbox": (
             has_internal_permission(request, "view_requests")
         ),
+        "billing_exceptions": has_internal_permission(request, "view_billing_exceptions"),
     }
     if public_internal_access_enabled():
         actor = get_internal_actor(request, create=False)

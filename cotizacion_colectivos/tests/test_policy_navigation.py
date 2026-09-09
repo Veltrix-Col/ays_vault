@@ -492,7 +492,14 @@ class PolicyNavigationTests(TestCase):
         self.assertIn("Cotización Individual", header)
         self.assertIn("Invitaciones", header)
         self.assertIn("Conciliador", header)
+        self.assertIn("Excepciones de Facturación", header)
         self.assertIn("Buzón", header)
+        self.assertLess(header.index("Conciliador"), header.index("Excepciones de Facturación"))
+        self.assertLess(header.index("Excepciones de Facturación"), header.index("Buzón"))
+        self.assertLess(header.index("Buzón"), header.index("Perfil Zoho activo"))
+        tools_group = header.split('class="colectivos-tool-nav__links"', 1)[1].split("</div>", 1)[0]
+        self.assertIn("Excepciones de Facturación", tools_group)
+        self.assertNotIn("Buzón", tools_group)
         self.assertIn('class="is-active" aria-current="page"', header)
         self.assertIn("colectivos-tool-nav", header)
 
