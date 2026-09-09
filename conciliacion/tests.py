@@ -153,6 +153,18 @@ def _write_result(succeeded=True, record_id="7000000000001", code="SUCCESS"):
     ),))
 
 
+def _write_result_multi(n, succeeded=True):
+    return SimpleNamespace(records=tuple(
+        SimpleNamespace(succeeded=succeeded, record_id=f"id-{i}", code="SUCCESS") for i in range(n)
+    ))
+
+
+def _creditos_riesgos(mapa):
+    """mapa: {subriesgo: numero_credito_actual_o_None} -> forma que devuelve
+    `resolver_creditos_riesgos`."""
+    return {subriesgo: {"id": f"id-{subriesgo}", "numero_credito": valor} for subriesgo, valor in mapa.items()}
+
+
 def _cobros_candidatos(cobro_id="7000000000001"):
     return [{
         "id": cobro_id, "nombre": "Operación 1", "ramo": "Salud",
@@ -276,3 +288,122 @@ class PrellenarCobroViewTests(TestCase):
                 "Valor_de_cuota": 150000.5,
             },),
         )
+
+
+class ActualizarCreditoViewTests(TestCase):
+    """El botón "Facturar cobro" (VG Deudores) asigna el "Número crédito" en
+    Riesgos1 para los riesgos que el cobro (export de Riesgos vigentes) trajo
+    con 'Código de Crédito' y aún no lo tengan -- ver
+    `conciliacion.services.processor.actualizar_numero_credito`. Siempre
+    mockeado: no hay credenciales de Zoho Producción disponibles (ni deberían
+    usarse) para correr esta suite."""
+
+    def setUp(self):
+        self.url = reverse("conciliacion:actualizar_credito")
+        self.payload = {
+            "poliza": "083002914855",
+            "pendientes": [
+                {"subriesgo": "27147", "codigo_credito": "26000195"},
+                {"subriesgo": "27148", "codigo_credito": "26000285"},
+            ],
+        }
+
+    def _post(self, payload):
+        return self.client.post(
+            self.url, data=json.dumps(payload), content_type="application/json",
+        )
+
+    def test_deshabilitado_por_defecto_rechaza_sin_llamar_a_zoho(self):
+        with patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 409)
+        get_zoho.assert_not_called()
+
+    def test_metodo_get_no_permitido(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_json_invalido_se_rechaza(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True):
+            response = self.client.post(self.url, data=b"no es json", content_type="application/json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_sin_pendientes_validos_no_escribe_nada(self):
+        payload = {"poliza": "083002914855", "pendientes": []}
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(payload)
+        self.assertEqual(response.status_code, 400)
+        get_zoho.assert_not_called()
+
+    def test_asigna_numero_credito_cuando_esta_vacio(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": None, "27148": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(2)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertTrue(body["ok"])
+        self.assertCountEqual(body["actualizados"], ["27147", "27148"])
+        self.assertEqual(body["omitidos"], [])
+        get_zoho.assert_called_once_with(profile="production")
+        update.assert_called_once_with(
+            module="Riesgos1",
+            records=(
+                {"id": "id-27147", "N_mero_cr_dito": "26000195"},
+                {"id": "id-27148", "N_mero_cr_dito": "26000285"},
+            ),
+        )
+
+    def test_omite_riesgo_que_ya_tiene_numero_credito(self):
+        # Nunca sobreescribe un Número crédito ya asignado en Zoho.
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": "26000195", "27148": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(1)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["omitidos"], ["27147"])
+        self.assertEqual(body["actualizados"], ["27148"])
+        update.assert_called_once_with(
+            module="Riesgos1",
+            records=({"id": "id-27148", "N_mero_cr_dito": "26000285"},),
+        )
+
+    def test_riesgo_no_encontrado_se_reporta_pero_no_falla(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": None})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            update = get_zoho.return_value.records.update
+            update.return_value = _write_result_multi(1)
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["no_encontrados"], ["27148"])
+        self.assertEqual(body["actualizados"], ["27147"])
+
+    def test_no_escribe_nada_si_todos_estan_asignados_u_omitidos(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.resolver_creditos_riesgos",
+                   return_value=_creditos_riesgos({"27147": "26000195", "27148": "26000285"})), \
+             patch("conciliacion.services.processor.get_zoho") as get_zoho:
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = json.loads(response.content)
+        self.assertEqual(body["actualizados"], [])
+        self.assertCountEqual(body["omitidos"], ["27147", "27148"])
+        get_zoho.return_value.records.update.assert_not_called()
+
+    def test_error_de_autenticacion_zoho_se_traduce_a_502(self):
+        with self.settings(CONCILIACION_CREDITO_UPDATE_ENABLED=True), \
+             patch("conciliacion.services.processor.get_zoho",
+                   side_effect=ZohoAuthenticationError("sin credenciales")):
+            response = self._post(self.payload)
+        self.assertEqual(response.status_code, 502)

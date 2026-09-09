@@ -25,9 +25,10 @@ from conciliador.rules.presencia import (
 from conciliador.rules.recibo import ReciboConciliacionRule
 from conciliador.rules.valor import ComparacionExactaRule
 from conciliador.sources.movilidad import cargar_cobro_movilidad
-from conciliador.sources.salud import cargar_cobro_salud, periodo_desde_porchat
+from conciliador.sources.salud import cargar_cobro_salud, inferir_periodo_salud
 from conciliador.sources.vg import (
     cargar_cobro_vg,
+    cargar_cobro_vg_deudores,
     cargar_novedades_cliente_deudor,
     cargar_relacion_vg,
     cargar_relacion_vg_api,
@@ -87,7 +88,7 @@ RAMOS: dict[str, RamoConfig] = {
         cargar_cobro=cargar_cobro_salud,
         cargar_personas=cargar_personas_zoho,
         cargar_novedades=_novedades_zoho_o_vacio,
-        inferir_periodo=periodo_desde_porchat,  # el periodo real viene del contenido del Porchat, no del nombre del archivo
+        inferir_periodo=inferir_periodo_salud,  # el periodo real viene del contenido del archivo, no del nombre
         patrones_archivo={
             "personas": "Personas_Zoho*.xlsx",
             "cobro": "*Porchat*.xlsx",
@@ -133,7 +134,7 @@ RAMOS: dict[str, RamoConfig] = {
         reglas=[*_REGLAS_PRESENCIA, IngresoNuevoSinPersonaRule(), SumaCoberturasRule(),
                 NovedadContradictoriaRule(), IdentidadInconsistenteRule(), ReciboConciliacionRule()],
         cargar_relacion=cargar_relacion_vg,
-        cargar_cobro=cargar_cobro_vg,
+        cargar_cobro=cargar_cobro_vg_deudores,
         cargar_personas=cargar_personas_zoho,
         cargar_novedades=_novedades_cliente_o_vacio,
         inferir_periodo=inferir_periodo_desde_nombre_archivo,

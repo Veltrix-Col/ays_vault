@@ -65,6 +65,16 @@ def _validar_xlsx_seguro(archivo) -> None:
         archivo.seek(0)
 
 
+def _es_zip(archivo) -> bool:
+    """Algunos archivos llegan con extension .xls aunque su contenido es en
+    realidad un .xlsx (zip) -- ver `conciliador.sources.vg` y
+    `conciliador.sources.salud`. Se detecta por firma en vez de por
+    extension para que `_validar_xlsx_seguro` tambien corra sobre esos."""
+    firma = archivo.read(4)
+    archivo.seek(0)
+    return firma[:2] == b"PK"
+
+
 def _validar_pdf(archivo) -> None:
     encabezado = archivo.read(5)
     archivo.seek(0)
@@ -120,7 +130,7 @@ class ConciliacionUploadForm(forms.Form):
         if permitidas and extension not in permitidas:
             legibles = " o ".join(sorted(permitidas))
             raise forms.ValidationError(f"El archivo debe tener extensión {legibles}.")
-        if extension == ".xlsx":
+        if extension == ".xlsx" or (extension == ".xls" and _es_zip(archivo)):
             _validar_xlsx_seguro(archivo)
         elif extension == ".pdf":
             _validar_pdf(archivo)

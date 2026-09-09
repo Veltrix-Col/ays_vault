@@ -71,9 +71,10 @@ _OVERRIDES: dict[str, dict[str, dict]] = {
     },
     "salud": {
         "cobro": {
-            "label": "Archivo de cobro (Excel de Porchat)",
-            "help": "Exportación del portal Porchat en Excel. Cruce por documento.",
-            "accept": ".xlsx",
+            "label": "Archivo de cobro (Excel de Porchat o de Sura directo)",
+            "help": ("Exportación del portal Porchat, o si no está disponible, descarga directa del "
+                     "portal de Sura. El sistema detecta cuál de los dos formatos es. Cruce por documento."),
+            "accept": ".xls,.xlsx",
         },
     },
     "vg_voluntario": {
@@ -85,8 +86,10 @@ _OVERRIDES: dict[str, dict[str, dict]] = {
     },
     "vg_deudores": {
         "cobro": {
-            "label": "Archivo de cobro (Excel de AVA)",
-            "help": "Excel de AVA con la hoja “Desglose de Coberturas”. Comparación estadística de valor.",
+            "label": "Archivo de cobro (Excel de AVA o de Riesgos vigentes)",
+            "help": ("Excel de AVA con la hoja “Desglose de Coberturas”, o si no está disponible, el export "
+                     "alternativo de Riesgos vigentes de la cartera de créditos. El sistema detecta cuál de "
+                     "los dos es."),
             "accept": ".xls,.xlsx",
         },
         "novedades": {

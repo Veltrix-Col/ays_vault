@@ -215,19 +215,29 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnFacturar && cobrosSelect.value) btnFacturar.href = cobrosSelect.value;
   });
 
-  // --- Prellenado del Cobro antes de facturar -------------------------------
-  // Si el recibo (PDF) se extrajo con éxito, prellena Certificado/Fecha
-  // expedición/Pago total cuota en Zoho Producción justo al hacer clic, antes
-  // de abrir el enlace: la escritura corre primero, luego se navega a Zoho ya
-  // con los campos listos. Si el prellenado falla o está deshabilitado, el
-  // enlace se comporta como antes (navega directo, sin prellenar nada) -- es
-  // una conveniencia no bloqueante, nunca un requisito para facturar.
+  // --- Prellenado del Cobro y asignación de Número crédito antes de facturar
+  // Dos conveniencias independientes que corren justo al hacer clic, antes de
+  // abrir el enlace: (1) si el recibo (PDF) se extrajo con éxito, prellena
+  // Certificado/Fecha expedición/Pago total cuota en Zoho Producción; (2) si
+  // el cobro (VG Deudores, export de Riesgos vigentes) trajo 'Código de
+  // Crédito' para algún riesgo, asigna el "Número crédito" en Zoho para los
+  // que aún no lo tengan. Ninguna bloquea a la otra ni es requisito para
+  // facturar: si ambas están deshabilitadas o no aplican, el enlace se
+  // comporta como antes (navega directo).
   btnFacturar?.addEventListener("click", (event) => {
     const recibo = lastSummary.recibo_cobro;
     const poliza = lastSummary.poliza;
     const cobroId = cobrosSelect?.selectedOptions?.[0]?.dataset?.id;
     const prellenarUrl = btnFacturar.dataset.prellenarUrl;
-    if (!lastSummary.cobro_prefill_enabled || !recibo || !poliza || !cobroId || !prellenarUrl) {
+    const puedePrellenar = !!(lastSummary.cobro_prefill_enabled && recibo && poliza && cobroId && prellenarUrl);
+
+    const pendientes = Array.isArray(lastSummary.creditos_pendientes) ? lastSummary.creditos_pendientes : [];
+    const actualizarCreditoUrl = btnFacturar.dataset.actualizarCreditoUrl;
+    const puedeActualizarCredito = !!(
+      lastSummary.credito_update_enabled && poliza && pendientes.length && actualizarCreditoUrl
+    );
+
+    if (!puedePrellenar && !puedeActualizarCredito) {
       return; // deja el enlace normal (target="_blank") seguir su curso
     }
 
@@ -239,21 +249,36 @@ document.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const destino = btnFacturar.href;
 
-    fetch(prellenarUrl, {
-      method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
-      body: JSON.stringify({
-        poliza, cobro_id: cobroId,
-        certificado: recibo.certificado,
-        fecha_expedicion: recibo.fecha_expedicion,
-        pago_total_cuota: recibo.pago_total_cuota,
-      }),
-    })
-      .then((response) => {
-        if (!response.ok) console.warn("No fue posible prellenar el cobro en Zoho.");
-      })
-      .catch(() => { console.warn("No fue posible prellenar el cobro en Zoho."); })
-      .finally(() => { ventana.location = destino; });
+    const tareas = [];
+    if (puedePrellenar) {
+      tareas.push(
+        fetch(prellenarUrl, {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
+          body: JSON.stringify({
+            poliza, cobro_id: cobroId,
+            certificado: recibo.certificado,
+            fecha_expedicion: recibo.fecha_expedicion,
+            pago_total_cuota: recibo.pago_total_cuota,
+          }),
+        })
+          .then((response) => { if (!response.ok) console.warn("No fue posible prellenar el cobro en Zoho."); })
+          .catch(() => { console.warn("No fue posible prellenar el cobro en Zoho."); })
+      );
+    }
+    if (puedeActualizarCredito) {
+      tareas.push(
+        fetch(actualizarCreditoUrl, {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
+          body: JSON.stringify({ poliza, pendientes }),
+        })
+          .then((response) => { if (!response.ok) console.warn("No fue posible actualizar el Número crédito en Zoho."); })
+          .catch(() => { console.warn("No fue posible actualizar el Número crédito en Zoho."); })
+      );
+    }
+
+    Promise.allSettled(tareas).finally(() => { ventana.location = destino; });
   });
 
   function csrfToken() {

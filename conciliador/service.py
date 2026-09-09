@@ -60,6 +60,24 @@ class ConciliacionResultado:
     # para el incidente 'N/D' que cubre esos casos). Lo usa `conciliacion.services.
     # processor` para ofrecer el prellenado de campos del Cobro en Zoho.
     recibo: ReciboExtraido | None = None
+    # Filas del cobro que traen 'codigo_credito' (VG Deudores, export de
+    # Riesgos vigentes -- ver `conciliador.sources.vg`): None si el cobro no
+    # tiene esa columna, [] si la tiene pero ninguna fila trae valor. Lo usa
+    # `conciliacion.services.processor` para, al facturar, asignar el
+    # "Número crédito" en Zoho a los riesgos que aun no lo tengan.
+    codigos_credito_pendientes: list[dict[str, str]] | None = None
+
+
+def _codigos_credito_pendientes(cobro) -> list[dict[str, str]] | None:
+    """None si el cobro no tiene 'codigo_credito' (solo lo produce el export
+    de Riesgos vigentes de VG Deudores, ver `conciliador.sources.vg`); lista
+    (posiblemente vacia) de {documento_titular, documento, subriesgo,
+    codigo_credito} para las filas que si traen valor, en cualquier otro
+    caso."""
+    if "codigo_credito" not in cobro.columns:
+        return None
+    pendientes = cobro[cobro["codigo_credito"] != ""]
+    return pendientes[["documento_titular", "documento", "subriesgo", "codigo_credito"]].to_dict("records")
 
 
 class ConciliacionService:
@@ -131,4 +149,5 @@ class ConciliacionService:
             nombre_archivo=f"Reporte_Conciliacion_{ramo.nombre.replace(' ', '_')}_{marca}.xlsx",
             resumen=reporte.resumen_por_tipo(),
             recibo=recibo_extraido,
+            codigos_credito_pendientes=_codigos_credito_pendientes(cobro),
         )
