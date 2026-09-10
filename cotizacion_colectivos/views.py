@@ -1342,7 +1342,7 @@ def policy_individual_access(request, token):
             token, source_kind=token_context.get("source_kind"),
         )
         options = affiliate_options(members)
-        affiliate_key = str(request.POST.get("affiliate_key") or "")
+        affiliate_key = str(request.POST.get("affiliate_key") or "") if request.POST.get("select_affiliate") in {"1", "true", "on", "yes"} else ""
         actor = get_internal_actor(request, create=True)
         responsible_options = task_responsible_options(collective_only=True)
         choices = [(item.actual_value, item.display_value) for item in responsible_options]
@@ -1436,6 +1436,59 @@ def policy_individual_access(request, token):
             "individual_otp_required": otp_required,
         },
     )
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def client_branch_individual_access(request, entity_kind, token, branch_code):
+    """Generate an individual quotation from a client/branch context."""
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    if not has_internal_permission(request, "create_individual_quotation"):
+        return permission_denied_response()
+    detail = EntityDetailService().company(token) if entity_kind == "company" else EntityDetailService().person(token)
+    branch = next((item for item in detail.branches if str(item.code) == str(branch_code)), None)
+    if branch is None:
+        raise Http404("Ramo no encontrado")
+    schema = get_policy_branch_schema(branch_code, branch.name)
+    affiliate_choices = []
+    policy_tokens = {}
+    for policy in branch.policies:
+        try:
+            policy_token = policy.detail_token
+            _policy_detail, members = PolicyService().group(policy_token, source_kind=entity_kind)
+        except Exception:
+            continue
+        for option in affiliate_options(members):
+            key = f"{policy_token}|{option.key}"
+            policy_tokens[key] = (policy_token, option.key)
+            affiliate_choices.append({"key": key, "label": f"{option.label} · Póliza {policy.full_reference or policy.masked_reference}"})
+    error = ""
+    generated_url = ""
+    if request.method == "POST":
+        form = IndividualAccessPrepareForm(request.POST)
+        responsible_options = task_responsible_options(collective_only=True)
+        form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options]
+        if form.is_valid():
+            select_affiliate = request.POST.get("select_affiliate") in {"1", "true", "on", "yes"}
+            selected = policy_tokens.get(str(request.POST.get("affiliate_key") or "")) if select_affiliate else None
+            if select_affiliate and selected is None:
+                form.add_error(None, "Seleccione un afiliado válido para este cliente y ramo.")
+            else:
+                actor = get_internal_actor(request, create=True)
+                if selected:
+                    policy_token, affiliate_key = selected
+                    policy_service = PolicyService()
+                    policy_detail, members = policy_service.group(policy_token, source_kind=entity_kind)
+                    _schema, _signed, payload = build_policy_context(policy_token=policy_token, detail=policy_detail, members=members, affiliate_key=affiliate_key, creator_id=actor.pk)
+                else:
+                    payload = {"context_version": 1, "policy_token": "", "source_kind": entity_kind, "source_context": "RAMO", "source_token": token, "branch_code": branch.code, "affiliate_key": "", "affiliate_role": "Nuevo afiliado", "branch_slug": schema.slug, "schema_version": schema.version, "creator_id": actor.pk, "policy_label": "", "branch_name": branch.name, "affiliate_label": "Nuevo afiliado", "collective_context": getattr(detail, "full_name", None) or getattr(detail, "display_name", "")}
+                responsible = next((item for item in responsible_options if item.actual_value == form.cleaned_data.get("responsible")), None)
+                payload.update({"task_responsible": responsible.actual_value if responsible else "", "task_responsible_display": responsible.display_value if responsible else "", "task_area": "Negocios Bienestar y Beneficios", "otp_required": bool(form.cleaned_data.get("otp_required"))})
+                generated = generate_individual_access(context=payload, actor=actor, recipient=form.cleaned_data["recipient"], otp_required=bool(form.cleaned_data.get("otp_required")))
+                generated_url = request.build_absolute_uri(reverse("colectivos_external:individual_quotation", args=[generated.token]))
+        else:
+            error = "Revise los datos del enlace."
+    return render(request, "cotizacion_colectivos/individual/branch_access.html", {"detail": detail, "branch": branch, "schema": schema, "affiliate_choices": affiliate_choices, "error": error, "generated_url": generated_url})
 
 
 @never_cache
@@ -4107,6 +4160,28 @@ def individual_expedient(request, token):
             ),
         })
     context = dict(payload.get("context")) if isinstance(payload.get("context"), dict) else {}
+    destination_policy_pending = str(context.get("source_context") or "").upper() == "RAMO" and not quotation.destination_policy_remote_id
+    destination_policy_options = ()
+    if destination_policy_pending and context.get("source_token"):
+        try:
+            source_detail = (
+                EntityDetailService().company(context["source_token"])
+                if context.get("source_kind") == "company"
+                else EntityDetailService().person(context["source_token"])
+            )
+            target_branch = next(
+                (
+                    item for item in source_detail.branches
+                    if str(item.code) == str(context.get("branch_code") or quotation.branch_code)
+                ),
+                None,
+            )
+            destination_policy_options = tuple(
+                (str(policy.detail_token), policy.full_reference or policy.masked_reference)
+                for policy in (target_branch.policies if target_branch else ())
+            )
+        except Exception:
+            destination_policy_options = ()
     # Contextos firmados anteriores no tienen todavía la metadata de Task.
     # Normalizar aquí evita que el template trate claves opcionales como obligatorias.
     for optional_key in (
@@ -4161,14 +4236,19 @@ def individual_expedient(request, token):
         or (expected_vehicle_count and len(zoho_entities.get("risks") or ()) < expected_vehicle_count)
         or (expected_vehicle_count and len(zoho_entities.get("subrisks") or ()) < expected_vehicle_count)
     )
-    if acceptance.get("status") == "accepted" and quotation.branch_slug == "movilidad":
+    if acceptance.get("status") == "accepted" and quotation.branch_slug == "movilidad" and not destination_policy_pending:
         try:
             zoho_entities = resolve_mobility_entities(quotation=quotation)
         except Exception:
             logger.warning("individual_entities_resolution_failed quotation_id=%s", quotation.public_id)
     elif acceptance.get("status") == "accepted" and quotation.branch_slug in {"salud", "vida", "exequial"}:
         try:
-            zoho_entities = resolve_common_people_entities(quotation=quotation, include_subrisk=quotation.branch_slug in {"vida", "salud"})
+            # Contact resolution does not depend on a destination policy.
+            # Keep policy-bound Riesgos1 disabled until RAMO context is resolved.
+            zoho_entities = resolve_common_people_entities(
+                quotation=quotation,
+                include_subrisk=quotation.branch_slug in {"vida", "salud"} and not destination_policy_pending,
+            )
             safe_metadata = quotation.safe_metadata or {}
         except Exception:
             logger.warning("individual_people_resolution_failed quotation_id=%s", quotation.public_id)
@@ -4313,6 +4393,8 @@ def individual_expedient(request, token):
         "acceptance": acceptance,
         "decision_status": decision_status,
         "decision_pending": decision_status == "pending",
+        "destination_policy_pending": destination_policy_pending,
+        "destination_policy_options": destination_policy_options,
         "is_rejected": decision_status == "rejected",
         "can_reject": decision_status == "pending",
         "can_reactivate": decision_status == "rejected",
@@ -4335,6 +4417,61 @@ def individual_expedient(request, token):
         "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_destination_policy(request, token):
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    try:
+        quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        if str(context.get("source_context") or "").upper() != "RAMO":
+            raise ValidationError("Esta cotización ya tiene una póliza definida.")
+        selected_policy = str(request.POST.get("destination_policy") or "").strip()
+        entity_kind = str(context.get("source_kind") or "company")
+        source_token = str(context.get("source_token") or "")
+        detail = EntityDetailService().company(source_token) if entity_kind == "company" else EntityDetailService().person(source_token)
+        branch = next((item for item in detail.branches if str(item.code) == str(context.get("branch_code") or quotation.branch_code)), None)
+        allowed = {str(policy.detail_token): str(policy.full_reference or policy.masked_reference) for policy in (branch.policies if branch else ())}
+        if selected_policy not in allowed:
+            raise ValidationError("Seleccione una póliza válida para el cliente y ramo.")
+        policy_context = unsign_record_context(selected_policy, "policy")
+        policy_id = str(policy_context.get("id") or "")
+        if not policy_id:
+            raise ValidationError("La póliza seleccionada no es válida.")
+        context["policy_token"] = selected_policy
+        context["policy_label"] = allowed[selected_policy]
+        payload["context"] = context
+        protected = encrypt(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        quotation.encrypted_payload = protected
+        quotation.payload_checksum = hashlib.sha256(protected.encode()).hexdigest()
+        quotation.destination_policy_remote_id = policy_id
+        quotation.save(update_fields=("encrypted_payload", "payload_checksum", "destination_policy_remote_id"))
+        audit(
+            request,
+            "UPDATE",
+            reason="individual_destination_policy_resolved",
+            metadata={
+                "quotation_id": quotation.public_id,
+                "source_context": "RAMO",
+                "policy_remote_id": policy_id,
+            },
+        )
+        messages.success(request, "Póliza destino guardada correctamente.")
+    except (
+        signing.BadSignature,
+        CotizacionIndividual.DoesNotExist,
+        ValidationError,
+        ValueError,
+        json.JSONDecodeError,
+        ColectivosServiceError,
+        ZohoError,
+    ) as exc:
+        messages.error(request, str(exc.message if hasattr(exc, "message") else exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
 @never_cache

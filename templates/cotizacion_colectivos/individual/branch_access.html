@@ -1,0 +1,21 @@
+{% extends "cotizacion_colectivos/base.html" %}
+{% block title %}Cotización individual{% endblock %}
+{% block content %}
+<nav class="breadcrumbs"><a href="javascript:history.back()">← Volver</a><span>/</span><span>{{ branch.name }}</span></nav>
+<section class="workspace-card">
+  <h1>Crear Cotización Individual</h1>
+  <p>Ramo: {{ branch.name }} · Cliente: {% if detail.full_name %}{{ detail.full_name }}{% else %}{{ detail.display_name }}{% endif %}</p>
+  {% if error %}<div class="status-message status-message--error" role="alert">{{ error }}</div>{% endif %}
+  {% if generated_url %}<div class="generated-link-panel" role="status"><strong>Enlace listo para compartir</strong><textarea readonly rows="3">{{ generated_url }}</textarea></div>{% endif %}
+  <form method="post" class="individual-access-form">{% csrf_token %}
+    <label><input type="checkbox" name="select_affiliate" value="1" data-branch-affiliate-toggle> Seleccionar un afiliado</label>
+    <div data-branch-affiliate-fields hidden><label for="affiliate_key">Afiliado</label><select id="affiliate_key" name="affiliate_key"><option value="">Nuevo afiliado</option>{% for item in affiliate_choices %}<option value="{{ item.key }}">{{ item.label }}</option>{% endfor %}</select></div>
+    <label>Correo para código de verificación <input type="email" name="recipient"></label>
+    <label><input type="checkbox" name="otp_required" value="1" checked> Solicitar código de verificación por correo</label>
+    <button type="submit">Generar enlace</button>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}<script>
+(function(){var t=document.querySelector('[data-branch-affiliate-toggle]'), f=document.querySelector('[data-branch-affiliate-fields]'); if(t&&f){t.addEventListener('change',function(){f.hidden=!t.checked;if(!t.checked){var s=f.querySelector('select');if(s)s.value='';}});}}());
+</script>{% endblock %}

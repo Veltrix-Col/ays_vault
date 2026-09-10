@@ -488,6 +488,30 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("100000001", token)
         self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
 
+    def test_policy_context_without_affiliate_preserves_defined_policy(self):
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(),
+            members=(affiliate(),),
+            affiliate_key="",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["policy_token"], POLICY_TOKEN)
+        self.assertEqual(context["affiliate_key"], "")
+        self.assertEqual(context["affiliate_label"], "Nuevo afiliado")
+
+    def test_policy_context_affiliate_binds_original_policy(self):
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(),
+            members=(affiliate(),),
+            affiliate_key="affiliate-hmac-key",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["policy_token"], POLICY_TOKEN)
+        self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
+        self.assertNotIn("source_context", context)
+
     def test_existing_affiliate_prefill_preserves_structured_contact_fields(self):
         member = replace(
             affiliate(),

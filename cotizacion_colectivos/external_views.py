@@ -109,6 +109,20 @@ logger = logging.getLogger("cotizacion_colectivos")
 def _individual_workspace(context):
     profile = get_colectivos_profile()
     backend = str(getattr(settings, "ZOHO_BACKEND", "sdk")).strip().lower()
+    if str(context.get("source_context") or "").upper() == "RAMO" and not context.get("policy_token"):
+        try:
+            identification_choices = identification_choice_pairs()
+            schema = with_identification_choices(
+                get_policy_branch_schema(context.get("branch_code"), context.get("branch_name")),
+                identification_choices,
+            )
+            if schema.slug in {"vida", "salud"}:
+                schema = with_relationship_choices(schema, subrisk_relationship_choice_pairs())
+        except CatalogUnavailable as exc:
+            raise signing.BadSignature(str(exc)) from exc
+        if schema.slug != context.get("branch_slug") or schema.version != context.get("schema_version"):
+            raise signing.BadSignature("El formulario ya no corresponde al ramo.")
+        return None, (), {}, schema, identification_choices
     loaded = load_policy_preparation(
         token=str(context["policy_token"]),
         profile=profile,
