@@ -9,9 +9,11 @@ from unittest.mock import Mock, patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import resolve, reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
@@ -1356,6 +1358,29 @@ class ExternalWorkflowTests(TestCase):
         self.assertEqual(self.request.status, self.request.Status.ANSWERED)
         access.refresh_from_db()
         self.assertEqual(access.status, access.Status.USED)
+
+    def test_submit_response_lock_does_not_join_nullable_access(self):
+        """The PostgreSQL-safe lock must target only the response row."""
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{
+                "record": str(self.record.public_key),
+                "action": "RETIRAR",
+                "fecha_retiro": "2026-09-01",
+            }],
+            observations="",
+        )
+        with CaptureQueriesContext(connection) as queries:
+            submit_response(access=access, response=response, declaration=True)
+
+        response_queries = [
+            query["sql"].upper()
+            for query in queries
+            if "RESPUESTASOLICITUDCOLECTIVO" in query["sql"].upper()
+        ]
+        self.assertTrue(response_queries)
+        self.assertTrue(all("LEFT OUTER JOIN" not in sql for sql in response_queries))
 
     def test_personal_identifier_validation_for_inclusion(self):
         access = self.verified_access()

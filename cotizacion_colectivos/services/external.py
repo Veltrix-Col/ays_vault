@@ -957,7 +957,12 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
 
 @transaction.atomic
 def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool, no_changes: bool = False) -> RespuestaSolicitudColectivo:
-    locked = RespuestaSolicitudColectivo.objects.select_for_update().select_related("request", "access").get(pk=response.pk)
+    # Lock only the response row.  ``access`` is nullable, so joining it
+    # through ``select_related`` would make PostgreSQL reject the
+    # ``FOR UPDATE`` query (it cannot lock the nullable side of an outer
+    # join).  The related objects are loaded lazily after the row lock while
+    # the surrounding transaction remains active.
+    locked = RespuestaSolicitudColectivo.objects.select_for_update().get(pk=response.pk)
     if locked.status == locked.Status.SUBMITTED:
         return locked
     valid_novelties = locked.changes.filter(
