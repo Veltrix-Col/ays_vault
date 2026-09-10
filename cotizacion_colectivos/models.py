@@ -475,6 +475,15 @@ class RenovacionColectiva(models.Model):
         return (self.expiry_date - timezone.localdate()).days if self.expiry_date else None
 
 
+class ColectivosPolicyAutomationPreference(models.Model):
+    """Persistent automation preference keyed by Zoho's stable policy id."""
+
+    policy_remote_id = models.CharField(max_length=30, unique=True, editable=False)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class SolicitudColectivo(models.Model):
     class Status(models.TextChoices):
         DRAFT = "BORRADOR", "Borrador"

@@ -1359,6 +1359,23 @@ class ExternalWorkflowTests(TestCase):
         access.refresh_from_db()
         self.assertEqual(access.status, access.Status.USED)
 
+    @patch("cotizacion_colectivos.services.external._publish_novelty_task_outbox")
+    def test_submission_publishes_each_existing_task_outbox_after_commit(self, publish):
+        access = self.verified_access()
+        response = save_response(
+            access=access,
+            rows=[{
+                "record": str(self.record.public_key),
+                "action": "RETIRAR",
+                "fecha_retiro": "2026-09-01",
+            }],
+            observations="",
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            submit_response(access=access, response=response, declaration=True)
+        outbox = ColectivosTaskOutbox.objects.get(request=self.request, event_kind="RETIRO")
+        publish.assert_called_once_with(outbox.pk)
+
     def test_submit_response_lock_does_not_join_nullable_access(self):
         """The PostgreSQL-safe lock must target only the response row."""
         access = self.verified_access()

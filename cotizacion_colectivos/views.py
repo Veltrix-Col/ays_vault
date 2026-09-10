@@ -92,7 +92,7 @@ from .branches import LIFE_GROUP_CONTRACTS, LIFE_GROUP_VALUES, canonical_life_gr
 from integrations.zoho.exceptions import ZohoError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
 from .quotation_forms.catalog import get_policy_branch_schema
-from .services.renewals import sync_renewal_cycles, set_renewal_selection, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access, next_month_period
+from .services.renewals import sync_renewal_cycles, set_renewal_selection, set_policy_automation, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access, next_month_period
 
 
 logger = logging.getLogger("cotizacion_colectivos")
@@ -359,6 +359,32 @@ def renewal_toggle(request, cycle_id):
         set_renewal_selection(cycle_id=cycle.pk, selected=selected, recipient=request.POST.get("recipient"))
     except RenovacionColectiva.DoesNotExist:
         raise Http404("Programación no encontrada")
+    return redirect("cotizacion_colectivos:novelties_index")
+
+
+@never_cache
+@require_http_methods(["POST"])
+def renewal_policy_automation_toggle(request, cycle_id):
+    """Toggle only one policy's scheduled automation preference."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    enabled = str(request.POST.get("enabled") or "").lower() in {"1", "true", "on", "yes"}
+    try:
+        cycle = set_policy_automation(cycle_id=cycle_id, enabled=enabled)
+    except RenovacionColectiva.DoesNotExist:
+        raise Http404("Programación no encontrada")
+    audit(
+        request,
+        "UPDATE",
+        reason="renewal_policy_automation_updated",
+        metadata={
+            "cycle_id": cycle.pk,
+            "policy_remote_id": cycle.policy_remote_id,
+            "previous_enabled": getattr(cycle, "_policy_automation_previous", True),
+            "enabled": enabled,
+        },
+    )
+    messages.success(request, "Automatización de la póliza actualizada.")
     return redirect("cotizacion_colectivos:novelties_index")
 
 

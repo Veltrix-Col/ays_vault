@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,7 +15,8 @@ from vault.crypto import encrypt
 from cotizacion_colectivos.models import ColectivosOperationalSetting, RenovacionColectiva
 from cotizacion_colectivos.management.commands.colectivos_process_renewals import Command
 from cotizacion_colectivos.management.commands.colectivos_test_renewal_email import CONFIRMATION
-from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, next_month_period, upcoming_cycles, tracking_cycles, set_renewal_selection
+from cotizacion_colectivos.services.renewals import POLICY_FIELDS, RenewalPolicy, _renewal_logo_url, _send_renewal_email, diagnose_renewal_source, list_collective_renewals, process_renewal_cycles, sync_renewal_cycles, _map_record, next_month_period, upcoming_cycles, tracking_cycles, set_renewal_selection, set_policy_automation
+from cotizacion_colectivos.models import ColectivosPolicyAutomationPreference
 
 
 class RenewalEmailCommandTests(SimpleTestCase):
@@ -575,6 +576,65 @@ class RenewalSelectionTests(TestCase):
         self.assertTrue(selected.selected)
         self.assertEqual(selected.status, RenovacionColectiva.Status.PROGRAMMED)
         self.assertEqual(upcoming_cycles(filter_name="programmed", today=date(2026, 8, 24)).count(), 1)
+
+    def test_policy_automation_defaults_on_and_persists_independently(self):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="policy-automation-default:2026-09", policy_remote_id="4991513000271000201",
+            policy_token="protected", masked_policy="0201", client_label="Empresa", branch_name="Salud colectivo",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+        self.assertTrue(upcoming_cycles(today=date(2026, 8, 24)).get().policy_automation_enabled)
+        set_policy_automation(cycle_id=cycle.pk, enabled=False)
+        self.assertFalse(ColectivosPolicyAutomationPreference.objects.get(policy_remote_id=cycle.policy_remote_id).enabled)
+        set_policy_automation(cycle_id=cycle.pk, enabled=True)
+        self.assertTrue(ColectivosPolicyAutomationPreference.objects.get(policy_remote_id=cycle.policy_remote_id).enabled)
+
+    def test_policy_preference_survives_later_cycle_and_defaults_on(self):
+        first = RenovacionColectiva.objects.create(
+            cycle_key="persistent-policy:2026-09", policy_remote_id="policy-stable-1",
+            policy_token="protected", masked_policy="0001", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+        set_policy_automation(cycle_id=first.pk, enabled=False)
+        later = RenovacionColectiva.objects.create(
+            cycle_key="persistent-policy:2026-10", policy_remote_id=first.policy_remote_id,
+            policy_token="protected", masked_policy="0001", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-10", scheduled_for=date(2026, 9, 30),
+        )
+        self.assertFalse(upcoming_cycles(today=date(2026, 9, 24)).get(pk=later.pk).policy_automation_enabled)
+
+    def test_policy_preference_is_independent_between_policies(self):
+        off = RenovacionColectiva.objects.create(
+            cycle_key="independent-off:2026-09", policy_remote_id="policy-off",
+            policy_token="protected", masked_policy="0002", client_label="A", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+        on = RenovacionColectiva.objects.create(
+            cycle_key="independent-on:2026-09", policy_remote_id="policy-on",
+            policy_token="protected", masked_policy="0003", client_label="B", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 31),
+        )
+        set_policy_automation(cycle_id=off.pk, enabled=False)
+        rows = {row.policy_remote_id: row.policy_automation_enabled for row in upcoming_cycles(today=date(2026, 8, 24))}
+        self.assertFalse(rows[off.policy_remote_id])
+        self.assertTrue(rows[on.policy_remote_id])
+
+    @patch("cotizacion_colectivos.services.renewals._send_renewal_email")
+    def test_policy_automation_off_is_excluded_from_batch(self, send_email):
+        cycle = RenovacionColectiva.objects.create(
+            cycle_key="policy-automation-off:2026-09", policy_remote_id="4991513000271000202",
+            policy_token=encrypt("protected"), masked_policy="0202", client_label="Empresa", branch_name="VG deudores",
+            monthly_period="2026-09", scheduled_for=date(2026, 8, 24), automation_eligible=True,
+            status=RenovacionColectiva.Status.PROGRAMMED,
+            encrypted_recipient=encrypt("cliente@example.test"), recipient_hash="x" * 64,
+        )
+        ColectivosPolicyAutomationPreference.objects.create(policy_remote_id=cycle.policy_remote_id, enabled=False)
+        with override_settings(COLECTIVOS_RENEWAL_EMAIL_PASSWORD="test", COLECTIVOS_RENEWAL_EMAIL_USER="u", COLECTIVOS_RENEWAL_EMAIL_FROM="from@example.test"):
+            result = process_renewal_cycles(now=timezone.make_aware(datetime(2026, 8, 24, 10, 0)), dry_run=True)
+        self.assertEqual(result["processed"], 0)
+        send_email.assert_not_called()
+        cycle.refresh_from_db()
+        self.assertEqual(cycle.status, RenovacionColectiva.Status.PROGRAMMED)
 
     def test_sent_cycle_moves_to_tracking_and_responded_is_not_resendable_by_default(self):
         cycle = RenovacionColectiva.objects.create(
