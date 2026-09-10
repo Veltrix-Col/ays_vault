@@ -15,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils.exceptions import InvalidFileException
@@ -117,9 +118,17 @@ def _policy_sheets(request: SolicitudColectivo):
 
 def _style_novelties_sheet(sheet, headers: tuple[str, ...], identification_choices=()) -> None:
     sheet.append(headers)
+    editable_headers = {"Acción", "Fecha de ingreso", "Fecha de retiro"}
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="155A96")
+        if cell.value in editable_headers:
+            cell.font = Font(bold=True, color="7F6000")
+            cell.fill = PatternFill("solid", fgColor="FFF2CC")
+            cell.comment = Comment(
+                "Las columnas resaltadas corresponden a la información que debe diligenciar para reportar novedades.",
+                "A&S",
+            )
     sheet.freeze_panes = "A2"
     widths = {
         "Acción": 14, "Tipo de identificación": 28, "Identificación": 20,

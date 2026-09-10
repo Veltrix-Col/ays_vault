@@ -72,7 +72,7 @@
         <p>A&amp;S validará posteriormente la fecha aplicable y las condiciones del negocio.</p>
         <div class="functional-action-grid">
           <input type="hidden" name="action_entity_{{ entity.key }}" value="SIN_CAMBIOS" data-row-action>
-          <label>Fecha solicitada de retiro<input type="date" name="fecha_retiro_entity_{{ entity.key }}" placeholder="AAAA-MM-DD" required></label>
+          <label>Fecha solicitada de retiro <span class="required-mark" aria-hidden="true">*</span><input type="date" name="fecha_retiro_entity_{{ entity.key }}" placeholder="AAAA-MM-DD" required></label>
           <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3" placeholder="Información adicional (opcional)"></textarea></label>
         </div>
       </section>
