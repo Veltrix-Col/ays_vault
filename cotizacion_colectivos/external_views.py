@@ -461,7 +461,7 @@ def no_changes_confirm(request, token):
 
 
 def _rows(request_obj):
-    return request_obj.records.select_related("policy").only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
+    return request_obj.records.select_related("policy").filter(active=True).only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
 
 
 def _display_rows(request_obj, snapshot):

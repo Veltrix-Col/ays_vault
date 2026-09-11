@@ -29,6 +29,11 @@ from cotizacion_colectivos.adjustments import (
     BRANCH_ADJUSTMENTS,
     validate_adjustment_codes,
 )
+from .riesgos1_status import filter_operable_riesgos1_members, is_operable_riesgos1
+
+
+def _operable_members(members):
+    return filter_operable_riesgos1_members(members, reference_date=timezone.localdate())
 
 
 def _hash_reference(value: object) -> str:
@@ -223,7 +228,11 @@ def _replace_records(request: SolicitudColectivo, members, *, policy=None, start
             encrypted_branch_payload=encrypt(json.dumps(safe_payload, ensure_ascii=False, sort_keys=True)),
             original_position=position,
             checksum=checksum,
-            active="activo" in member.state.casefold(),
+            active=is_operable_riesgos1(
+                state=member.state,
+                exit_date=member.exit_date,
+                reference_date=timezone.localdate(),
+            ),
         ))
         position += 1
     bulk_started = time.monotonic()
@@ -242,6 +251,7 @@ def create_request_from_policy(*, token: str, source_kind: str, actor, assigned_
         raise ColectivosServiceError("invalid_record", "El origen de la solicitud no es válido.")
     service = service or PolicyService()
     detail, members = service.group(token, source_kind=source_kind)
+    members = _operable_members(members)
     if detail.classification != "confirmed" or detail.branch_code not in BRANCH_ADJUSTMENTS:
         raise ColectivosServiceError("invalid_record", "La póliza no tiene una clasificación segura.")
     policy_hash, source_hash = request_reference_hashes(token=token, source_kind=source_kind, holder=detail.holder)
@@ -356,6 +366,7 @@ def create_request_from_policies(
             raise ColectivosServiceError("invalid_record", "Las pólizas no pertenecen a la misma entidad.")
         source_id = current_source
         detail, members = service.group(token, source_kind=source_kind)
+        members = _operable_members(members)
         if detail.classification != "confirmed" or detail.branch_code not in BRANCH_ADJUSTMENTS:
             raise ColectivosServiceError("invalid_record", "Una póliza no tiene clasificación colectiva segura.")
         try:
@@ -635,6 +646,7 @@ def regenerate_request_snapshot(*, request: SolicitudColectivo, actor, service: 
         except ValueError as exc:
             raise ValidationError("La referencia protegida de la póliza no es válida.") from exc
         detail, members = service.group(token, source_kind=locked.source_kind)
+        members = _operable_members(members)
         if detail.branch_code != locked.branch_code:
             raise ValidationError("El origen actual no coincide con el expediente.")
         payload = _snapshot_payload(detail, members, service.profile)
@@ -650,6 +662,7 @@ def regenerate_request_snapshot(*, request: SolicitudColectivo, actor, service: 
             except ValueError as exc:
                 raise ValidationError("Una referencia protegida de póliza no es válida.") from exc
             detail, members = service.group(token, source_kind=locked.source_kind)
+            members = _operable_members(members)
             if detail.branch_code != policy.branch_code:
                 raise ValidationError("Una póliza ya no coincide con el expediente.")
             snapshot = _snapshot_payload(detail, members, service.profile, policy.enabled_adjustments)
