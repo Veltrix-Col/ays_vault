@@ -46,6 +46,46 @@ class SubriskPayloadTests(SimpleTestCase):
         self.assertNotIn("Riesgo", payload)
         self.assertEqual(payload["P_liza"], {"id": "4991513000270954040"})
 
+    def test_life_group_voluntary_contract_uses_same_payload_without_risk(self):
+        payload = build_life_group_subrisk_payload(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954041",
+            insured_contact_id="4991513000270954041",
+            subrisk_name="TEST-VG-VOLUNTARIO-001",
+            entry_date="2026-08-31",
+            ramo="VG voluntario",
+            parentesco="Afiliado",
+            plan="",
+        )
+        self.assertEqual(payload["Ramo"], "VG voluntario")
+        self.assertEqual(payload["Estado"], "Activo")
+        self.assertNotIn("Riesgo", payload)
+        self.assertNotIn("Plan", payload)
+
+    def test_life_group_plan_is_trimmed_and_limited(self):
+        payload = build_life_group_subrisk_payload(
+            policy_id="4991513000270954040",
+            affiliate_contact_id="4991513000270954041",
+            insured_contact_id="4991513000270954041",
+            subrisk_name="TEST-VG-VOLUNTARIO-002",
+            entry_date="2026-08-31",
+            ramo="VG voluntario",
+            parentesco="Afiliado",
+            plan="  Plan básico  ",
+        )
+        self.assertEqual(payload["Plan"], "Plan básico")
+        with self.assertRaises(ValidationError):
+            build_life_group_subrisk_payload(
+                policy_id="4991513000270954040",
+                affiliate_contact_id="4991513000270954041",
+                insured_contact_id="4991513000270954041",
+                subrisk_name="TEST-VG-VOLUNTARIO-003",
+                entry_date="2026-08-31",
+                ramo="VG voluntario",
+                parentesco="Afiliado",
+                plan="x" * 256,
+            )
+
     def test_life_group_beneficiary_role_uses_beneficiary_lookup(self):
         payload = build_life_group_subrisk_payload(
             policy_id="4991513000270954040",

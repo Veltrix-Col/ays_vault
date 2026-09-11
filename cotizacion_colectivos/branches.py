@@ -27,18 +27,20 @@ class CollectiveBranch:
 
 
 # Vida Grupo is one functional family for capture and Contact resolution.
-# Write support is intentionally tracked separately because only VG deudores
-# has a profiled Riesgos1 record-level contract in this repository.
+# Write support is tracked explicitly per confirmed Riesgos1 contract so that
+# adding a new family value cannot silently enable remote writes.
 LIFE_GROUP_VALUES = (
     "VG deudores", "VG patronal", "VG voluntario", "VG legal", "VG mixto",
     "VG flexibilizacion", "VG flexibilización",
 )
 LIFE_GROUP_CONTRACTS = {
-    value: {
-        "write_enabled": value == "VG deudores",
-        "required_ingress_fields": ("parentesco",) if value == "VG deudores" else (),
-    }
-    for value in LIFE_GROUP_VALUES
+    "VG deudores": {"write_enabled": True, "required_ingress_fields": ("parentesco",)},
+    "VG patronal": {"write_enabled": False, "required_ingress_fields": ()},
+    "VG voluntario": {"write_enabled": True, "required_ingress_fields": ("parentesco",)},
+    "VG legal": {"write_enabled": False, "required_ingress_fields": ()},
+    "VG mixto": {"write_enabled": False, "required_ingress_fields": ()},
+    "VG flexibilizacion": {"write_enabled": False, "required_ingress_fields": ()},
+    "VG flexibilización": {"write_enabled": False, "required_ingress_fields": ()},
 }
 
 
