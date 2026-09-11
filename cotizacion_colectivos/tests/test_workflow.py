@@ -579,6 +579,47 @@ class RequestWorkflowTests(TestCase):
         self.assertContains(page, '<details class="workspace-card technical-disclosure">', html=False)
         self.assertNotContains(page, '<details open class="workspace-card technical-disclosure">', html=False)
 
+    def test_reconcile_required_ingress_shows_only_reconcile_action(self):
+        item = self.create_request()
+        item.status = item.Status.ANSWERED
+        item.save(update_fields=("status", "updated_at"))
+        RespuestaSolicitudColectivo.objects.create(
+            request=item, version=1,
+            status=RespuestaSolicitudColectivo.Status.SUBMITTED,
+            origin=RespuestaSolicitudColectivo.Origin.WEB,
+            submitted_at=timezone.now(), checksum="r" * 64,
+        )
+
+        def ingress(**overrides):
+            values = {
+                "pk": 10, "item_key": "person-10", "branch_code": "91",
+                "policy_remote_id": "", "encrypted_payload": encrypt(json.dumps({
+                    "display_name": "Persona conciliación", "document": "123",
+                    "id_type": "CC",
+                })), "contact_zoho_id": "", "risk_zoho_id": "",
+                "subrisk_zoho_id": "", "safe_error": "Requiere conciliación",
+                "reconcile_required": True, "review_status": "",
+                "review_contact_id": "", "review_error": "",
+                "status": "RECONCILE_REQUIRED",
+            }
+            values.update(overrides)
+            return SimpleNamespace(**values)
+
+        self.client.force_login(self.creator)
+        detail_url = reverse("cotizacion_colectivos:request_detail", args=[item.public_id])
+        with patch("cotizacion_colectivos.views.ensure_novelty_ingress_items", return_value=(ingress(),)):
+            page = self.client.get(detail_url)
+        self.assertContains(page, "Conciliar persona")
+        self.assertNotContains(page, "Crear persona en Zoho")
+
+        with patch("cotizacion_colectivos.views.ensure_novelty_ingress_items", return_value=(ingress(contact_zoho_id="CONTACT-1"),)):
+            page = self.client.get(detail_url)
+        self.assertNotContains(page, "Conciliar persona")
+
+        with patch("cotizacion_colectivos.views.ensure_novelty_ingress_items", return_value=(ingress(reconcile_required=False, status="PENDING"),)):
+            page = self.client.get(detail_url)
+        self.assertNotContains(page, "Conciliar persona")
+
     def test_response_novelty_edit_is_local_auditable_and_isolated(self):
         item = self.create_request()
         item.status = item.Status.ANSWERED

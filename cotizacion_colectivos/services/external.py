@@ -42,6 +42,7 @@ from .task_publisher import (
     NOVELTIES_TASK_AREA,
     ColectivosTaskPayload,
     enqueue_task,
+    publish_task_outbox,
 )
 from .requests import _restore_policy_token, request_snapshot
 from .novelty_response_email import send_novelty_response_email
@@ -957,7 +958,12 @@ def save_response(*, access: AccesoExternoSolicitudColectivo, rows: list[dict[st
 
 @transaction.atomic
 def submit_response(*, access: AccesoExternoSolicitudColectivo, response: RespuestaSolicitudColectivo, declaration: bool, no_changes: bool = False) -> RespuestaSolicitudColectivo:
-    locked = RespuestaSolicitudColectivo.objects.select_for_update().select_related("request", "access").get(pk=response.pk)
+    # Lock only the response row.  ``access`` is nullable, so joining it
+    # through ``select_related`` would make PostgreSQL reject the
+    # ``FOR UPDATE`` query (it cannot lock the nullable side of an outer
+    # join).  The related objects are loaded lazily after the row lock while
+    # the surrounding transaction remains active.
+    locked = RespuestaSolicitudColectivo.objects.select_for_update().get(pk=response.pk)
     if locked.status == locked.Status.SUBMITTED:
         return locked
     valid_novelties = locked.changes.filter(
@@ -998,7 +1004,7 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
             locked.changes.select_related("policy", "original_record").all(),
             label,
         )
-        enqueue_task(
+        outbox = enqueue_task(
             source=request,
             payload=ColectivosTaskPayload(
                 request_kind=kind,
@@ -1014,6 +1020,11 @@ def submit_response(*, access: AccesoExternoSolicitudColectivo, response: Respue
             ),
             event_version=locked.version,
         )
+        # The response transaction must commit before any Zoho write is
+        # attempted.  The outbox remains the single idempotent source of
+        # truth; publication failures are handled by its existing guards and
+        # status transitions.
+        transaction.on_commit(lambda outbox_id=outbox.pk: _publish_novelty_task_outbox(outbox_id))
     access.status = access.Status.USED
     access.used_for_submission_at = now
     access.save(update_fields=("status", "used_for_submission_at"))
@@ -1045,6 +1056,14 @@ def _send_novelty_response_alert(response_id: int) -> None:
     except Exception:
         # The response is already valid; delivery failures must not alter it.
         logger.exception("colectivos_novelty_response_email_failed response_id=%s", response_id)
+
+
+def _publish_novelty_task_outbox(outbox_id: int) -> None:
+    """Publish a novelty task after commit without affecting the response."""
+    try:
+        publish_task_outbox(outbox_id)
+    except Exception:
+        logger.exception("colectivos_novelty_task_publish_failed outbox_id=%s", outbox_id)
 
 
 def _send_submission_receipt(access_id: int, public_id: str) -> None:

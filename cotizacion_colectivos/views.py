@@ -89,13 +89,62 @@ from .branches import contract_required_ingress_fields
 from .services.invitation_attachment_publisher import prepare_invitation_attachment
 from .services.write_guards import configured_confirmation
 from .branches import LIFE_GROUP_CONTRACTS, LIFE_GROUP_VALUES, canonical_life_group_value, resolve_branch_family
-from integrations.zoho.exceptions import ZohoError
+from integrations.zoho.exceptions import ZohoError, ZohoRateLimitError
 from .models import AdjuntoCotizacionIndividual, AccesoCotizacionIndividual, ColectivosTaskOutbox, CotizacionIndividual, NotificacionCotizacionIndividual, RenovacionColectiva
 from .quotation_forms.catalog import get_policy_branch_schema
-from .services.renewals import sync_renewal_cycles, set_renewal_selection, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access, next_month_period
+from .services.renewals import sync_renewal_cycles, set_renewal_selection, set_policy_automation, process_renewal_cycles, renewal_dashboard_counts, upcoming_cycles, tracking_cycles, resend_renewal_access, next_month_period
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+def _log_uncertain_contact_creation(request, item, exc):
+    """Log safe metadata for an uncertain Contacts CREATE, never its payload."""
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    source = cause or exc
+    try:
+        correlation_id = getattr(request, "correlation_id", None)
+        if not correlation_id:
+            try:
+                correlation_id = item.request.events.order_by("-created_at").values_list(
+                    "correlation_id", flat=True
+                ).first()
+            except Exception:
+                correlation_id = None
+        if not correlation_id:
+            correlation_id = item.request.events.order_by("-created_at").values_list(
+                "correlation_id", flat=True
+            ).first()
+    except Exception:
+        correlation_id = None
+    logger.warning(
+        "event=colectivos_contact_create_uncertain request_public_id=%s item_id=%s "
+        "profile=%s request_sent=%s status_code=%s sdk_code=%s zoho_code=%s "
+        "exception_class=%s cause_class=%s detail_field=%s correlation_id=%s "
+        "error_category=%s operation=%s module=Contacts",
+        getattr(item.request, "public_id", ""), getattr(item, "pk", ""),
+        getattr(settings, "ZOHO_ACTIVE_PROFILE", ""),
+        getattr(source, "request_sent", None), getattr(source, "status_code", None),
+        getattr(source, "sdk_code", None), getattr(source, "zoho_code", None),
+        source.__class__.__name__, cause.__class__.__name__ if cause else "",
+        getattr(source, "detail_field", None), correlation_id,
+        getattr(source, "category", None), getattr(source, "operation", "records.create"),
+    )
+
+
+def _log_rejected_contact_creation(request, item, exc):
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    source = cause or exc
+    logger.warning(
+        "event=colectivos_contact_create_rejected request_public_id=%s item_id=%s "
+        "profile=%s status_code=%s sdk_code=%s zoho_code=%s exception_class=%s "
+        "detail_field=%s error_category=%s correlation_id=%s operation=records.create module=Contacts",
+        getattr(item.request, "public_id", ""), getattr(item, "pk", ""),
+        getattr(settings, "ZOHO_ACTIVE_PROFILE", ""), getattr(source, "status_code", None),
+        getattr(source, "sdk_code", None), getattr(source, "zoho_code", None),
+        source.__class__.__name__, getattr(source, "detail_field", None),
+        getattr(source, "category", None), getattr(request, "correlation_id", None),
+    )
 
 
 def _publish_novelty_ingress_documents(item, payload, contact_id):
@@ -359,6 +408,32 @@ def renewal_toggle(request, cycle_id):
         set_renewal_selection(cycle_id=cycle.pk, selected=selected, recipient=request.POST.get("recipient"))
     except RenovacionColectiva.DoesNotExist:
         raise Http404("Programación no encontrada")
+    return redirect("cotizacion_colectivos:novelties_index")
+
+
+@never_cache
+@require_http_methods(["POST"])
+def renewal_policy_automation_toggle(request, cycle_id):
+    """Toggle only one policy's scheduled automation preference."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    enabled = str(request.POST.get("enabled") or "").lower() in {"1", "true", "on", "yes"}
+    try:
+        cycle = set_policy_automation(cycle_id=cycle_id, enabled=enabled)
+    except RenovacionColectiva.DoesNotExist:
+        raise Http404("Programación no encontrada")
+    audit(
+        request,
+        "UPDATE",
+        reason="renewal_policy_automation_updated",
+        metadata={
+            "cycle_id": cycle.pk,
+            "policy_remote_id": cycle.policy_remote_id,
+            "previous_enabled": getattr(cycle, "_policy_automation_previous", True),
+            "enabled": enabled,
+        },
+    )
+    messages.success(request, "Automatización de la póliza actualizada.")
     return redirect("cotizacion_colectivos:novelties_index")
 
 
@@ -1202,6 +1277,10 @@ def _policy_workspace_context(request, *, token, service, detail, members=(), ex
         "individual_schema": individual_schema,
         "individual_affiliates": individual_affiliates,
         "task_responsibles": task_responsibles,
+        "policy_individual_action_url": reverse("cotizacion_colectivos:policy_individual_access", args=[token]),
+        "generated_url": "",
+        "individual_generated_url": "",
+        "individual_generated_for_new_person": False,
     }
     context.update(extra_context or {})
     if hasattr(service, "timings"):
@@ -1316,7 +1395,7 @@ def policy_individual_access(request, token):
             token, source_kind=token_context.get("source_kind"),
         )
         options = affiliate_options(members)
-        affiliate_key = str(request.POST.get("affiliate_key") or "")
+        affiliate_key = str(request.POST.get("affiliate_key") or "") if request.POST.get("select_affiliate") in {"1", "true", "on", "yes"} else ""
         actor = get_internal_actor(request, create=True)
         responsible_options = task_responsible_options(collective_only=True)
         choices = [(item.actual_value, item.display_value) for item in responsible_options]
@@ -1410,6 +1489,120 @@ def policy_individual_access(request, token):
             "individual_otp_required": otp_required,
         },
     )
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def client_branch_individual_access(request, entity_kind, token, branch_code):
+    """Generate an individual quotation from a client/branch context."""
+    resolve_tool_mode(request, INDIVIDUAL_MODE)
+    if not has_internal_permission(request, "create_individual_quotation"):
+        return permission_denied_response()
+    detail = EntityDetailService().company(token) if entity_kind == "company" else EntityDetailService().person(token)
+    branch = next((item for item in detail.branches if str(item.code) == str(branch_code)), None)
+    if branch is None:
+        raise Http404("Ramo no encontrado")
+    schema = get_policy_branch_schema(branch_code, branch.name)
+    affiliate_choices = []
+    policy_tokens = {}
+    branch_policies = tuple(
+        policy for policy in branch.policies
+        if str(getattr(policy, "state", "") or "").strip().casefold()
+        not in {"cancelada", "cancelado", "vencida", "vencido", "inactiva", "inactivo"}
+    )
+    policies_skipped = len(branch.policies) - len(branch_policies)
+    members_total = 0
+    policy_diagnostics = []
+    for policy in branch_policies:
+        try:
+            policy_token = policy.detail_token
+            _policy_detail, members = PolicyService().group(policy_token, source_kind=entity_kind)
+        except Exception:
+            policy_diagnostics.append((policy.full_reference or policy.masked_reference, 0, 0, "error"))
+            continue
+        options = affiliate_options(members)
+        members_total += len(members)
+        policy_diagnostics.append((policy.full_reference or policy.masked_reference, len(members), len(options), "ok"))
+        for option in options:
+            key = f"{policy_token}|{option.key}"
+            policy_tokens[key] = (policy_token, option.key)
+            policy_label = policy.full_reference or policy.masked_reference
+            document_label = " · ".join(
+                value for value in (option.id_type, option.masked_document) if value
+            )
+            display_label = " · ".join(
+                value for value in (option.label, document_label, f"Póliza {policy_label}")
+                if value
+            )
+            affiliate_choices.append({
+                "key": key,
+                "label": display_label,
+                "search_text": display_label,
+                "policy_label": policy_label,
+            })
+    logger.info(
+        "event=branch_individual_affiliates branch_code=%s policies_found=%d "
+        "policies_eligible=%d policies_skipped=%d members_total=%d "
+        "affiliate_options_total=%d options_rendered=%d policy_diagnostics=%s",
+        branch_code, len(branch.policies), len(branch_policies), policies_skipped,
+        members_total, len(affiliate_choices), len(affiliate_choices),
+        policy_diagnostics,
+    )
+    error = ""
+    generated_url = ""
+    try:
+        task_responsibles = task_responsible_options(collective_only=True)
+    except (ValidationError, ColectivosServiceError):
+        task_responsibles = ()
+    if request.method == "POST":
+        form = IndividualAccessPrepareForm(request.POST)
+        responsible_options = task_responsible_options(collective_only=True)
+        form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options]
+        if form.is_valid():
+            select_affiliate = request.POST.get("select_affiliate") in {"1", "true", "on", "yes"}
+            selected = policy_tokens.get(str(request.POST.get("affiliate_key") or "")) if select_affiliate else None
+            if select_affiliate and selected is None:
+                form.add_error(None, "Seleccione un afiliado válido para este cliente y ramo.")
+            else:
+                actor = get_internal_actor(request, create=True)
+                if selected:
+                    policy_token, affiliate_key = selected
+                    policy_service = PolicyService()
+                    policy_detail, members = policy_service.group(policy_token, source_kind=entity_kind)
+                    _schema, _signed, payload = build_policy_context(policy_token=policy_token, detail=policy_detail, members=members, affiliate_key=affiliate_key, creator_id=actor.pk)
+                else:
+                    payload = {"context_version": 1, "policy_token": "", "source_kind": entity_kind, "source_context": "RAMO", "source_token": token, "branch_code": branch.code, "affiliate_key": "", "affiliate_role": "Nuevo afiliado", "branch_slug": schema.slug, "schema_version": schema.version, "creator_id": actor.pk, "policy_label": "", "branch_name": branch.name, "affiliate_label": "Nuevo afiliado", "collective_context": getattr(detail, "full_name", None) or getattr(detail, "display_name", "")}
+                responsible = next((item for item in responsible_options if item.actual_value == form.cleaned_data.get("responsible")), None)
+                payload.update({"task_responsible": responsible.actual_value if responsible else "", "task_responsible_display": responsible.display_value if responsible else "", "task_area": "Negocios Bienestar y Beneficios", "otp_required": bool(form.cleaned_data.get("otp_required"))})
+                generated = generate_individual_access(context=payload, actor=actor, recipient=form.cleaned_data["recipient"], otp_required=bool(form.cleaned_data.get("otp_required")))
+                generated_url = request.build_absolute_uri(reverse("colectivos_external:individual_quotation", args=[generated.token]))
+        else:
+            error = "Revise los datos del enlace."
+    return render(request, "cotizacion_colectivos/individual/branch_access.html", {
+        "detail": detail,
+        "branch": branch,
+        "schema": schema,
+        "affiliate_choices": affiliate_choices,
+        "has_branch_policies": bool(branch_policies),
+        "error": error,
+        "generated_url": generated_url,
+        "individual_generated_url": generated_url,
+        "individual_generated_for_new_person": not bool(request.POST.get("affiliate_key")) if request.method == "POST" else False,
+        "task_responsibles": task_responsibles,
+        "eligible_policies": tuple({
+            "reference": policy.full_reference or policy.masked_reference,
+            "insurer": policy.insurer,
+            "state": policy.state,
+            "start_date": policy.start_date,
+            "end_date": policy.end_date,
+            "url": reverse("cotizacion_colectivos:individual_policy_detail", args=[policy.detail_token]),
+            "renewable": getattr(policy, "renewable", ""),
+            "plan": getattr(policy, "plan", ""),
+            "affiliate_count": 0,
+        } for policy in branch_policies),
+        "branch_insurers": tuple(sorted({policy.insurer for policy in branch_policies if policy.insurer})),
+        "back_url": reverse("cotizacion_colectivos:individual_client_detail", args=[entity_kind, token]),
+    })
 
 
 @never_cache
@@ -2493,7 +2686,9 @@ def request_detail(request, public_id):
         # stage remains an explicit, useful operation for the analyst.
         ingress.can_process_zoho = True
         ingress.can_create_contact = bool(
-            ingress.review_status == "NOT_FOUND" and not ingress.has_persisted_contact
+            ingress.review_status == "NOT_FOUND"
+            and not ingress.has_persisted_contact
+            and not ingress.reconcile_required
         )
         ingress.person_status_display = "Encontrada en Zoho." if ingress.has_persisted_contact else "Pendiente de revisión"
         if not ingress.has_persisted_contact:
@@ -2826,6 +3021,156 @@ def novelty_ingress_process(request, public_id, item_id):
 
 @never_cache
 @require_http_methods(["POST"])
+def novelty_ingress_reconcile_person(request, public_id, item_id):
+    """Reconcile an uncertain Contact using a read-only document lookup."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
+    if item.contact_zoho_id:
+        messages.info(request, "La persona ya está resuelta en Zoho.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.status != item.Status.RECONCILE_REQUIRED or not item.reconcile_required:
+        messages.warning(request, "La persona no está pendiente de conciliación.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    try:
+        profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
+        if profile != "sandbox":
+            raise ValidationError("La conciliación de personas sólo está habilitada en Sandbox.")
+        payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+        document = payload.get("document") or payload.get("N_mero_de_ID") or payload.get("documento") or ""
+        document_type = payload.get("id_type") or payload.get("Tipo_ID") or payload.get("tipo_id") or ""
+        document_hash = hashlib.sha256(str(document).strip().encode("utf-8")).hexdigest()[:16] if document else ""
+        started = time.monotonic()
+        correlation_id = getattr(request, "correlation_id", None)
+        logger.info(
+            "event=colectivos_contact_reconcile_read item_id=%s profile=%s document_type=%s "
+            "document_hash=%s correlation_id=%s",
+            item.pk, profile, str(document_type).strip(), document_hash, correlation_id,
+        )
+        result = resolve_contact_by_document(document=document, document_type=document_type)
+        outcome = str(result.get("status") or "").upper()
+        logger.info(
+            "event=colectivos_contact_reconcile_read_result item_id=%s profile=%s result=%s "
+            "candidate_count=%s mismatch_count=%s duration_ms=%s correlation_id=%s",
+            item.pk, profile, outcome, result.get("candidate_count", result.get("count", "")),
+            result.get("mismatch_count", ""), int((time.monotonic() - started) * 1000), correlation_id,
+        )
+        audit(request, "UPDATE", reason="Conciliación READ-only de Contact de Novedad.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": outcome, "contact_zoho_id": result.get("record_id", "")})
+        if outcome == "FOUND" and result.get("record_id"):
+            item.contact_zoho_id = str(result["record_id"])
+            item.reconcile_required = False
+            item.status = item.Status.PROCESSING
+            item.safe_error = ""
+            item.review_status = "FOUND"
+            item.review_contact_id = item.contact_zoho_id
+            item.review_error = ""
+            item.reviewed_at = timezone.now()
+            item.save(update_fields=("contact_zoho_id", "reconcile_required", "status", "safe_error", "review_status", "review_contact_id", "review_error", "reviewed_at", "updated_at"))
+            messages.success(request, "Persona conciliada con el contacto existente en Zoho.")
+        elif outcome == "NOT_FOUND":
+            messages.warning(request, "No se encontró un contacto coincidente en Zoho. Revise antes de reintentar la creación.")
+        elif outcome in {"AMBIGUOUS", "TYPE_MISMATCH"}:
+            messages.warning(request, "Se encontraron coincidencias que requieren revisión manual antes de asociar la persona.")
+        else:
+            messages.warning(request, "No fue posible verificar la persona en Zoho. La conciliación sigue pendiente.")
+    except (ValidationError, ZohoError) as exc:
+        logger.warning(
+            "event=colectivos_contact_reconcile_read_result item_id=%s profile=%s result=ERROR "
+            "exception_class=%s correlation_id=%s",
+            item.pk, getattr(settings, "ZOHO_ACTIVE_PROFILE", ""), exc.__class__.__name__,
+            getattr(request, "correlation_id", None),
+        )
+        audit(request, "UPDATE", reason="Conciliación READ-only de Contact fallida.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": "ERROR"})
+        messages.warning(request, "No fue posible verificar la persona en Zoho. La conciliación sigue pendiente.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+
+
+@never_cache
+@require_http_methods(["POST"])
+def novelty_ingress_retry_create_person(request, public_id, item_id):
+    """Retry Contacts.CREATE only after a confirmed read-only NOT_FOUND."""
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    with transaction.atomic():
+        item = get_object_or_404(
+            NovedadIngresoZoho.objects.select_for_update(),
+            pk=item_id, request__public_id=public_id,
+        )
+        if item.contact_zoho_id:
+            messages.info(request, "La persona ya está resuelta en Zoho.")
+            return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+        if not (item.reconcile_required and item.review_status == "NOT_FOUND"):
+            messages.warning(request, "Primero debe confirmarse que la persona no existe en Zoho.")
+            return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+        profile = str(getattr(settings, "ZOHO_ACTIVE_PROFILE", "sandbox")).strip().lower()
+        try:
+            payload = json.loads(decrypt(item.encrypted_payload)) if item.encrypted_payload else {}
+            document = payload.get("document") or payload.get("N_mero_de_ID") or payload.get("documento") or ""
+            document_type = payload.get("id_type") or payload.get("Tipo_ID") or payload.get("tipo_id") or ""
+            confirmation = configured_confirmation("contact", profile, legacy_setting="COLECTIVOS_CONTACT_WRITE_CONFIRMATION")
+            publisher = get_contacts_publisher(profile=profile, confirmation=confirmation)
+            preflight = resolve_contact_by_document(document=document, document_type=document_type)
+            preflight_status = str(preflight.get("status") or "").upper()
+            if preflight_status == "FOUND" and preflight.get("record_id"):
+                item.contact_zoho_id = str(preflight["record_id"])
+                item.reconcile_required = False
+                item.status = item.Status.PROCESSING
+                item.safe_error = ""
+                item.review_status = "FOUND"
+                item.review_contact_id = item.contact_zoho_id
+                item.reviewed_at = timezone.now()
+                item.save(update_fields=("contact_zoho_id", "reconcile_required", "status", "safe_error", "review_status", "review_contact_id", "reviewed_at", "updated_at"))
+                audit(request, "UPDATE", reason="Retry Contact preflight encontró persona.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": "FOUND"})
+                messages.success(request, "Persona encontrada en Zoho; no fue necesario crearla.")
+                return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+            if preflight_status != "NOT_FOUND":
+                audit(request, "UPDATE", reason="Retry Contact bloqueado por preflight.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": preflight_status or "ERROR"})
+                messages.warning(request, "La persona requiere validación antes de reintentar la creación.")
+                return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+            data = {
+                "First_Name": payload.get("first_name") or payload.get("First_Name") or payload.get("nombres") or "",
+                "Last_Name": payload.get("last_name") or payload.get("Last_Name") or payload.get("apellidos") or "",
+                "Tipo_ID": document_type, "N_mero_de_ID": document,
+                "Date_of_Birth": payload.get("birth_date") or payload.get("Date_of_Birth") or "",
+                "Email": payload.get("email") or payload.get("correo") or payload.get("Email") or "",
+                "Phone": payload.get("phone") or payload.get("telefono") or payload.get("Phone") or "",
+                "Mobile": payload.get("mobile") or payload.get("celular") or payload.get("Mobile") or "",
+            }
+            result = publisher.create(data, status="Cliente")
+            item.contact_zoho_id = str(result["record_id"])
+            item.reconcile_required = False
+            item.status = item.Status.PROCESSING
+            item.safe_error = ""
+            item.review_status = "FOUND"
+            item.review_contact_id = item.contact_zoho_id
+            item.review_error = ""
+            item.reviewed_at = timezone.now()
+            item.save(update_fields=("contact_zoho_id", "reconcile_required", "status", "safe_error", "review_status", "review_contact_id", "review_error", "reviewed_at", "updated_at"))
+            audit(request, "UPDATE", reason="Retry Contact CREATE confirmado.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": "CREATED"})
+            messages.success(request, "Persona creada en Zoho. Ahora puede registrar el ingreso en la póliza.")
+        except ContactPublicationUncertain as exc:
+            _log_uncertain_contact_creation(request, item, exc)
+            audit(request, "UPDATE", reason="Retry Contact CREATE incierto.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": "UNCERTAIN"})
+            item.status = item.Status.RECONCILE_REQUIRED
+            item.reconcile_required = True
+            item.safe_error = "El resultado de la creación no pudo confirmarse; requiere conciliación."
+            item.save(update_fields=("status", "reconcile_required", "safe_error", "updated_at"))
+            messages.warning(request, item.safe_error)
+        except (ContactPublishingDisabled, ContactPublicationRejected, ValidationError, ZohoError) as exc:
+            if isinstance(exc, ContactPublicationRejected):
+                _log_rejected_contact_creation(request, item, exc)
+            if not isinstance(exc, ZohoRateLimitError):
+                item.status = item.Status.BLOCKED
+                item.reconcile_required = False
+                item.safe_error = str(exc)[:240]
+                item.save(update_fields=("status", "reconcile_required", "safe_error", "updated_at"))
+            audit(request, "UPDATE", reason="Retry Contact CREATE bloqueado o fallido.", metadata={"request_id": public_id, "ingress_id": item.pk, "result": "FAILED"})
+            messages.warning(request, "No fue posible reintentar la creación de la persona en Zoho.")
+    return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+
+
+@never_cache
+@require_http_methods(["POST"])
 def novelty_ingress_create_person(request, public_id, item_id):
     """Explicitly create the Contact after a read-only NOT_FOUND review."""
     if not has_internal_permission(request, "view_requests"):
@@ -2833,6 +3178,9 @@ def novelty_ingress_create_person(request, public_id, item_id):
     item = get_object_or_404(NovedadIngresoZoho, pk=item_id, request__public_id=public_id)
     if item.contact_zoho_id:
         messages.info(request, "La persona ya está resuelta en Zoho.")
+        return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
+    if item.reconcile_required or item.status == NovedadIngresoZoho.Status.RECONCILE_REQUIRED:
+        messages.warning(request, "Este ingreso requiere conciliación antes de intentar una nueva creación.")
         return redirect("cotizacion_colectivos:request_detail", public_id=public_id)
     if item.review_status != "NOT_FOUND":
         messages.warning(request, "Revise primero la persona y confirme que no existe en Zoho.")
@@ -2886,13 +3234,16 @@ def novelty_ingress_create_person(request, public_id, item_id):
             item.safe_error = str(exc)[:240]
             item.save(update_fields=("safe_error", "updated_at"))
         messages.success(request, "Persona creada en Zoho. Ahora puede registrar el ingreso en la póliza.")
-    except ContactPublicationUncertain:
+    except ContactPublicationUncertain as exc:
+        _log_uncertain_contact_creation(request, item, exc)
         item.status = item.Status.RECONCILE_REQUIRED
         item.reconcile_required = True
         item.safe_error = "El resultado de la creación no pudo confirmarse; requiere conciliación."
         item.save(update_fields=("status", "reconcile_required", "safe_error", "updated_at"))
         messages.warning(request, item.safe_error)
     except (ContactPublishingDisabled, ContactPublicationRejected, ValidationError, ZohoError) as exc:
+        if isinstance(exc, ContactPublicationRejected):
+            _log_rejected_contact_creation(request, item, exc)
         item.status = item.Status.BLOCKED
         item.safe_error = str(exc)[:240]
         item.save(update_fields=("status", "safe_error", "updated_at"))
@@ -4081,6 +4432,28 @@ def individual_expedient(request, token):
             ),
         })
     context = dict(payload.get("context")) if isinstance(payload.get("context"), dict) else {}
+    destination_policy_pending = str(context.get("source_context") or "").upper() == "RAMO" and not quotation.destination_policy_remote_id
+    destination_policy_options = ()
+    if destination_policy_pending and context.get("source_token"):
+        try:
+            source_detail = (
+                EntityDetailService().company(context["source_token"])
+                if context.get("source_kind") == "company"
+                else EntityDetailService().person(context["source_token"])
+            )
+            target_branch = next(
+                (
+                    item for item in source_detail.branches
+                    if str(item.code) == str(context.get("branch_code") or quotation.branch_code)
+                ),
+                None,
+            )
+            destination_policy_options = tuple(
+                (str(policy.detail_token), policy.full_reference or policy.masked_reference)
+                for policy in (target_branch.policies if target_branch else ())
+            )
+        except Exception:
+            destination_policy_options = ()
     # Contextos firmados anteriores no tienen todavía la metadata de Task.
     # Normalizar aquí evita que el template trate claves opcionales como obligatorias.
     for optional_key in (
@@ -4135,14 +4508,19 @@ def individual_expedient(request, token):
         or (expected_vehicle_count and len(zoho_entities.get("risks") or ()) < expected_vehicle_count)
         or (expected_vehicle_count and len(zoho_entities.get("subrisks") or ()) < expected_vehicle_count)
     )
-    if acceptance.get("status") == "accepted" and quotation.branch_slug == "movilidad":
+    if acceptance.get("status") == "accepted" and quotation.branch_slug == "movilidad" and not destination_policy_pending:
         try:
             zoho_entities = resolve_mobility_entities(quotation=quotation)
         except Exception:
             logger.warning("individual_entities_resolution_failed quotation_id=%s", quotation.public_id)
     elif acceptance.get("status") == "accepted" and quotation.branch_slug in {"salud", "vida", "exequial"}:
         try:
-            zoho_entities = resolve_common_people_entities(quotation=quotation, include_subrisk=quotation.branch_slug in {"vida", "salud"})
+            # Contact resolution does not depend on a destination policy.
+            # Keep policy-bound Riesgos1 disabled until RAMO context is resolved.
+            zoho_entities = resolve_common_people_entities(
+                quotation=quotation,
+                include_subrisk=quotation.branch_slug in {"vida", "salud"} and not destination_policy_pending,
+            )
             safe_metadata = quotation.safe_metadata or {}
         except Exception:
             logger.warning("individual_people_resolution_failed quotation_id=%s", quotation.public_id)
@@ -4287,6 +4665,8 @@ def individual_expedient(request, token):
         "acceptance": acceptance,
         "decision_status": decision_status,
         "decision_pending": decision_status == "pending",
+        "destination_policy_pending": destination_policy_pending,
+        "destination_policy_options": destination_policy_options,
         "is_rejected": decision_status == "rejected",
         "can_reject": decision_status == "pending",
         "can_reactivate": decision_status == "rejected",
@@ -4309,6 +4689,61 @@ def individual_expedient(request, token):
         "colectivos_mode": resolve_tool_mode(request, INDIVIDUAL_MODE),
         **_environment_context(),
     })
+
+
+@never_cache
+@require_http_methods(["POST"])
+def individual_destination_policy(request, token):
+    if not has_internal_permission(request, "view_requests"):
+        return permission_denied_response()
+    try:
+        quotation = CotizacionIndividual.objects.get(public_id=unsign_receipt(token))
+        payload = json.loads(decrypt(quotation.encrypted_payload))
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        if str(context.get("source_context") or "").upper() != "RAMO":
+            raise ValidationError("Esta cotización ya tiene una póliza definida.")
+        selected_policy = str(request.POST.get("destination_policy") or "").strip()
+        entity_kind = str(context.get("source_kind") or "company")
+        source_token = str(context.get("source_token") or "")
+        detail = EntityDetailService().company(source_token) if entity_kind == "company" else EntityDetailService().person(source_token)
+        branch = next((item for item in detail.branches if str(item.code) == str(context.get("branch_code") or quotation.branch_code)), None)
+        allowed = {str(policy.detail_token): str(policy.full_reference or policy.masked_reference) for policy in (branch.policies if branch else ())}
+        if selected_policy not in allowed:
+            raise ValidationError("Seleccione una póliza válida para el cliente y ramo.")
+        policy_context = unsign_record_context(selected_policy, "policy")
+        policy_id = str(policy_context.get("id") or "")
+        if not policy_id:
+            raise ValidationError("La póliza seleccionada no es válida.")
+        context["policy_token"] = selected_policy
+        context["policy_label"] = allowed[selected_policy]
+        payload["context"] = context
+        protected = encrypt(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        quotation.encrypted_payload = protected
+        quotation.payload_checksum = hashlib.sha256(protected.encode()).hexdigest()
+        quotation.destination_policy_remote_id = policy_id
+        quotation.save(update_fields=("encrypted_payload", "payload_checksum", "destination_policy_remote_id"))
+        audit(
+            request,
+            "UPDATE",
+            reason="individual_destination_policy_resolved",
+            metadata={
+                "quotation_id": quotation.public_id,
+                "source_context": "RAMO",
+                "policy_remote_id": policy_id,
+            },
+        )
+        messages.success(request, "Póliza destino guardada correctamente.")
+    except (
+        signing.BadSignature,
+        CotizacionIndividual.DoesNotExist,
+        ValidationError,
+        ValueError,
+        json.JSONDecodeError,
+        ColectivosServiceError,
+        ZohoError,
+    ) as exc:
+        messages.error(request, str(exc.message if hasattr(exc, "message") else exc))
+    return redirect("cotizacion_colectivos:individual_expedient", token=token)
 
 
 @never_cache

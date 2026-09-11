@@ -4,6 +4,7 @@ import hashlib
 import logging
 import calendar
 import unicodedata
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -14,7 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Q, Case, When, Value, BooleanField, Exists, OuterRef
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import render_to_string
 
@@ -25,7 +26,7 @@ from .common import ColectivosServiceError, colectivos_zoho, sign_record_id, tra
 from .external import GeneratedAccess, generate_access, generate_no_changes_token
 from .requests import create_or_reuse_request_from_policy, request_snapshot
 from .policies import PolicyService
-from ..models import RenovacionColectiva, SolicitudColectivo
+from ..models import RenovacionColectiva, SolicitudColectivo, ColectivosPolicyAutomationPreference
 from .operational_settings import monthly_renewals_enabled
 from integrations.zoho.exceptions import ZohoError
 
@@ -286,6 +287,38 @@ def set_renewal_selection(*, cycle_id: int, selected: bool, recipient: str | Non
         return cycle
 
 
+def set_policy_automation(*, cycle_id: int, enabled: bool) -> RenovacionColectiva:
+    """Persist the per-policy automation preference without changing global state."""
+    with transaction.atomic():
+        cycle = RenovacionColectiva.objects.select_for_update().get(pk=cycle_id)
+        if cycle.line_of_business != "Colectivo":
+            raise ColectivosServiceError("invalid_record", "La póliza no pertenece a Colectivos.")
+        previous = ColectivosPolicyAutomationPreference.objects.filter(
+            policy_remote_id=cycle.policy_remote_id,
+        ).values_list("enabled", flat=True).first()
+        ColectivosPolicyAutomationPreference.objects.update_or_create(
+            policy_remote_id=cycle.policy_remote_id,
+            defaults={"enabled": bool(enabled)},
+        )
+        cycle._policy_automation_previous = True if previous is None else bool(previous)
+        cycle._policy_automation_enabled = bool(enabled)
+        return cycle
+
+
+def _disabled_policy_ids():
+    return ColectivosPolicyAutomationPreference.objects.filter(enabled=False).values("policy_remote_id")
+
+
+def _with_policy_automation_state(queryset):
+    disabled = ColectivosPolicyAutomationPreference.objects.filter(
+        policy_remote_id=OuterRef("policy_remote_id"), enabled=False,
+    )
+    return queryset.annotate(policy_automation_enabled=Case(
+        When(Exists(disabled), then=Value(False)),
+        default=Value(True), output_field=BooleanField(),
+    ))
+
+
 def _actor_for_batch():
     username = str(getattr(settings, "COLECTIVOS_TECHNICAL_ACTOR_USERNAME", "")).strip()
     User = get_user_model()
@@ -451,6 +484,7 @@ def process_renewal_cycles(*, now=None, limit=None, dry_run=False, cycle_id=None
         initial = [target] if (
             target.status == RenovacionColectiva.Status.PROGRAMMED
             and target.automation_eligible
+            and not ColectivosPolicyAutomationPreference.objects.filter(policy_remote_id=target.policy_remote_id, enabled=False).exists()
             and target.monthly_period == active_period
             and (force_due or target.scheduled_for <= today)
         ) else []
@@ -461,7 +495,7 @@ def process_renewal_cycles(*, now=None, limit=None, dry_run=False, cycle_id=None
             automation_eligible=True,
             monthly_period=active_period,
             scheduled_for__lte=today,
-        ).order_by("scheduled_for", "pk")[:limit])
+        ).exclude(policy_remote_id__in=_disabled_policy_ids()).order_by("scheduled_for", "pk")[:limit])
         reminders = list(RenovacionColectiva.objects.filter(
             Q(reminder_sent_at__isnull=True) | Q(internal_alert_sent_at__isnull=True),
             status__in=(RenovacionColectiva.Status.SENT, RenovacionColectiva.Status.ALERT),
@@ -563,7 +597,7 @@ def upcoming_cycles(*, query="", filter_name="all", today=None):
         monthly_period=next_month_period(today),
         status=RenovacionColectiva.Status.PROGRAMMED,
     )
-    return renewal_search(queryset.order_by("expiry_date", "pk"), query)
+    return renewal_search(_with_policy_automation_state(queryset.order_by("expiry_date", "pk")), query)
 
 
 def tracking_cycles(*, query="", status="all"):
@@ -577,15 +611,33 @@ def tracking_cycles(*, query="", status="all"):
 
 
 def resend_renewal_access(*, cycle_id: int, recipient: str):
+    correlation_id = uuid.uuid4().hex
+    cycle = None
+    attempts_before = None
+    previous_status = ""
+    access_state = "none"
+    mail_attempted = False
+    mail_result = "not_attempted"
     if not monthly_renewals_enabled():
+        logger.info(
+            "colectivos_renewal_resend_failed renewal_id=%s previous_status=%s final_status=%s attempts_before=%s attempts_after=%s access_state=%s mail_attempted=%s mail_result=%s exception_class=%s error_category=%s correlation_id=%s",
+            cycle_id, "", "", "", "", "unknown", False, "not_attempted", "", "disabled", correlation_id,
+        )
         raise ColectivosServiceError("disabled", "La automatización mensual de Colectivos está desactivada.")
     normalized = str(recipient or "").strip()
     try:
         validate_email(normalized)
     except ValidationError as exc:
+        logger.info(
+            "colectivos_renewal_resend_failed renewal_id=%s previous_status=%s final_status=%s attempts_before=%s attempts_after=%s access_state=%s mail_attempted=%s mail_result=%s exception_class=%s error_category=%s correlation_id=%s",
+            cycle_id, "", "", "", "", "unknown", False, "not_attempted", type(exc).__name__, "validation", correlation_id,
+        )
         raise ColectivosServiceError("validation", "Indique un correo válido para reenviar el acceso.") from exc
     with transaction.atomic():
         cycle = RenovacionColectiva.objects.select_for_update().get(pk=cycle_id)
+        attempts_before = cycle.send_attempts
+        previous_status = cycle.status
+        access_state = getattr(getattr(cycle, "access", None), "status", None) or ("present" if cycle.access_id else "none")
         if cycle.status == RenovacionColectiva.Status.RESPONDED:
             raise ColectivosServiceError("invalid_state", "La renovación ya fue respondida y no admite reenvío.")
         if cycle.status == RenovacionColectiva.Status.PROCESSING:
@@ -599,14 +651,35 @@ def resend_renewal_access(*, cycle_id: int, recipient: str):
         cycle.save(update_fields=("status", "send_attempts", "encrypted_recipient", "recipient_hash", "updated_at"))
     try:
         actor = _actor_for_batch()
-        token = decrypt(cycle.policy_token)
-        request, _ = create_or_reuse_request_from_policy(
-            token=token, source_kind="company", actor=actor, assigned_to=actor,
-            request_type=SolicitudColectivo.RequestType.RENEWAL,
-            deadline=cycle.expiry_date or timezone.localdate() + timedelta(days=8), service=PolicyService(),
+        request = cycle.request
+        reusable_statuses = {
+            SolicitudColectivo.Status.DRAFT,
+            SolicitudColectivo.Status.READY,
+            SolicitudColectivo.Status.SENT,
+            SolicitudColectivo.Status.OPENED,
+            SolicitudColectivo.Status.CORRECTION,
+        }
+        reusable_request = bool(
+            request
+            and request.status in reusable_statuses
+            and request.deadline > timezone.localdate()
+            and request.assigned_to_id
+            and request.encrypted_snapshot
         )
+        if not reusable_request:
+            # The persisted remote id is the canonical renewal reference.  A
+            # fresh signed context avoids depending on the historical,
+            # time-limited token stored on the cycle.
+            token = sign_record_id(cycle.policy_remote_id, "policy")
+            request, _ = create_or_reuse_request_from_policy(
+                token=token, source_kind="company", actor=actor, assigned_to=actor,
+                request_type=SolicitudColectivo.RequestType.RENEWAL,
+                deadline=cycle.expiry_date or timezone.localdate() + timedelta(days=8), service=PolicyService(),
+            )
         generated = generate_access(request=request, actor=actor, recipient=normalized, regenerate=True, ttl_seconds=int(getattr(settings, "COLECTIVOS_RENEWAL_LINK_TTL_DAYS", 8)) * 86400)
+        mail_attempted = True
         _send_renewal_email(cycle=cycle, url=generated.url, request_obj=request)
+        mail_result = "sent"
         now = timezone.now()
         status = RenovacionColectiva.Status.ALERT if cycle.expiry_date <= now.date() + timedelta(days=getattr(settings, "COLECTIVOS_RENEWAL_ALERT_DAYS", 10)) else RenovacionColectiva.Status.SENT
         RenovacionColectiva.objects.filter(pk=cycle.pk).update(
@@ -614,9 +687,21 @@ def resend_renewal_access(*, cycle_id: int, recipient: str):
             sent_at=now, link_expires_at=generated.access.expires_at, reminder_due_at=now + timedelta(days=int(getattr(settings, "COLECTIVOS_RENEWAL_REMINDER_DAYS", 3))), reminder_sent_at=None, encrypted_access_token=encrypt(generated.token), last_sent_at=now, last_activity_at=now,
             updated_at=now, safe_error="",
         )
-        return RenovacionColectiva.objects.get(pk=cycle.pk)
+        result = RenovacionColectiva.objects.get(pk=cycle.pk)
+        logger.info(
+            "colectivos_renewal_resend renewal_id=%s previous_status=%s final_status=%s attempts_before=%s attempts_after=%s access_state=%s mail_attempted=%s mail_result=%s exception_class=%s error_category=%s correlation_id=%s",
+            cycle.pk, previous_status, result.status, attempts_before, result.send_attempts,
+            access_state, mail_attempted, mail_result, "", "none", correlation_id,
+        )
+        return result
     except Exception as exc:
         RenovacionColectiva.objects.filter(pk=cycle.pk).update(status=RenovacionColectiva.Status.ERROR, error_code="RESEND_ERROR", safe_error="No fue posible reenviar el acceso.", updated_at=timezone.now())
+        logger.exception(
+            "colectivos_renewal_resend_failed renewal_id=%s previous_status=%s final_status=%s attempts_before=%s attempts_after=%s access_state=%s mail_attempted=%s mail_result=%s exception_class=%s error_category=%s correlation_id=%s",
+            cycle.pk, previous_status, RenovacionColectiva.Status.ERROR, attempts_before, attempts_before + 1,
+            access_state, mail_attempted, "failed" if mail_attempted else mail_result,
+            type(exc).__name__, getattr(exc, "category", "delivery"), correlation_id,
+        )
         if isinstance(exc, ColectivosServiceError):
             raise
         raise ColectivosServiceError("delivery", "No fue posible reenviar el acceso.") from exc

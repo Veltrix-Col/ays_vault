@@ -26,7 +26,7 @@
   <div class="policy-search" role="search"><label for="policy-filter">Buscar póliza o aseguradora</label><input id="policy-filter" type="search" placeholder="Número completo, ramo, aseguradora o estado" autocomplete="off" data-policy-filter><small data-policy-filter-status aria-live="polite"></small></div>
   <div class="branch-grid branch-grid--focused">
   {% for workspace in branch_workspaces %}{% with branch=workspace.branch %}
-    <article class="branch-card" data-policy-branch>
+    <article class="branch-card" data-policy-branch>{% if colectivos_mode.code == 'individual' and branch.code %}<a class="text-link" href="{% url 'cotizacion_colectivos:branch_individual_access' entity_kind entity_token branch.code %}">Crear Cotización Individual para este ramo</a>{% endif %}
       <header class="branch-card-heading"><div><span class="eyebrow">{% if branch.code %}Ramo {{ branch.code }}{% else %}Clasificación pendiente{% endif %}</span><h3>{% if colectivos_mode.code == 'invitations' and branch.code %}<a href="{% url 'cotizacion_colectivos:invitations_branch_detail' entity_kind entity_token branch.code %}">{{ branch.name }}</a>{% else %}{{ branch.name }}{% endif %}</h3></div><div class="branch-metrics"><span>{{ branch.policies|length }} póliza{{ branch.policies|length|pluralize:"s" }}</span><span>{{ branch.active_count }} relación{{ branch.active_count|pluralize:"es" }} activa{{ branch.active_count|pluralize:"s" }}</span></div></header>
       {% for entry in workspace.services %}
       <section class="branch-service branch-service--focused"><div class="branch-service-intro"><strong>{{ entry.service.name }}</strong><p>{{ entry.service.description }}</p></div>

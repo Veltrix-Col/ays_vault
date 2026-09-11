@@ -313,7 +313,7 @@
     };
     definition.fields.forEach(field => {
       const wrapper = document.createElement("div"); wrapper.className = "field";
-      const label = document.createElement("label"); label.textContent = `${field.label}${field.required ? " *" : ""}`;
+      const label = document.createElement("label"); label.textContent = field.label; if (field.required) { const mark = document.createElement("span"); mark.className = "required-mark"; mark.setAttribute("aria-hidden", "true"); mark.textContent = "*"; label.appendChild(mark); }
       let input;
       if (field.kind === "choice") {
         input = document.createElement("select");

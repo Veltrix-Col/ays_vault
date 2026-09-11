@@ -1,0 +1,36 @@
+{% extends "cotizacion_colectivos/base.html" %}{% load static %}
+{% block title %}Cotización individual{% endblock %}
+{% block content %}
+<nav class="breadcrumbs"><a href="{{ back_url }}">← Volver</a><span>/</span><span>{{ branch.name }}</span></nav>
+<header class="policy-workspace-hero"><div><span class="eyebrow">RAMO</span><h1>{{ branch.name }}</h1><p>Cliente: {% if detail.full_name %}{{ detail.full_name }}{% else %}{{ detail.display_name }}{% endif %}</p></div><span class="status-chip">Cotización individual</span></header>
+<div class="request-workspace-layout"><main class="request-workspace-main">
+  <section class="workspace-card"><span class="eyebrow">Información del ramo</span><h2>Resumen del ramo</h2><div class="workspace-kpis request-summary-grid"><div><span>Ramo</span><strong>{{ branch.name }}</strong></div><div><span>Cliente / Tomador</span><strong>{% if detail.full_name %}{{ detail.full_name }}{% else %}{{ detail.display_name }}{% endif %}</strong></div><div><span>Pólizas vigentes</span><strong>{{ eligible_policies|length }}</strong></div><div><span>Aseguradoras</span><strong>{{ branch_insurers|join:", "|default:"Sin información" }}</strong></div><div><span>Afiliados / asociaciones</span><strong>{{ affiliate_choices|length }}</strong></div><div><span>Estado general</span><strong>Vigente</strong></div></div></section>
+  {% if error %}<div class="status-message status-message--error" role="alert">{{ error }}</div>{% endif %}
+  {% comment %}Legacy inline form retained below only until policy_detail extraction is completed.{% endcomment %}
+  {% if False %}<form method="post" class="individual-access-form">{% csrf_token %}
+    <div class="individual-access-field">
+      <label><input type="checkbox" name="select_affiliate" value="1" data-individual-affiliate-toggle> Seleccionar un afiliado</label>
+    </div>
+    {% if not has_branch_policies %}<p class="muted">No hay pólizas vigentes disponibles para este ramo.</p>{% elif not affiliate_choices %}<p class="muted">No se encontraron afiliados disponibles para este ramo.</p>{% endif %}
+    <div class="individual-access-field" data-searchable-select hidden>
+      <label for="branch-affiliate-search">Afiliado</label>
+      {% if has_branch_policies and affiliate_choices %}
+      <input id="branch-affiliate-search" type="search" placeholder="Buscar afiliado por nombre o identificación" autocomplete="off" data-searchable-input aria-controls="affiliate_key">
+      <select id="affiliate_key" name="affiliate_key" data-searchable-select-control aria-describedby="branch-affiliate-empty"><option value="" data-search-text="nuevo afiliado">Nuevo afiliado</option>{% for item in affiliate_choices %}<option value="{{ item.key }}" data-search-text="{{ item.search_text|lower }}">{{ item.label }}</option>{% endfor %}</select>
+      <small id="branch-affiliate-empty" data-searchable-selected aria-live="polite">Seleccione un afiliado o Nuevo afiliado.</small>
+      {% elif not has_branch_policies %}
+      <p class="muted">No hay pólizas vigentes disponibles para este ramo.</p>
+      <select id="affiliate_key" name="affiliate_key" hidden><option value="">Nuevo afiliado</option></select>
+      {% else %}
+      <p class="muted">No se encontraron afiliados disponibles para este ramo.</p>
+      <select id="affiliate_key" name="affiliate_key" hidden><option value="">Nuevo afiliado</option></select>
+      {% endif %}
+    </div>
+    <div class="individual-access-field" data-responsible-picker><label for="responsible-search">Responsable de la solicitud</label><input id="responsible-search" type="search" placeholder="Buscar por nombre" autocomplete="off" data-responsible-search aria-controls="individual-responsible"><select id="individual-responsible" name="responsible" data-responsible-select><option value="">Sin responsable todavía</option>{% for responsible in task_responsibles %}<option value="{{ responsible.actual_value }}">{{ responsible.display_value }}</option>{% empty %}<option value="">No hay responsables disponibles</option>{% endfor %}</select><small data-responsible-selected aria-live="polite">Seleccione un responsable.</small></div>
+    <div class="individual-access-field individual-otp-toggle"><label><input type="checkbox" name="otp_required" value="1" data-individual-otp-toggle> Solicitar código de verificación por correo</label></div>
+    <div class="individual-access-field access-recipient-card" data-individual-otp-fields hidden><label for="individual-recipient">Correo para código de verificación</label><input id="individual-recipient" type="email" name="recipient" maxlength="254" autocomplete="email" value="{{ detail.commercial_email }}"><small>Puede corregir este correo antes de generar el enlace. No se modificará el correo registrado en Zoho.</small></div>
+    <button type="submit">Generar enlace</button>
+  </form>{% endif %}
+{% if eligible_policies %}<section class="workspace-card"><span class="eyebrow">Pólizas del ramo</span><h2>Disponibilidad</h2><div class="table-wrap"><table class="workspace-table"><thead><tr><th>Póliza</th><th>Aseguradora</th><th>Estado</th></tr></thead><tbody>{% for item in eligible_policies %}<tr><td>{{ item.reference }}</td><td>{{ item.insurer }}</td><td>{{ item.state }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}</main><aside class="request-action-sidebar">{% include "cotizacion_colectivos/individual/_access_card.html" with access_action_url=request.path individual_affiliates=affiliate_choices %}</aside></div>
+{% endblock %}
+{% block scripts %}<script src="{% static 'js/colectivos-access.js' %}" defer></script><script src="{% static 'js/colectivos-responsible.js' %}" defer></script>{% endblock %}

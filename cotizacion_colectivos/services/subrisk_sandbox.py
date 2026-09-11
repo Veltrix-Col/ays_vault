@@ -194,6 +194,9 @@ def build_life_group_subrisk_payload(*, policy_id: object, affiliate_contact_id:
     ramo = canonical_life_group_value(ramo)
     if not LIFE_GROUP_CONTRACTS.get(ramo, {}).get("write_enabled"):
         raise ValidationError("El contrato Vida Grupo no admite este ramo.")
+    normalized_plan = str(plan or "").strip()
+    if len(normalized_plan) > 255:
+        raise ValidationError("Plan del subriesgo no puede superar 255 caracteres.")
     name, policy, affiliate, insured, _risk, normalized_date = _validate_common_subrisk(
         name=subrisk_name, policy_id=policy_id,
         affiliate_contact_id=affiliate_contact_id, insured_contact_id=insured_contact_id,
@@ -210,8 +213,8 @@ def build_life_group_subrisk_payload(*, policy_id: object, affiliate_contact_id:
         "Parentesco": parentesco,
         "Fecha_ingreso_riesgo": normalized_date,
     }
-    if str(plan or "").strip():
-        payload["Plan"] = str(plan).strip()
+    if normalized_plan:
+        payload["Plan"] = normalized_plan
     if str(role or "").strip() == "Beneficiario":
         payload["Beneficiario"] = _lookup(insured_contact_id, "Beneficiario")
     if str(role or "").strip() == "Beneficiario":

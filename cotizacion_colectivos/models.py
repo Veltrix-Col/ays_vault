@@ -71,6 +71,7 @@ class CotizacionIndividual(models.Model):
     context_hash = models.CharField(max_length=64, blank=True, db_index=True, editable=False)
     item_count = models.PositiveSmallIntegerField(default=0)
     attachment_count = models.PositiveSmallIntegerField(default=0)
+    destination_policy_remote_id = models.CharField(max_length=30, blank=True, db_index=True)
     safe_metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -473,6 +474,15 @@ class RenovacionColectiva(models.Model):
     @property
     def days_remaining(self):
         return (self.expiry_date - timezone.localdate()).days if self.expiry_date else None
+
+
+class ColectivosPolicyAutomationPreference(models.Model):
+    """Persistent automation preference keyed by Zoho's stable policy id."""
+
+    policy_remote_id = models.CharField(max_length=30, unique=True, editable=False)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class SolicitudColectivo(models.Model):

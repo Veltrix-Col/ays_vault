@@ -18,8 +18,11 @@
   }
 
   function recordChanged(record) {
+    if (record.dataset.preparedRetirement === "true") return true;
     const action = record.querySelector("[data-row-action]");
-    return Boolean(action && action.value !== "SIN_CAMBIOS");
+    if (!action || action.value !== "RETIRAR") return false;
+    const retirementDate = record.querySelector("input[type='date'][name^='fecha_retiro_entity_']");
+    return Boolean(retirementDate && retirementDate.value);
   }
 
   function matchedRecords(table) {
@@ -48,6 +51,8 @@
       record.hidden = !visiblePage.has(record);
       const state = record.querySelector("[data-change-state]");
       if (state) state.hidden = !recordChanged(record);
+      const row = record.querySelector("[data-record-summary]");
+      if (row) row.classList.toggle("functional-table__row--retirement-prepared", recordChanged(record));
     });
 
     const empty = table.querySelector("[data-filter-empty]");
@@ -182,24 +187,41 @@
       return;
     }
     if (event.target.closest("[data-drawer-done]")) {
-      const requiredInputs = activeDrawer ? [...activeDrawer.querySelectorAll("[required]")] : [];
-      const invalidInput = requiredInputs.find((input) => !input.checkValidity());
-      if (invalidInput) {
-        invalidInput.reportValidity?.();
-        invalidInput.focus();
-        return;
-      }
-      const action = activeDrawer?.closest("[data-functional-entity]")?.querySelector("[data-row-action]");
-      if (action) {
-        action.value = "RETIRAR";
+      const doneButton = event.target.closest("[data-drawer-done]");
+      // Retirement is intentionally a button (it only marks the row for the
+      // final response submit), so it has no submit event to handle it.
+      if (doneButton.matches("[data-edit-done]")) {
+        const invalidInput = [...(activeDrawer?.querySelectorAll("[required]") || [])]
+          .find((input) => !input.checkValidity());
+        if (invalidInput) {
+          invalidInput.reportValidity?.();
+          invalidInput.focus();
+          return;
+        }
+        const action = activeDrawer?.closest("[data-functional-entity]")?.querySelector("[data-row-action]");
+        if (action) action.value = "RETIRAR";
+        closeDrawer();
       } else {
+        // Income preparation still uses the outer form's formaction.  Mark
+        // the operation before the native submit, but only after validating
+        // the drawer so an invalid attempt cannot mutate hidden state.
+        const invalidInput = [...(activeDrawer?.querySelectorAll("[required]") || [])]
+          .find((input) => !input.checkValidity());
+        if (invalidInput) {
+          event.preventDefault();
+          invalidInput.reportValidity?.();
+          invalidInput.focus();
+          return;
+        }
         const includeAction = activeDrawer?.querySelector("[data-include-action]");
         if (includeAction) {
           includeAction.value = "INCLUIR";
           addAnotherIncludeDrawer(activeDrawer);
         }
       }
-      closeDrawer();
+      // The submit listener below is the final safety net for invalid forms;
+      // this click handler prepares the marker only after its own drawer
+      // validation has passed.
       return;
     }
     const previous = event.target.closest("[data-page-previous]");
@@ -209,6 +231,24 @@
       const direction = next ? 1 : -1;
       table.dataset.page = String(Number(table.dataset.page || 1) + direction);
       refreshTable(table);
+    }
+  });
+
+  // The drawer action is a submit control in this outer form.  Keep the
+  // guard on submit as the authoritative boundary: depending on browser
+  // event ordering, a delegated click handler may run without preventing the
+  // native submit that follows it.  Only validate fields belonging to the
+  // active drawer; the final-response declaration is unrelated to preparing
+  // an individual income.
+  form.addEventListener("submit", (event) => {
+    if (!event.submitter?.matches("[data-drawer-done]")) return;
+    const requiredInputs = activeDrawer ? [...activeDrawer.querySelectorAll("[required]")] : [];
+    const invalidInput = requiredInputs.find((input) => !input.checkValidity());
+    if (invalidInput) {
+      event.preventDefault();
+      invalidInput.reportValidity?.();
+      invalidInput.focus();
+      return;
     }
   });
 
@@ -250,6 +290,82 @@
 
   backdrop?.addEventListener("click", () => closeDrawer(true, true));
   refresh();
+})();
+
+// Reuse the same drawer visual for editing a prepared ingress.  The table
+// stays compact; this form is populated from the server-rendered draft row.
+(() => {
+  const drawer = document.querySelector("[data-prepared-edit-drawer]");
+  const dataNode = document.getElementById("prepared-novelty-edit-data");
+  if (!drawer || !dataNode) return;
+  let rows = [];
+  try { rows = JSON.parse(dataNode.textContent || "[]"); } catch (_) { rows = []; }
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  const form = drawer.querySelector("[data-prepared-edit-form]");
+  const uploadEndpoint = document.getElementById("prepared-attachment-endpoint")?.action || "";
+  const close = () => { drawer.hidden = true; drawer.classList.remove("is-open"); };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!form.checkValidity()) { form.reportValidity(); return; }
+    const submit = form.querySelector("button[type=submit]");
+    if (submit) submit.disabled = true;
+    try {
+      const editResponse = await fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin" });
+      if (!editResponse.ok) throw new Error("edit");
+      const file = drawer.querySelector("[data-prepared-edit-attachment-panel] input[type=file]")?.files?.[0];
+      if (file && uploadEndpoint) {
+        const uploadData = new FormData();
+        uploadData.append("change_id", form.querySelector("[data-prepared-edit-id]").value);
+        uploadData.append("attachment", file);
+        const csrfInput = form.querySelector('input[name="csrfmiddlewaretoken"]');
+        if (csrfInput?.value) uploadData.append("csrfmiddlewaretoken", csrfInput.value);
+        const uploadResponse = await fetch(uploadEndpoint, { method: "POST", body: uploadData, credentials: "same-origin" });
+        if (!uploadResponse.ok) throw new Error("attachment");
+      }
+      window.location.reload();
+    } catch (_) {
+      if (submit) submit.disabled = false;
+    }
+  });
+  document.addEventListener("click", (event) => {
+    const opener = event.target.closest("[data-prepared-edit-open]");
+    if (opener) {
+      const row = byId.get(String(opener.dataset.changeId)) || {};
+      form.querySelector("[data-prepared-edit-id]").value = row.id || "";
+      const values = {
+        tipo_id: row.tipo_id, documento: row.document, nombres: row.first_name,
+        apellidos: row.last_name, fecha_ingreso: row.entry_date,
+        correo: row.email, phone: row.phone, parentesco: row.parentesco,
+        observaciones: row.observations,
+      };
+      Object.entries(values).forEach(([name, value]) => {
+        const field = form.querySelector(`[data-prepared-edit-field="${name}"]`);
+        if (field) field.value = value || "";
+      });
+      const existing = drawer.querySelector(`[data-prepared-edit-attachment="${row.id}"]`);
+      let attachmentPanel = drawer.querySelector("[data-prepared-edit-attachment-panel]");
+      if (!attachmentPanel) {
+        attachmentPanel = document.createElement("section");
+        attachmentPanel.dataset.preparedEditAttachmentPanel = "";
+        attachmentPanel.className = "prepared-edit-attachment";
+        form.parentElement.insertBefore(attachmentPanel, form.nextSibling);
+      }
+      attachmentPanel.replaceChildren();
+      const heading = document.createElement("h5"); heading.textContent = "Documento adjunto"; attachmentPanel.appendChild(heading);
+      if (existing) {
+        const current = existing.cloneNode(true); current.hidden = false; attachmentPanel.appendChild(current);
+      } else {
+        const empty = document.createElement("p"); empty.textContent = "Sin documento adjunto"; attachmentPanel.appendChild(empty);
+      }
+      const upload = document.createElement("div");
+      upload.innerHTML = `<label>Elegir archivo nuevo<input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png"></label>`;
+      attachmentPanel.appendChild(upload);
+      drawer.hidden = false;
+      requestAnimationFrame(() => drawer.classList.add("is-open"));
+      return;
+    }
+    if (event.target.closest("[data-prepared-edit-close]")) close();
+  });
 })();
 
 // Prepared novelties stay compact until the client explicitly chooses an
