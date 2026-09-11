@@ -628,7 +628,9 @@ def portal(request):
     latest = access.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).prefetch_related("changes").first()
     saved_preview = []
     prepared_changes = []
+    prepared_ingresses = []
     prepared_edit_rows = []
+    prepared_retirement_keys = set()
     if latest:
         actionable_markers = _prepared_draft_markers(latest)
         for change in latest.changes.filter(
@@ -654,7 +656,7 @@ def portal(request):
                     return timezone.datetime.fromisoformat(str(value)).strftime("%d/%m/%Y")
                 except (TypeError, ValueError):
                     return str(value or "")
-            prepared_changes.append({
+            prepared_change = {
                 "id": marker.id,
                 "action": marker.action,
                 "label": marker.get_action_display(),
@@ -668,12 +670,25 @@ def portal(request):
                 "fecha_retiro": values.get("fecha_retiro", ""),
                 "fecha_retiro_display": _human_date(values.get("fecha_retiro", "")),
                 "attachments": list(marker.attachments.exclude(category="EXCEL_IMPORT")),
-            })
+            }
+            prepared_changes.append(prepared_change)
+            if marker.action == CambioSolicitudColectivo.Action.INCLUDE:
+                prepared_ingresses.append(prepared_change)
+            if marker.action == CambioSolicitudColectivo.Action.RETIRE and values.get("fecha_retiro"):
+                original_record = getattr(marker, "original_record", None)
+                if original_record is not None:
+                    prepared_retirement_keys.add(str(original_record.public_key))
             prepared_edit_rows.append({
                 "id": marker.id,
                 "action": marker.action,
                 "email": values.get("correo", values.get("email", "")),
                 "phone": values.get("phone", values.get("telefono", "")),
+                "tipo_id": values.get("tipo_id", ""),
+                "document": values.get("documento", ""),
+                "first_name": values.get("nombres", ""),
+                "last_name": values.get("apellidos", ""),
+                "entry_date": values.get("fecha_ingreso", ""),
+                "observations": values.get("observaciones", ""),
                 "birth_date": values.get("fecha_nacimiento", ""),
                 "retirement_date": values.get("fecha_retiro", ""),
                 "rol": values.get("rol", ""),
@@ -691,6 +706,13 @@ def portal(request):
     response_query_ms = round((time.monotonic() - response_query_started) * 1000)
     grouping_started = time.monotonic()
     policy_sections = _policy_sections(access.request, snapshot)
+    for section in policy_sections:
+        for group in section.get("functional_groups", ()):
+            for entity in (group.get("principal", {}), *group.get("members", ())):
+                entity["prepared_retirement"] = any(
+                    key in prepared_retirement_keys
+                    for key in entity.get("source_record_keys", ())
+                )
     grouping_ms = round((time.monotonic() - grouping_started) * 1000)
     warning_count = sum(len(section["grouping_warnings"]) for section in policy_sections)
     if warning_count:
@@ -745,6 +767,7 @@ def portal(request):
         "portal_error": request.session.pop("external_portal_error", ""),
         "saved_preview": tuple(saved_preview),
         "prepared_changes": tuple(prepared_changes),
+        "prepared_ingresses": tuple(prepared_ingresses),
         "prepared_edit_rows": tuple(prepared_edit_rows),
     }
     template_started = time.monotonic()

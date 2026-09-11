@@ -1,0 +1,45 @@
+.individual-access-card,
+.individual-access-card *,
+.individual-access-card form,
+.individual-access-card .individual-access-field,
+.individual-access-card [data-searchable-select],
+.individual-access-card [data-responsible-picker] {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.individual-access-card input[type="search"],
+.individual-access-card input[type="text"],
+.individual-access-card input[type="email"],
+.individual-access-card select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.individual-access-card input[type="checkbox"],
+.individual-access-card input[type="radio"] {
+  width: auto;
+  max-width: none;
+  min-width: auto;
+}
+.individual-access-card .individual-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: .45rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.individual-access-card .individual-checkbox-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: .2rem;
+}
+.individual-access-card .individual-checkbox-row span {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
