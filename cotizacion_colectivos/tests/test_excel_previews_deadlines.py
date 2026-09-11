@@ -111,6 +111,12 @@ class PreviewDeadlineTests(TestCase):
         worksheet = workbook["Novedades"]
         validations = tuple(worksheet.data_validations.dataValidation)
         self.assertTrue(any(validation.formula1 == "=IdentificationTypes" for validation in validations))
+        highlighted = {worksheet.cell(row=1, column=index).value: worksheet.cell(row=1, column=index).fill.fgColor.rgb for index in range(1, worksheet.max_column + 1)}
+        self.assertEqual(highlighted["Acción"], "00FFF2CC")
+        self.assertEqual(highlighted["Fecha de ingreso"], "00FFF2CC")
+        self.assertEqual(highlighted["Fecha de retiro"], "00FFF2CC")
+        self.assertNotEqual(highlighted["Nombres"], "00FFF2CC")
+        self.assertIsNotNone(worksheet["A1"].comment)
 
     def test_excel_identification_display_normalizes_to_canonical_code(self):
         import io

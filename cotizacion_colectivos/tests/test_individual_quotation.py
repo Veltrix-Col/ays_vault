@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
+import inspect
 import tempfile
 from datetime import date
 from dataclasses import replace
@@ -487,6 +488,91 @@ class IndividualQuotationTests(TestCase):
         self.assertNotIn("4234567890123456789", token)
         self.assertNotIn("100000001", token)
         self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
+
+    def test_policy_context_without_affiliate_preserves_defined_policy(self):
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(),
+            members=(affiliate(),),
+            affiliate_key="",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["policy_token"], POLICY_TOKEN)
+        self.assertEqual(context["affiliate_key"], "")
+        self.assertEqual(context["affiliate_label"], "Nuevo afiliado")
+
+    def test_policy_context_affiliate_binds_original_policy(self):
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN,
+            detail=policy(),
+            members=(affiliate(),),
+            affiliate_key="affiliate-hmac-key",
+            creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["policy_token"], POLICY_TOKEN)
+        self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
+        self.assertNotIn("source_context", context)
+
+    def test_branch_context_with_affiliate_derives_policy(self):
+        _schema, _token, context = build_policy_context(
+            policy_token=POLICY_TOKEN, detail=policy(), members=(affiliate(),),
+            affiliate_key="affiliate-hmac-key", creator_id=self.actor.pk,
+        )
+        self.assertEqual(context["policy_token"], POLICY_TOKEN)
+        self.assertEqual(context["affiliate_key"], "affiliate-hmac-key")
+        self.assertNotIn("source_context", context)
+
+    def test_branch_context_without_affiliate_leaves_policy_pending(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["client_branch_individual_access"]).client_branch_individual_access)
+        self.assertIn('"source_context": "RAMO"', source)
+        self.assertIn('"policy_token": ""', source)
+        self.assertIn('if select_affiliate else None', source)
+
+    def test_branch_access_uses_shared_searchable_affiliate_selector_and_policy_scoped_keys(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["client_branch_individual_access"]).client_branch_individual_access)
+        template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "branch_access.html").read_text(encoding="utf-8")
+        self.assertIn("affiliate_options(members)", source)
+        self.assertIn('key = f"{policy_token}|{option.key}"', source)
+        self.assertIn("data-individual-affiliate-toggle", template)
+        self.assertIn("data-searchable-input", template)
+        self.assertIn("data-searchable-select-control", template)
+        self.assertIn("data-responsible-picker", template)
+        self.assertIn("data-individual-otp-toggle", template)
+        self.assertIn("Buscar por nombre o documento", template)
+        self.assertIn("data-search-text", template)
+
+    def test_branch_access_exposes_explicit_empty_states(self):
+        template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "branch_access.html").read_text(encoding="utf-8")
+        self.assertIn("No hay pólizas vigentes disponibles para este ramo.", template)
+        self.assertIn("No se encontraron afiliados disponibles para este ramo.", template)
+        self.assertIn("No encontramos afiliados que coincidan con la búsqueda.", template)
+
+    def test_policy_and_branch_templates_reference_the_shared_access_card(self):
+        root = Path(__file__).parents[2] / "templates" / "cotizacion_colectivos"
+        policy_template = (root / "policy_detail.html").read_text(encoding="utf-8")
+        branch_template = (root / "individual" / "branch_access.html").read_text(encoding="utf-8")
+        self.assertIn('individual/_access_card.html', policy_template)
+        self.assertIn('individual/_access_card.html', branch_template)
+
+    def test_destination_policy_resolution_persists(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["individual_destination_policy"]).individual_destination_policy)
+        self.assertIn("destination_policy_remote_id = policy_id", source)
+        self.assertIn('context["policy_token"] = selected_policy', source)
+        self.assertIn('"source_context"', source)
+
+    def test_destination_policy_rejects_policy_outside_branch(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["individual_destination_policy"]).individual_destination_policy)
+        self.assertIn("if selected_policy not in allowed", source)
+        self.assertIn("Seleccione una póliza válida", source)
+
+    def test_destination_policy_endpoint_rejects_get(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["individual_destination_policy"]).individual_destination_policy)
+        self.assertIn('@require_http_methods(["POST"])', source)
+
+    def test_pending_destination_policy_does_not_resolve_subrisk(self):
+        source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["individual_expedient"]).individual_expedient)
+        self.assertIn("and not destination_policy_pending", source)
+        self.assertIn("include_subrisk=quotation.branch_slug in {\"vida\", \"salud\"} and not destination_policy_pending", source)
 
     def test_existing_affiliate_prefill_preserves_structured_contact_fields(self):
         member = replace(

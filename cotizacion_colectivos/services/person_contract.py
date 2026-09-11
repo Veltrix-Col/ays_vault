@@ -8,6 +8,8 @@ import re
 import unicodedata
 import threading
 import logging
+import hashlib
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Mapping
@@ -140,6 +142,8 @@ def build_contact_payload(data: Mapping[str, object], *, status: str = "Prospect
     document = str(data.get("N_mero_de_ID") or "").strip()
     if not last_name or not id_type or not document:
         raise ValidationError("Faltan datos para crear persona.")
+    if len(last_name) > 80:
+        raise ValidationError("Los apellidos no pueden superar 80 caracteres.")
     if status not in {"Prospecto", "Cliente"}:
         raise ValidationError("Estado de Contacts no está confirmado.")
     payload: dict[str, object] = {
@@ -151,42 +155,73 @@ def build_contact_payload(data: Mapping[str, object], *, status: str = "Prospect
     }
     for field in ("First_Name", "Email", "Mobile", "Phone"):
         value = data.get(field)
-        if value not in (None, ""):
-            payload[field] = str(value).strip()
+        cleaned = str(value or "").strip()
+        if cleaned:
+            if field == "First_Name" and len(cleaned) > 40:
+                raise ValidationError("Los nombres no pueden superar 40 caracteres.")
+            payload[field] = cleaned
     birth_date = _normalize_contact_date(data.get("Date_of_Birth"))
     if birth_date is not None:
         payload["Date_of_Birth"] = birth_date
-    if data.get("Tratamiento_de_datos") in {"Si", "No"}:
-        payload["Tratamiento_de_datos"] = data["Tratamiento_de_datos"]
+    treatment = str(data.get("Tratamiento_de_datos") or "").strip()
+    if treatment in {"Si", "No"}:
+        payload["Tratamiento_de_datos"] = treatment
     return payload
 
 
 def resolve_contact_by_document(*, document: str, document_type: str, zoho=None) -> dict[str, object]:
     document = str(document or "").strip()
     document_type = str(document_type or "").strip()
+    document_hash = hashlib.sha256(document.encode("utf-8")).hexdigest()[:16] if document else ""
+    started = time.monotonic()
     if not document or not document_type or not re.fullmatch(r"[0-9A-Za-z.-]{3,40}", document):
         return {"status": "INVALID_INPUT"}
+    criteria = f"(N_mero_de_ID:equals:{escape_criteria_value(document)})"
+    safe_criteria = "(N_mero_de_ID:equals:<redacted>)"
+    logger.info(
+        "contact_reconcile_read profile=%s document_type=%s document_hash=%s criteria=%s",
+        getattr(settings, "ZOHO_ACTIVE_PROFILE", ""), document_type, document_hash, safe_criteria,
+    )
     try:
         facade = zoho or colectivos_zoho()
         page = facade.search.by_criteria(
             module="Contacts",
-            criteria=f"(N_mero_de_ID:equals:{escape_criteria_value(document)})",
+            criteria=criteria,
             fields=("id", "Full_Name", "First_Name", "Last_Name", "N_mero_de_ID", "Tipo_ID", "Estado"),
             page=1,
             limit=20,
         )
     except ZohoError as exc:
+        logger.warning(
+            "contact_reconcile_read_result profile=%s document_type=%s document_hash=%s "
+            "result=ERROR exception_class=%s duration_ms=%s",
+            getattr(settings, "ZOHO_ACTIVE_PROFILE", ""), document_type, document_hash,
+            exc.__class__.__name__, int((time.monotonic() - started) * 1000),
+        )
         raise translate_zoho_error(exc) from exc
-    records = tuple(getattr(page, "records", ()) or ())
+    raw_records = getattr(page, "records", ())
+    records = tuple(raw_records or ())
+    logger.info(
+        "contact_reconcile_read_result profile=%s document_type=%s document_hash=%s "
+        "response_type=%s records_count=%s received_types=%s",
+        getattr(settings, "ZOHO_ACTIVE_PROFILE", ""), document_type, document_hash,
+        type(page).__name__ if page is not None else "None",
+        len(records), tuple(str(item.get("Tipo_ID") or "").strip() for item in records),
+    )
     exact = [item for item in records if str(item.get("N_mero_de_ID") or "").strip() == document]
     if not exact:
+        logger.info("contact_reconcile_read_final document_hash=%s result=NOT_FOUND candidate_count=%s mismatch_count=0", document_hash, len(records))
         return {"status": "NOT_FOUND"}
     typed = [item for item in exact if str(item.get("Tipo_ID") or "").strip() == document_type]
     if not typed:
+        logger.info("contact_reconcile_read_final document_hash=%s result=TYPE_MISMATCH candidate_count=%s mismatch_count=%s", document_hash, len(exact), len(exact))
         return {"status": "TYPE_MISMATCH"}
     if len(typed) != 1:
+        logger.info("contact_reconcile_read_final document_hash=%s result=AMBIGUOUS candidate_count=%s mismatch_count=0", document_hash, len(typed))
         return {"status": "AMBIGUOUS", "count": len(typed)}
     item = typed[0]
+    logger.info("contact_reconcile_read_final document_hash=%s result=FOUND candidate_count=1 mismatch_count=0", document_hash)
+    detail_keys = tuple(getattr(exc, "detail_keys", ()) or ())
     return {
         "status": "FOUND",
         "record_id": str(item.get("id") or "").strip(),
@@ -249,7 +284,8 @@ def safe_contact_error_context(exc: ZohoError) -> dict[str, object]:
         "detail_given_type": getattr(exc, "detail_given_type", ""),
         "detail_class": getattr(exc, "detail_class", ""),
         "detail_index": getattr(exc, "detail_index", None),
-        "detail_keys": tuple(getattr(exc, "detail_keys", ()) or ()),
+        "detail_keys": detail_keys,
+        "details_keys": detail_keys,
     }
 
 
@@ -310,6 +346,21 @@ class GuardedContactPublisher:
                 # represent a remote CREATE that already happened.
                 raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
             except (ZohoSDKError, ZohoError) as exc:
+                status_code = getattr(exc, "status_code", None)
+                # An explicit client/auth/validation response means Zoho
+                # rejected the request; only transport/server ambiguity may
+                # enter reconciliation.
+                if status_code is not None and 400 <= int(status_code) < 500 and int(status_code) != 429:
+                    field = str(getattr(exc, "detail_field", "") or "").strip()
+                    if field and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", field):
+                        raise ContactPublicationRejected(f"Zoho rechazó el valor del campo {field}.") from exc
+                    raise ContactPublicationRejected("Zoho rechazó la creación de la persona. Revise los datos antes de intentar nuevamente.") from exc
+                if status_code is not None and int(status_code) == 429:
+                    # Preserve the existing rate-limit contract; the SDK
+                    # handles its bounded retries before reaching this point.
+                    if getattr(exc, "request_sent", None) is True:
+                        raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
+                    raise
                 if getattr(exc, "request_sent", None) is True:
                     raise ContactPublicationUncertain("Resultado incierto; requiere conciliación en Contacts.") from exc
                 raise

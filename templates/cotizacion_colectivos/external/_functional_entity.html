@@ -1,5 +1,5 @@
-<div class="functional-record" data-functional-entity>
-  <div class="functional-table__row" role="row" data-record-summary>
+<div class="functional-record" data-functional-entity data-prepared-retirement="{{ entity.prepared_retirement|yesno:'true,false' }}">
+  <div class="functional-table__row{% if entity.prepared_retirement %} functional-table__row--retirement-prepared{% endif %}" role="row" data-record-summary>
     {% if section.branch_code == '28' %}
       <span role="cell" data-label="#">{{ entity_index }}</span>
       <strong role="cell" data-label="Dirección">{% if risk.attributes.direccion %}{{ risk.attributes.direccion }}{% elif risk.summary %}{{ risk.summary }}{% else %}Inmueble registrado{% endif %}</strong>
@@ -31,7 +31,7 @@
     {% endif %}
     <span role="cell" data-label="Acción" class="functional-table__action">
       <button type="button" class="functional-edit-toggle" data-edit-toggle data-drawer-open="editor-{{ entity.key }}" aria-controls="editor-{{ entity.key }}" aria-haspopup="dialog" aria-expanded="false">Solicitar retiro</button>
-      <span class="functional-change-state" data-change-state hidden>Retiro preparado</span>
+      <span class="functional-change-state" data-change-state{% if not entity.prepared_retirement %} hidden{% endif %}>Retiro preparado</span>
     </span>
   </div>
 
@@ -72,7 +72,7 @@
         <p>A&amp;S validará posteriormente la fecha aplicable y las condiciones del negocio.</p>
         <div class="functional-action-grid">
           <input type="hidden" name="action_entity_{{ entity.key }}" value="SIN_CAMBIOS" data-row-action>
-          <label>Fecha solicitada de retiro<input type="date" name="fecha_retiro_entity_{{ entity.key }}" placeholder="AAAA-MM-DD" required></label>
+          <label>Fecha solicitada de retiro <span class="required-mark" aria-hidden="true">*</span><input type="date" name="fecha_retiro_entity_{{ entity.key }}" placeholder="AAAA-MM-DD" required></label>
           <label class="functional-action-grid__wide">Observaciones<textarea name="observaciones_entity_{{ entity.key }}" maxlength="500" rows="3" placeholder="Información adicional (opcional)"></textarea></label>
         </div>
       </section>
