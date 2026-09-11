@@ -1,8 +1,10 @@
+from types import SimpleNamespace
+
 from django.test import SimpleTestCase
 from django.urls import reverse
 
 from cotizacion_colectivos.dto import BranchSummary, RelatedPolicy
-from cotizacion_colectivos.service_catalog import branch_workspaces, services_for_branch
+from cotizacion_colectivos.service_catalog import branch_workspaces, operable_client_branches, services_for_branch
 
 
 class CollectiveServiceCatalogTests(SimpleTestCase):
@@ -55,3 +57,36 @@ class CollectiveServiceCatalogTests(SimpleTestCase):
                     tuple(entry["service"].code for entry in workspace["services"]),
                     (selected,),
                 )
+
+    def test_operable_client_branches_keep_only_direct_tomador_policies(self):
+        direct = RelatedPolicy(
+            detail_token="direct-token", masked_reference="Directa", full_reference="POL-D",
+            state="Vigente", branch="Salud colectivo", insurer="SURA",
+        )
+        insured_only = RelatedPolicy(
+            detail_token="insured-token", masked_reference="Relacionada", full_reference="POL-R",
+            state="Vigente", branch="Salud colectivo", insurer="SURA",
+        )
+        branch = BranchSummary(
+            code="91", slug="salud", name="Salud colectivo", classification="confirmed",
+            policies=(direct, insured_only), insured_count=2, risk_count=1,
+            active_count=2, excluded_count=0,
+        )
+        detail = SimpleNamespace(direct_policies=(direct,), branches=(branch,))
+        result = operable_client_branches(detail)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(tuple(item.full_reference for item in result[0].policies), ("POL-D",))
+
+    def test_operable_client_branches_deduplicates_direct_relation_overlap(self):
+        policy = RelatedPolicy(
+            detail_token="same-token", masked_reference="Póliza", full_reference="POL-1",
+            state="Vigente", branch="Salud colectivo", insurer="SURA",
+        )
+        branch = BranchSummary(
+            code="91", slug="salud", name="Salud colectivo", classification="confirmed",
+            policies=(policy, policy), insured_count=1, risk_count=0,
+            active_count=1, excluded_count=0,
+        )
+        detail = SimpleNamespace(direct_policies=(policy,), branches=(branch,))
+        result = operable_client_branches(detail)
+        self.assertEqual(tuple(item.full_reference for item in result[0].policies), ("POL-1", "POL-1"))

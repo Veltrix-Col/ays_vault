@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from django.urls import reverse
 
@@ -57,6 +57,35 @@ def services_for_branch(branch_code: str) -> tuple[CollectiveService, ...]:
             True, "cotizacion_colectivos:invitations_policy_detail",
         ))
     return tuple(services)
+
+
+def operable_client_branches(detail) -> tuple:
+    """Return only policies where the resolved client is the policy holder.
+
+    ``detail.branches`` also contains confirmed Riesgos1 relationships. Those
+    relationships remain available in the detail, but must not make a policy
+    appear as an operable client policy in downstream tools.
+    """
+    direct_tokens = {
+        policy.detail_token
+        for policy in (getattr(detail, "direct_policies", ()) or ())
+        if getattr(policy, "detail_token", "")
+    }
+    if not direct_tokens:
+        return ()
+    result = []
+    for branch in getattr(detail, "branches", ()) or ():
+        seen = set()
+        selected = []
+        for policy in branch.policies:
+            token = getattr(policy, "detail_token", "")
+            if token in direct_tokens and token not in seen:
+                seen.add(token)
+                selected.append(policy)
+        policies = tuple(selected)
+        if policies:
+            result.append(replace(branch, policies=policies))
+    return tuple(result)
 
 
 def branch_workspaces(branches, *, service_code: str | None = None) -> tuple[dict[str, object], ...]:

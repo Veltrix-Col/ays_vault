@@ -184,7 +184,7 @@ class FakeEntityDetailService:
             display_name="Empresa autorizada", legal_name="Empresa autorizada",
             id_type="NIT", masked_document="•••789", state="Cliente",
             summary=ContactSummary("Persona jurídica", "NIT", "•••789", "Cliente", document="900123789"),
-            policies=(policy,), direct_policies=(), insured=(), risks=(), branches=(branch,),
+            policies=(policy,), direct_policies=(policy,), insured=(), risks=(), branches=(branch,),
             document="900123789",
         )
 
@@ -252,6 +252,29 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "900123789")
         self.assertNotContains(response, "NIT •••789")
 
+    def test_client_detail_lists_only_policies_where_client_is_tomador(self):
+        company_token = sign_record_id(SOURCE_ID, "company")
+        base_detail = FakeEntityDetailService().company(company_token)
+        direct = base_detail.direct_policies[0]
+        relational = replace(
+            direct,
+            detail_token=sign_record_id(
+                "4234567890123456790", "policy",
+                context={"source_id": SOURCE_ID, "source_kind": "company"},
+            ),
+            full_reference="RELACIONADA-001",
+        )
+        branch = replace(base_detail.branches[0], policies=(direct, relational))
+        detail = replace(base_detail, policies=(direct, relational), branches=(branch,))
+        service = Mock()
+        service.company.return_value = detail
+        with patch("cotizacion_colectivos.views.EntityDetailService", return_value=service):
+            response = self.client.get(reverse(
+                "cotizacion_colectivos:client_detail", args=["company", company_token]
+            ))
+        self.assertContains(response, direct.full_reference)
+        self.assertNotContains(response, "RELACIONADA-001")
+
     def test_home_only_displays_active_zoho_profile_without_runtime_switch(self):
         response = self.client.get(reverse("cotizacion_colectivos:invitations_index"))
         self.assertContains(response, "Perfil Zoho activo: SANDBOX")
@@ -286,7 +309,8 @@ class PolicyNavigationTests(TestCase):
         )
         health = replace(base_detail.branches[0], policies=(other,))
         detail = replace(
-            base_detail, policies=(active, inactive, other), branches=(mobility, health),
+            base_detail, policies=(active, inactive, other),
+            direct_policies=(active, inactive, other), branches=(mobility, health),
         )
         service = Mock()
         service.company.return_value = detail
