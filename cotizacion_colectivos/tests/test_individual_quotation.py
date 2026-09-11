@@ -1137,7 +1137,7 @@ class IndividualQuotationTests(TestCase):
         publish.assert_called_once_with(quotation.task_outbox.get().pk)
         task_record = json.loads(decrypt(quotation.task_outbox.get().encrypted_payload))
         self.assertEqual(task_record["rea"], "Negocios Bienestar y Beneficios")
-        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
+        self.assertEqual(task_record["Solicitud_a_analista"], "No")
         self.assertEqual(task_record["Responsable"], "Sara Rua Vargas")
         self.assertEqual(task_record["Correo_responsable"], "sara@example.test")
 
@@ -1213,7 +1213,7 @@ class IndividualQuotationTests(TestCase):
         self.assertEqual(outbox.safe_error_code, "")
         task_record = json.loads(decrypt(outbox.encrypted_payload))
         self.assertNotIn("Correo_responsable", task_record)
-        self.assertEqual(task_record["Solicitud_a_analista"], "Si")
+        self.assertEqual(task_record["Solicitud_a_analista"], "No")
 
     def test_task_publication_is_explicit_after_responsible_is_saved(self):
         quotation = self._pending_responsible_quotation()
