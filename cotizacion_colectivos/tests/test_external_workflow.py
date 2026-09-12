@@ -704,8 +704,8 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
 
         self.assertEqual(portal.status_code, 200)
-        self.assertContains(portal, "Ingresos preparados")
-        self.assertContains(portal, "Aún no ha preparado novedades.")
+        self.assertNotContains(portal, "Ingresos preparados")
+        self.assertContains(portal, 'id="prepared-novelty-edit-data" type="application/json">[]</script>')
         self.assertNotContains(portal, "Sin cambios")
         self.assertNotContains(portal, "Preparado")
 
@@ -732,7 +732,8 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
 
         self.assertEqual(portal.status_code, 200)
-        self.assertContains(portal, "1 novedad(es) lista(s) para revisar.")
+        self.assertContains(portal, "Ingresos preparados")
+        self.assertContains(portal, "1 preparado(s)")
         self.assertContains(portal, "Ana Prueba")
         self.assertEqual(portal.content.decode().count("prepared-novelty\""), 1)
         self.assertNotContains(portal, "Sin cambios")
@@ -860,7 +861,8 @@ class ExternalWorkflowTests(TestCase):
         second_access = generate_access(request=second, actor=self.admin, recipient="cliente2@example.test")
         self.enter_with_otp(second_access)
         second_portal = self.client.get(reverse("colectivos_external:portal"))
-        self.assertContains(second_portal, "Aún no ha preparado novedades.")
+        self.assertNotContains(second_portal, "Ingresos preparados")
+        self.assertContains(second_portal, 'id="prepared-novelty-edit-data" type="application/json">[]</script>')
         self.assertNotContains(second_portal, "Ana Anterior")
         self.assertNotContains(second_portal, "anterior.pdf")
         second_saved = self.client.post(reverse("colectivos_external:save_draft"), {

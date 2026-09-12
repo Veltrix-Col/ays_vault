@@ -7,6 +7,7 @@ from django.test import SimpleTestCase, override_settings
 
 
 class MobilityContactSeedCommandTests(SimpleTestCase):
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox")
     def test_default_is_sanitized_dry_run_of_exactly_five_contacts(self):
         output = StringIO()
         with patch(

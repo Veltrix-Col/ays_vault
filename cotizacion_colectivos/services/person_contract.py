@@ -267,6 +267,10 @@ class ContactPublishingDisabled(RuntimeError):
 
 def safe_contact_error_context(exc: ZohoError) -> dict[str, object]:
     """Return only normalized, non-PII fields suitable for diagnostics."""
+    detail_keys = tuple(
+        key for key in (getattr(exc, "detail_keys", ()) or ())
+        if isinstance(key, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", key)
+    )
     return {
         "category": getattr(exc, "category", ""),
         "status_code": getattr(exc, "status_code", None),
