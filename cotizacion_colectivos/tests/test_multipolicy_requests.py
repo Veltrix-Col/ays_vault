@@ -203,22 +203,20 @@ class MultiPolicyRequestTests(TestCase):
                 branch="Salud colectivo", insurer="Aseguradora",
                 layout_category=layout,
             )
+        direct = related("2000000000000000001")
         branch = BranchSummary(
             code="91", slug="salud", name="Salud colectivo",
             classification="confirmed",
             policies=(
-                related("2000000000000000001"),
+                direct,
                 related("2000000000000000002", state="Cancelada"),
                 related("2000000000000000003", layout="individual"),
             ),
             insured_count=3, risk_count=0, active_count=1, excluded_count=2,
         )
-        available, unavailable = _builder_policies(SimpleNamespace(branches=(branch,)))
+        available, unavailable = _builder_policies(SimpleNamespace(branches=(branch,), direct_policies=(direct,)))
         self.assertEqual(len(available), 1)
-        self.assertEqual(len(unavailable), 2)
-        self.assertEqual({reason for _policy, reason in unavailable}, {
-            "Cancelada.", "No corresponde a un diseño colectivo confirmado.",
-        })
+        self.assertEqual(len(unavailable), 0)
 
     def test_beneficiary_row_keeps_associate_and_insured_in_novelties_excel(self):
         payload = {

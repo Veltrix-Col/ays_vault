@@ -89,4 +89,4 @@ class CollectiveServiceCatalogTests(SimpleTestCase):
         )
         detail = SimpleNamespace(direct_policies=(policy,), branches=(branch,))
         result = operable_client_branches(detail)
-        self.assertEqual(tuple(item.full_reference for item in result[0].policies), ("POL-1", "POL-1"))
+        self.assertEqual(tuple(item.full_reference for item in result[0].policies), ("POL-1",))

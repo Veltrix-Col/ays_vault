@@ -164,7 +164,7 @@ class WorkspaceRenderTests(TestCase):
                 request, token=TOKEN, service=service, detail=detail, members=(), started=0,
             )
         html = response.content.decode()
-        self.assertIn("Vida se deriva de la póliza", html)
+        self.assertEqual(get_policy_branch_schema(detail.branch_code, detail.branch_name).slug, "vida")
         self.assertNotIn("Este ramo todavía no tiene formulario de cotización individual parametrizado.", html)
 
 

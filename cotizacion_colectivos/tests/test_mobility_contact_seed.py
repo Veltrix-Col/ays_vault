@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 
 class MobilityContactSeedCommandTests(SimpleTestCase):
@@ -24,6 +24,7 @@ class MobilityContactSeedCommandTests(SimpleTestCase):
         get_zoho.assert_not_called()
         create.assert_not_called()
 
+    @override_settings(ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=False)
     def test_write_mode_remains_blocked_when_sandbox_write_is_disabled(self):
         with self.assertRaisesMessage(CommandError, "La escritura Sandbox está deshabilitada."):
             call_command(

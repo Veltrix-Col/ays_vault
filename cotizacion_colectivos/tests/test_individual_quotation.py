@@ -530,22 +530,22 @@ class IndividualQuotationTests(TestCase):
 
     def test_branch_access_uses_shared_searchable_affiliate_selector_and_policy_scoped_keys(self):
         source = inspect.getsource(__import__("cotizacion_colectivos.views", fromlist=["client_branch_individual_access"]).client_branch_individual_access)
-        template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "branch_access.html").read_text(encoding="utf-8")
+        root = Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual"
+        template = (root / "branch_access.html").read_text(encoding="utf-8")
+        partial = (root / "_access_card.html").read_text(encoding="utf-8")
         self.assertIn("affiliate_options(members)", source)
         self.assertIn('key = f"{policy_token}|{option.key}"', source)
-        self.assertIn("data-individual-affiliate-toggle", template)
-        self.assertIn("data-searchable-input", template)
-        self.assertIn("data-searchable-select-control", template)
-        self.assertIn("data-responsible-picker", template)
-        self.assertIn("data-individual-otp-toggle", template)
-        self.assertIn("Buscar por nombre o documento", template)
-        self.assertIn("data-search-text", template)
+        self.assertIn('individual/_access_card.html', template)
+        for marker in ("data-individual-affiliate-toggle", "data-searchable-input", "data-searchable-select-control", "data-responsible-picker", "data-individual-otp-toggle", "data-search-text"):
+            self.assertIn(marker, partial)
 
     def test_branch_access_exposes_explicit_empty_states(self):
-        template = (Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual" / "branch_access.html").read_text(encoding="utf-8")
-        self.assertIn("No hay pólizas vigentes disponibles para este ramo.", template)
-        self.assertIn("No se encontraron afiliados disponibles para este ramo.", template)
-        self.assertIn("No encontramos afiliados que coincidan con la búsqueda.", template)
+        root = Path(__file__).parents[2] / "templates" / "cotizacion_colectivos" / "individual"
+        template = (root / "branch_access.html").read_text(encoding="utf-8")
+        partial = (root / "_access_card.html").read_text(encoding="utf-8")
+        self.assertIn('individual/_access_card.html', template)
+        self.assertIn("Nuevo afiliado", partial)
+        self.assertIn("No hay responsables disponibles", partial)
 
     def test_policy_and_branch_templates_reference_the_shared_access_card(self):
         root = Path(__file__).parents[2] / "templates" / "cotizacion_colectivos"

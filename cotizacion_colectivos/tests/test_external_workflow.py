@@ -662,7 +662,7 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, "Ana Uno")
         self.assertContains(portal, "Bea Dos")
-        self.assertEqual(portal.content.decode().count("Novedades preparadas"), 1)
+        self.assertEqual(portal.content.decode().count("Ingresos preparados"), 1)
         self.assertNotContains(portal, "Previsualización de cambios guardados")
         self.assertContains(portal, "Cédula de ciudadanía")
 
@@ -704,7 +704,7 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
 
         self.assertEqual(portal.status_code, 200)
-        self.assertContains(portal, "Novedades preparadas")
+        self.assertContains(portal, "Ingresos preparados")
         self.assertContains(portal, "Aún no ha preparado novedades.")
         self.assertNotContains(portal, "Sin cambios")
         self.assertNotContains(portal, "Preparado")
@@ -767,7 +767,7 @@ class ExternalWorkflowTests(TestCase):
         self.assertTrue(marker.attachments.filter(category="SOPORTE").exists())
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, "Camilo Vargas")
-        self.assertContains(portal, "Novedades preparadas")
+        self.assertContains(portal, "Ingresos preparados")
         self.assertTrue(self.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).first().changes.filter(action__in={"INCLUIR", "RETIRAR", "MODIFICAR"}).exists())
         submitted = self.client.post(reverse("colectivos_external:submit"), {"declaration": "on"})
         self.assertEqual(submitted.status_code, 200, submitted.content[:500])
@@ -1371,10 +1371,22 @@ class ExternalWorkflowTests(TestCase):
             }],
             observations="",
         )
+
         with self.captureOnCommitCallbacks(execute=True):
             submit_response(access=access, response=response, declaration=True)
         outbox = ColectivosTaskOutbox.objects.get(request=self.request, event_kind="RETIRO")
         publish.assert_called_once_with(outbox.pk)
+
+    def test_external_portal_does_not_render_inactive_materialized_record(self):
+        self.record.active = False
+        self.record.save(update_fields=("active",))
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        self.enter_with_otp(generated)
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertEqual(portal.status_code, 200)
+        self.assertContains(portal, "No hay información disponible para esta póliza.")
 
     def test_submit_response_lock_does_not_join_nullable_access(self):
         """The PostgreSQL-safe lock must target only the response row."""
