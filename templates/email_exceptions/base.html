@@ -1,0 +1,29 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Excepciones de Correo · Banco de Herramientas{% endblock %}</title>
+  <meta name="description" content="Gestión operativa de excepciones de correo">
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/tools-common.css' %}">
+  <link rel="stylesheet" href="{% static 'css/email-exceptions.css' %}">
+</head>
+<body class="tool-page email-exceptions-layout">
+  <a class="skip-link" href="#contenido">Ir al contenido principal</a>
+  <header class="tool-header">
+    <a href="{% url 'public_home' %}" class="tool-brand" aria-label="Volver al Banco de Herramientas">
+      <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&amp;S">
+      <span>Banco de Herramientas</span>
+    </a>
+    <div class="tool-header-actions">
+      <a class="tool-link" href="{% url 'area_home' 'operaciones' %}">Operaciones</a>
+    </div>
+  </header>
+  <main id="contenido" class="tool-shell email-exceptions-shell">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

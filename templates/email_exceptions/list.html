@@ -1,0 +1,33 @@
+{% extends "email_exceptions/base.html" %}
+{% block title %}Excepciones de Correo · Banco de Herramientas{% endblock %}
+{% block content %}
+<div class="email-exceptions-page">
+<nav class="tool-breadcrumbs" aria-label="Migas de pan"><a href="{% url 'public_home' %}">Banco de Herramientas</a><span>/</span><a href="{% url 'area_home' 'operaciones' %}">Operaciones</a><span>/</span><span aria-current="page">Excepciones de Correo</span></nav>
+<div class="page-heading email-exceptions-heading">
+  <div><span class="section-kicker">Operaciones · Bandeja</span><h1>Excepciones de Correo</h1><p>Revise los correos que requieren una decisión operativa y conserve toda su trazabilidad.</p></div>
+</div>
+<section class="metric-grid four email-exception-metrics" aria-label="Resumen de excepciones">
+  <article class="metric-card"><span class="metric-icon amber" aria-hidden="true">!</span><div><small>Pendientes</small><strong>{{ counts.PENDING }}</strong><em>Requieren revisión</em></div></article>
+  <article class="metric-card"><span class="metric-icon green" aria-hidden="true">✓</span><div><small>Gestionadas</small><strong>{{ counts.MANAGED }}</strong><em>Con acción registrada</em></div></article>
+  <article class="metric-card"><span class="metric-icon cyan" aria-hidden="true">↗</span><div><small>Ignoradas</small><strong>{{ counts.IGNORED }}</strong><em>Con motivo documentado</em></div></article>
+  <article class="metric-card"><span class="metric-icon red" aria-hidden="true">×</span><div><small>Errores</small><strong>{{ counts.ERROR }}</strong><em>Requieren atención</em></div></article>
+</section>
+<section class="panel filter-panel email-exception-filters" aria-labelledby="filters-title">
+  <div class="panel-head"><div><span class="section-kicker">Filtros</span><h2 id="filters-title">Encontrar una excepción</h2><p>Busque por asunto, motivo o remitente y refine por estado u organización.</p></div></div>
+  <form method="get" action="{% url 'email_exceptions:list' %}" class="email-exception-filter-form">
+    <label class="search-field"><span>Buscar</span><input type="search" name="q" value="{{ request.GET.q }}" placeholder="Asunto, motivo o remitente" autocomplete="off"></label>
+    <label><span>Estado</span><select name="status"><option value="">Todos los estados</option><option value="PENDING" {% if request.GET.status == 'PENDING' %}selected{% endif %}>Pendientes</option><option value="MANAGED" {% if request.GET.status == 'MANAGED' %}selected{% endif %}>Gestionadas</option><option value="IGNORED" {% if request.GET.status == 'IGNORED' %}selected{% endif %}>Ignoradas</option><option value="ERROR" {% if request.GET.status == 'ERROR' %}selected{% endif %}>Errores</option></select></label>
+    <label><span>Organización</span><input type="text" name="organization" value="{{ request.GET.organization }}" placeholder="Ej. BEMSA"></label>
+    <button class="btn primary" type="submit">Aplicar filtros</button>
+    {% if request.GET.q or request.GET.status or request.GET.organization %}<a class="btn ghost" href="{% url 'email_exceptions:list' %}">Limpiar</a>{% endif %}
+  </form>
+</section>
+<section class="panel table-panel email-exception-table-panel" aria-labelledby="inbox-title">
+  <div class="panel-head"><div><span class="section-kicker">Bandeja operativa</span><h2 id="inbox-title">Correos para gestionar</h2></div><span class="results-count">{{ exceptions|length }} resultados</span></div>
+  <div class="table-wrap"><table class="table email-exception-table"><thead><tr><th>Asunto y motivo</th><th>Remitente</th><th>Organización</th><th>Origen</th><th>Recibido</th><th>Estado</th><th><span class="sr-only">Acción</span></th></tr></thead><tbody>
+    {% for item in exceptions %}<tr><td><a class="cell-title" href="{% url 'email_exceptions:detail' item.pk %}">{{ item.last_subject|default:"(sin asunto)"|truncatechars:72 }}</a><small>{{ item.exception_reason|default:"Sin motivo registrado"|truncatechars:90 }}</small></td><td>{{ item.primary_email.from_name|default:item.primary_email.from_email }}<small>{{ item.primary_email.from_email }}</small></td><td>{{ item.organization|default:"—" }}</td><td><span class="mail-origin">{{ item.primary_email.source_mailbox }}</span></td><td>{{ item.detected_at|date:"d/m/Y H:i" }}</td><td><span class="badge email-status-badge email-status-{{ item.status|lower }}">{{ item.get_status_display }}</span></td><td><a class="btn ghost email-row-action" href="{% url 'email_exceptions:detail' item.pk %}">Abrir</a></td></tr>
+    {% empty %}<tr><td colspan="7"><div class="empty-inline"><b>No hay excepciones para estos filtros.</b><span>Pruebe con otra búsqueda o limpie los filtros.</span></div></td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+ </div>
+{% endblock %}

@@ -14,6 +14,7 @@ from .application_access import (
     TRUSTED_INTRANET,
     DelegatedAccessResult,
     inherited_application_for_path,
+    is_m2m_path,
 )
 
 
@@ -27,6 +28,8 @@ class TrustedIntranetAccessMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if is_m2m_path(request.path_info):
+            return self.get_response(request)
         application = inherited_application_for_path(request.path_info)
         if application is None:
             return self.get_response(request)

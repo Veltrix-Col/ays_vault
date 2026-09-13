@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from config.application_access import DelegatedAccessResult, inherited_application_for_path
+from config.application_access import DelegatedAccessResult, inherited_application_for_path, is_m2m_path
 from cotizacion_colectivos.dto import CompanyDetail, ContactSummary
 from cotizacion_colectivos.actors import get_internal_actor
 from cotizacion_colectivos.permissions import has_internal_permission
@@ -225,3 +225,10 @@ class ExternalColectivosFormsAreNeverGatedTests(TestCase):
         # formulario externo, en cambio, debe seguir sirviendo su propia respuesta.
         response = self.client.get(reverse("colectivos_external:entry", args=["fake-token"]))
         self.assertEqual(response.status_code, 410)
+
+
+class MachineToMachineRouteClassificationTests(TestCase):
+    def test_only_inbound_is_declared_m2m(self):
+        self.assertTrue(is_m2m_path(reverse("email_exceptions:inbound")))
+        self.assertFalse(is_m2m_path(reverse("email_exceptions:list")))
+        self.assertFalse(is_m2m_path(reverse("soat:upload")))

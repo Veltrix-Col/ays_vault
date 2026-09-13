@@ -14,7 +14,13 @@ INHERITED_NAMESPACES = {
     "soat": "soat",
     "conciliacion": "conciliacion",
     "cotizacion_colectivos": "cotizacion_colectivos",
+    "email_exceptions": "email_exceptions",
 }
+
+# Endpoints machine-to-machine are declared by resolved URL identity, not by
+# a path prefix.  This keeps the exception explicit and prevents the rest of
+# an inherited-access namespace from bypassing the intranet gate.
+M2M_URLS = frozenset({("email_exceptions", "inbound")})
 
 
 @dataclass(frozen=True)
@@ -41,3 +47,13 @@ def inherited_application_for_path(path_info: str) -> str | None:
     if not match.namespace and match.url_name == "public_home":
         return "portal"
     return None
+
+
+def is_m2m_path(path_info: str) -> bool:
+    """Return whether a resolved URL is explicitly independent of human SSO."""
+
+    try:
+        match = resolve(path_info)
+    except Resolver404:
+        return False
+    return (match.namespace, match.url_name) in M2M_URLS

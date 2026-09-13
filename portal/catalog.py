@@ -41,7 +41,7 @@ def application_catalog():
     soat_url = external_soat_url or reverse("soat:upload")
     external_conciliacion_url = _safe_external_url(getattr(settings, "CONCILIACION_APP_URL", ""))
     conciliacion_url = external_conciliacion_url or reverse("conciliacion:index")
-    return [
+    applications = [
         {
             "name": "CardManager",
             "area": "Cartera",
@@ -125,6 +125,20 @@ def application_catalog():
             "search_terms": "excepciones facturación operaciones faltantes cobros certificados",
         },
     ]
+    if getattr(settings, "EMAIL_EXCEPTIONS_ENABLED", False):
+        applications.insert(2, {
+            "name": "Excepciones de Correo",
+            "area": "Operaciones",
+            "description": "Revise y gestione los correos que requieren atención operativa.",
+            "logo": "",
+            "logo_class": "",
+            "icon_path": "M3 6h18v12H3V6Zm1 1 8 6 8-6M4 18l6-6m10 6-6-6",
+            "url": reverse("email_exceptions:list"),
+            "active": True,
+            "external": False,
+            "search_terms": "correo excepciones bandeja comunicaciones",
+        })
+    return applications
 
 
 def application_areas():

@@ -33,7 +33,7 @@ SECRET_KEY=os.getenv('SECRET_KEY','') or (f'dev-{secrets.token_urlsafe(50)}' if 
 if not SECRET_KEY: raise ImproperlyConfigured('SECRET_KEY requerida')
 ALLOWED_HOSTS=[x.strip() for x in os.getenv('ALLOWED_HOSTS','127.0.0.1,localhost').split(',') if x.strip()]
 CSRF_TRUSTED_ORIGINS=[x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS','').split(',') if x.strip()]
-INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','conciliacion.apps.ConciliacionConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig','intranet_sso.apps.IntranetSsoConfig']
+INSTALLED_APPS=['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','django_otp','django_otp.plugins.otp_totp','axes','vault.apps.VaultConfig','soat.apps.SoatConfig','conciliacion.apps.ConciliacionConfig','integrations.apps.IntegrationsConfig','cotizacion_colectivos.apps.CotizacionColectivosConfig','intranet_sso.apps.IntranetSsoConfig','email_exceptions.apps.EmailExceptionsConfig']
 MIDDLEWARE=['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django_otp.middleware.OTPMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware','axes.middleware.AxesMiddleware','vault.middleware.SecurityHeadersMiddleware','config.middleware.TrustedIntranetAccessMiddleware','vault.middleware.SecureSessionMiddleware','vault.middleware.AuditAccessMiddleware']
 AUTHENTICATION_BACKENDS=['axes.backends.AxesStandaloneBackend','django.contrib.auth.backends.ModelBackend']
 ROOT_URLCONF='config.urls'
@@ -230,6 +230,17 @@ ZOHO_PRODUCTION_ACCOUNTS_BASE_URL=os.getenv('ZOHO_PRODUCTION_ACCOUNTS_BASE_URL',
 ZOHO_PRODUCTION_API_BASE_URL=os.getenv('ZOHO_PRODUCTION_API_BASE_URL','https://www.zohoapis.com').strip()
 ZOHO_PRODUCTION_SDK_RESOURCE_PATH=os.getenv('ZOHO_PRODUCTION_SDK_RESOURCE_PATH','runtime/zoho_sdk/production').strip()
 ZOHO_PRODUCTION_WRITE_ENABLED=env_bool('ZOHO_PRODUCTION_WRITE_ENABLED',False)
+EMAIL_EXCEPTIONS_ENABLED=env_bool('EMAIL_EXCEPTIONS_ENABLED',False)
+EMAIL_EXCEPTIONS_INBOUND_ENABLED=env_bool('EMAIL_EXCEPTIONS_INBOUND_ENABLED',False)
+EMAIL_EXCEPTIONS_INBOUND_TOKEN=os.getenv('EMAIL_EXCEPTIONS_INBOUND_TOKEN','').strip()
+EMAIL_EXCEPTIONS_ALLOWED_MAILBOXES=tuple(x.strip().lower() for x in os.getenv('EMAIL_EXCEPTIONS_ALLOWED_MAILBOXES','comunicaciones@segurosays.com,aysltda@asesorsura.com').split(',') if x.strip())
+EMAIL_EXCEPTIONS_MAX_PAYLOAD_BYTES=email_env_int('EMAIL_EXCEPTIONS_MAX_PAYLOAD_BYTES',5*1024*1024,1024,25*1024*1024)
+EMAIL_EXCEPTIONS_MAX_ATTACHMENT_BYTES=email_env_int('EMAIL_EXCEPTIONS_MAX_ATTACHMENT_BYTES',10*1024*1024,1024,25*1024*1024)
+EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=env_bool('EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED',False)
+if EMAIL_EXCEPTIONS_INBOUND_ENABLED and not EMAIL_EXCEPTIONS_INBOUND_TOKEN:
+    raise ImproperlyConfigured('EMAIL_EXCEPTIONS_INBOUND_TOKEN es obligatorio cuando el inbound está habilitado')
+if EMAIL_EXCEPTIONS_INBOUND_ENABLED and not EMAIL_EXCEPTIONS_ALLOWED_MAILBOXES:
+    raise ImproperlyConfigured('EMAIL_EXCEPTIONS_ALLOWED_MAILBOXES no puede estar vacío cuando el inbound está habilitado')
 ZOHO_SANDBOX_ENABLED=env_bool('ZOHO_SANDBOX_ENABLED',False)
 ZOHO_SANDBOX_CLIENT_ID=os.getenv('ZOHO_SANDBOX_CLIENT_ID','').strip()
 ZOHO_SANDBOX_CLIENT_SECRET=os.getenv('ZOHO_SANDBOX_CLIENT_SECRET','')

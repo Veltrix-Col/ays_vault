@@ -1,7 +1,11 @@
+from django.conf import settings
+
+
 def profile(request):
     context = {
         'vault_profile': getattr(request.user, 'vault_profile', None)
         if request.user.is_authenticated else None,
+        'email_exceptions_enabled': getattr(settings, 'EMAIL_EXCEPTIONS_ENABLED', False),
         'sensitive_window_expires_at': None,
     }
     if request.user.is_authenticated:

@@ -42,6 +42,10 @@ CONFIRMED_TASK_FIELDS = frozenset({
 })
 ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
 TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
+EMAIL_EXCEPTION_TASK_FIELDS = frozenset({
+    "Subject", "tipo_de_solicitud", "Caso_de_excepci_n", "Motivo_de_excepci_n",
+    "rea", "Observaciones", "Responsable", "Fecha_de_vencimiento",
+})
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
 PRODUCTION_WRITE_CONFIRMATION = "PRODUCTION_TASK_WRITE"
 # Tasks admite sandbox y production; cada perfil exige su propia confirmacion
@@ -115,6 +119,8 @@ class ColectivosTaskPublisher(Protocol):
     def publish_test_task(self) -> Mapping[str, object]: ...
 
     def publish_billing_exception(self, record: Mapping[str, object]) -> Mapping[str, object]: ...
+
+    def publish_email_exception(self, record: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
 def build_task_record(payload: ColectivosTaskPayload) -> dict[str, str]:
@@ -238,6 +244,10 @@ class DisabledColectivosTaskPublisher:
         del record
         raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
 
+    def publish_email_exception(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        del record
+        raise TaskPublishingDisabled("La publicación de tareas Zoho está deshabilitada.")
+
 
 class GuardedTaskPublisher:
     """Único punto de escritura Tasks, cerrado por barreras independientes.
@@ -250,12 +260,13 @@ class GuardedTaskPublisher:
 
     enabled = True
 
-    def __init__(self, *, profile: str, confirmation: str):
+    def __init__(self, *, profile: str, confirmation: str,
+                 feature_flag: str = "COLECTIVOS_TASK_PUBLISH_ENABLED"):
         if profile not in _WRITABLE_PROFILES:
             raise TaskPublishingDisabled("Tasks sólo admite los perfiles habilitados (sandbox, production).")
         require_write_guard(
             entity="task", profile=profile, confirmation=confirmation,
-            feature_flag="COLECTIVOS_TASK_PUBLISH_ENABLED",
+            feature_flag=feature_flag,
             legacy_setting="COLECTIVOS_TASK_WRITE_CONFIRMATION",
             disabled_error=TaskPublishingDisabled,
         )
@@ -269,6 +280,9 @@ class GuardedTaskPublisher:
 
     def publish_billing_exception(self, record: Mapping[str, object]) -> Mapping[str, object]:
         return self._create_one(record, allowed_fields=BILLING_TASK_FIELDS)
+
+    def publish_email_exception(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        return self._create_one(record, allowed_fields=EMAIL_EXCEPTION_TASK_FIELDS)
 
     def _create_one(
         self, record: Mapping[str, object], *, allowed_fields: frozenset[str] = ALLOWED_TASK_FIELDS,
@@ -315,11 +329,14 @@ class GuardedTaskPublisher:
 
 def get_task_publisher(
     *, profile: str = "sandbox", confirmation: str = "",
+    feature_flag: str = "COLECTIVOS_TASK_PUBLISH_ENABLED",
 ) -> ColectivosTaskPublisher:
     if profile not in _WRITABLE_PROFILES:
         raise TaskPublishingDisabled("Tasks sólo admite los perfiles habilitados (sandbox, production).")
-    if getattr(settings, "COLECTIVOS_TASK_PUBLISH_ENABLED", False):
-        return GuardedTaskPublisher(profile=profile, confirmation=confirmation)
+    if feature_flag != "COLECTIVOS_TASK_PUBLISH_ENABLED" or getattr(settings, feature_flag, False):
+        return GuardedTaskPublisher(
+            profile=profile, confirmation=confirmation, feature_flag=feature_flag,
+        )
     return DisabledColectivosTaskPublisher()
 
 

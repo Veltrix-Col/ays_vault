@@ -156,6 +156,33 @@ class VaultIdentitySecurityTests(TestCase):
     def test_totp_device_is_not_registered_in_admin(self):
         self.assertFalse(admin.site.is_registered(TOTPDevice))
 
+    def test_intranet_provisioned_user_cannot_enter_admin(self):
+        intranet_user = get_user_model().objects.create_user("sso__empleado@segurosays.com")
+        intranet_user.set_unusable_password(); intranet_user.save(update_fields=["password"])
+        intranet_user.is_staff = False; intranet_user.is_superuser = False; intranet_user.save(update_fields=["is_staff", "is_superuser"])
+        client = Client(); client.force_login(intranet_user)
+        self.assertNotEqual(client.get("/admin/").status_code, 200)
+
+    def test_staff_without_secure_mfa_session_cannot_enter_admin(self):
+        client = Client(); client.force_login(self.admin_user)
+        response = client.get("/admin/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_admin_requires_and_accepts_existing_secure_mfa_session(self):
+        client = self.login_mfa(self.admin_user, Client())
+        self.assertEqual(client.get("/admin/").status_code, 200)
+
+    def test_admin_is_blocked_after_secure_session_revocation_or_expiry(self):
+        client = self.login_mfa(self.admin_user, Client())
+        record = SecureSession.objects.get(user=self.admin_user, status=SecureSession.ACTIVE)
+        record.status = SecureSession.REVOKED
+        record.revoked_at = timezone.now()
+        record.save(update_fields=["status", "revoked_at"])
+        response = client.get("/admin/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
     def test_recovery_codes_are_hashed_and_single_use(self):
         values = generate_recovery_codes(self.analyst)
         stored = MFARecoveryCode.objects.filter(user=self.analyst).first()

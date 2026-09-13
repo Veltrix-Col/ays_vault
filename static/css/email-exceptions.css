@@ -1,0 +1,206 @@
+/* Excepciones de Correo reutiliza el lenguaje claro del Banco; todo queda encapsulado. */
+.email-exceptions-page {
+  color: var(--ays-text, var(--ink));
+}
+
+.email-exceptions-page .email-exceptions-heading {
+  margin-bottom: 24px;
+}
+
+.email-exceptions-page .email-exception-metrics {
+  margin: 20px 0 22px;
+}
+
+.email-exceptions-page .metric-card,
+.email-exceptions-page .panel {
+  background: var(--ays-surface, #fff);
+  border-color: var(--ays-border, var(--line));
+  box-shadow: var(--ays-shadow-soft, var(--shadow-sm));
+}
+
+.email-exceptions-page .metric-card {
+  min-height: 128px;
+}
+
+.email-exceptions-page .metric-card strong,
+.email-exceptions-page .panel-head h2,
+.email-exceptions-page .detail-header h1 {
+  color: var(--ays-primary-dark, var(--navy));
+}
+
+.email-exceptions-page .filter-panel {
+  align-items: flex-end;
+  background: var(--ays-surface, #fff);
+  border-color: var(--ays-border, var(--line));
+}
+
+.email-exceptions-page .email-exception-filter-form {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.email-exceptions-page .email-exception-filter-form label {
+  min-width: 140px;
+  display: grid;
+  flex: 1;
+  gap: 5px;
+}
+
+.email-exceptions-page .email-exception-filter-form .search-field {
+  min-width: 240px;
+  flex: 2;
+}
+
+.email-exceptions-page .email-exception-filter-form label > span,
+.email-exceptions-page .form-field label {
+  color: var(--ays-muted, var(--muted));
+}
+
+.email-exceptions-page .email-exception-filter-form input,
+.email-exceptions-page .email-exception-filter-form select,
+.email-exceptions-page .email-action-form input,
+.email-exceptions-page .email-action-form select,
+.email-exceptions-page .email-action-form textarea {
+  width: 100%;
+  min-height: 43px;
+  border: 1px solid #cbd7e3;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ays-text, var(--ink));
+}
+
+.email-exceptions-page .email-exception-filter-form input:focus,
+.email-exceptions-page .email-exception-filter-form select:focus,
+.email-exceptions-page .email-action-form input:focus,
+.email-exceptions-page .email-action-form select:focus,
+.email-exceptions-page .email-action-form textarea:focus {
+  border-color: var(--ays-primary, var(--blue));
+  outline: 0;
+  box-shadow: var(--ays-focus, 0 0 0 3px rgba(0, 123, 255, .09));
+}
+
+.email-exceptions-page .email-exception-table-panel {
+  overflow: hidden;
+  padding: 20px 0 8px;
+}
+
+.email-exceptions-page .email-exception-table-panel > .panel-head {
+  padding: 0 22px;
+}
+
+.email-exceptions-page .email-exception-table th {
+  background: #f6f9fc;
+  color: #7b889b;
+}
+
+.email-exceptions-page .email-exception-table td {
+  color: var(--ays-text, var(--ink));
+  border-bottom-color: #edf1f5;
+}
+
+.email-exceptions-page .email-exception-table tbody tr:hover {
+  background: #fbfdff;
+}
+
+.email-exceptions-page .email-exception-table td:last-child {
+  background: #fff;
+}
+
+.email-exceptions-page .cell-title {
+  color: var(--ays-primary-strong, var(--blue-dark));
+}
+
+.email-exceptions-page .email-status-badge {
+  border: 1px solid transparent;
+}
+
+.email-exceptions-page .email-status-pending {
+  background: #fff5d8;
+  border-color: #f1d58b;
+  color: #875c00;
+}
+
+.email-exceptions-page .email-status-managed {
+  background: #e5f8ef;
+  border-color: #b9dfc9;
+  color: #16764a;
+}
+
+.email-exceptions-page .email-status-ignored {
+  background: #edf1f5;
+  border-color: #d5dde6;
+  color: #566579;
+}
+
+.email-exceptions-page .email-status-error {
+  background: #ffebed;
+  border-color: #f1b9be;
+  color: #b22c39;
+}
+
+.email-exceptions-page .email-exception-detail-header {
+  padding-top: 8px;
+}
+
+.email-exceptions-page .email-exception-detail-grid {
+  margin-top: 18px;
+}
+
+.email-exceptions-page .email-detail-main,
+.email-exceptions-page .email-detail-aside {
+  min-width: 0;
+}
+
+.email-exceptions-page .email-message-card,
+.email-exceptions-page .associated-emails,
+.email-exceptions-page .email-audit-panel,
+.email-exceptions-page .email-classification-card,
+.email-exceptions-page .email-task-card,
+.email-exceptions-page .email-action-card,
+.email-exceptions-page .email-technical {
+  background: #fff;
+}
+
+.email-exceptions-page .email-message-meta,
+.email-exceptions-page .classification-facts {
+  border-top: 1px solid var(--ays-border, var(--line));
+  border-bottom: 1px solid var(--ays-border, var(--line));
+}
+
+.email-exceptions-page .email-body-content {
+  background: #fbfcfe;
+  border: 1px solid #edf1f5;
+  border-radius: 12px;
+  color: var(--ays-text, var(--ink));
+}
+
+.email-exceptions-page .email-task-disabled {
+  cursor: not-allowed !important;
+}
+
+.email-exceptions-page .email-task-disabled-note {
+  margin-top: 10px;
+}
+
+@media (max-width: 767px) {
+  .email-exceptions-page .email-exception-filter-form {
+    display: grid;
+  }
+
+  .email-exceptions-page .email-exception-filter-form label,
+  .email-exceptions-page .email-exception-filter-form .search-field {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .email-exceptions-page .email-exception-filter-form .btn {
+    width: 100%;
+  }
+
+  .email-exceptions-page .email-exception-table-panel > .panel-head {
+    padding-inline: 17px;
+  }
+}

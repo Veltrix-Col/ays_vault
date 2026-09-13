@@ -57,12 +57,14 @@ class PublicHomeTests(TestCase):
             fetch_redirect_response=False,
         )
 
+    @override_settings(EMAIL_EXCEPTIONS_ENABLED=True)
     def test_catalog_renders_authorized_applications_without_system_information(self):
         response = self.client.get("/")
         self.assertContains(response, 'class="application-card area-package"', count=3)
-        self.assertContains(response, 'data-tool-card', count=7)
+        self.assertContains(response, 'data-tool-card', count=8)
         self.assertContains(response, "CardManager")
         self.assertContains(response, ">SOAT<")
+        self.assertContains(response, ">Excepciones de Correo<")
         self.assertContains(response, ">Reporte de clientes con novedades<")
         self.assertContains(response, ">Cotización Individual<")
         self.assertContains(response, ">Invitaciones a Aseguradoras<")
@@ -79,6 +81,7 @@ class PublicHomeTests(TestCase):
         self.assertContains(response, 'data-tool-search')
         self.assertContains(response, "Cartera")
 
+    @override_settings(EMAIL_EXCEPTIONS_ENABLED=True)
     def test_catalog_uses_business_areas_without_crossing_colectivos(self):
         response = self.client.get("/")
         areas = {
@@ -91,7 +94,7 @@ class PublicHomeTests(TestCase):
                 "Cartera": (
                     "CardManager",
                 ),
-                "Operaciones": ("SOAT",),
+                "Operaciones": ("SOAT", "Excepciones de Correo"),
                 "Colectivos": (
                     "Reporte de clientes con novedades",
                     "Cotización Individual",
@@ -115,10 +118,11 @@ class PublicHomeTests(TestCase):
         self.assertContains(response, "1 herramientas")
         self.assertContains(response, "5 herramientas")
 
+    @override_settings(EMAIL_EXCEPTIONS_ENABLED=True)
     def test_area_subhomes_have_the_exact_taxonomy(self):
         expected = {
             "cartera": ("CardManager",),
-            "operaciones": ("SOAT",),
+            "operaciones": ("SOAT", "Excepciones de Correo"),
             "colectivos": (
                 "Reporte de clientes con novedades",
                 "Cotización Individual",
@@ -152,6 +156,7 @@ class PublicHomeTests(TestCase):
             self.assertNotContains(cartera, forbidden)
         operaciones = self.client.get(reverse("area_home", args=["operaciones"]))
         self.assertContains(operaciones, "SOAT")
+        self.assertContains(operaciones, "Excepciones de Correo")
         self.assertContains(operaciones, "Área Operaciones")
 
     def test_unknown_area_is_not_inferred(self):
@@ -186,6 +191,38 @@ class PublicHomeTests(TestCase):
         response = self.client.get("/")
         self.assertContains(response, f'href="{reverse("soat:upload")}"')
         self.assertNotContains(response, "Acceso no configurado")
+
+    @override_settings(EMAIL_EXCEPTIONS_ENABLED=True)
+    def test_email_exceptions_is_listed_next_to_soat_in_operations(self):
+        response = self.client.get(reverse("area_home", args=["operaciones"]))
+        self.assertContains(response, ">SOAT<")
+        self.assertContains(response, ">Excepciones de Correo<")
+        self.assertContains(response, f'href="{reverse("email_exceptions:list")}"')
+        self.assertLess(response.content.index(b">SOAT<"), response.content.index(b">Excepciones de Correo<"))
+
+        cartera = self.client.get(reverse("area_home", args=["cartera"]))
+        colectivos = self.client.get(reverse("area_home", args=["colectivos"]))
+        self.assertNotContains(cartera, "Excepciones de Correo")
+        self.assertNotContains(colectivos, "Excepciones de Correo")
+
+        catalog_item = next(
+            app for app in application_catalog() if app["name"] == "Excepciones de Correo"
+        )
+        self.assertTrue(catalog_item["active"])
+        self.assertEqual(catalog_item["url"], reverse("email_exceptions:list"))
+
+    @override_settings(EMAIL_EXCEPTIONS_ENABLED=False)
+    def test_disabled_email_exceptions_is_hidden_but_soat_remains(self):
+        response = self.client.get(reverse("area_home", args=["operaciones"]))
+        self.assertContains(response, ">SOAT<")
+        self.assertNotContains(response, ">Excepciones de Correo<")
+
+        cartera = self.client.get(reverse("area_home", args=["cartera"]))
+        colectivos = self.client.get(reverse("area_home", args=["colectivos"]))
+        self.assertContains(cartera, "CardManager")
+        self.assertNotContains(cartera, "Excepciones de Correo")
+        self.assertContains(colectivos, "Excepciones de Facturación")
+        self.assertNotContains(colectivos, "Excepciones de Correo")
 
     @override_settings(SOAT_APP_URL="https://soat.example.invalid/access")
     def test_soat_uses_configured_http_url(self):
