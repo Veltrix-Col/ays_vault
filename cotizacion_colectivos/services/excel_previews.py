@@ -112,13 +112,13 @@ def create_preview(*, access, session_cookie: str, uploaded, identification_choi
 
 def resolve_preview(*, token: str, access, session_cookie: str, lock: bool = False):
     selector, secret = _split_token(token)
-    # Lock only the preview row.  ``response`` is nullable; combining
-    # ``select_for_update()`` with ``select_related('response')`` makes
-    # PostgreSQL try to lock the nullable side of a LEFT OUTER JOIN.
-    manager = (
-        VistaPreviaExcelSolicitudColectivo.objects.select_for_update()
-        if lock else VistaPreviaExcelSolicitudColectivo.objects
-    )
+    # Lock only the preview row. ``request`` no es nulable (join seguro con
+    # select_for_update en cualquier caso); ``response`` sí lo es, y combinar
+    # ``select_for_update()`` con ``select_related('response')`` hace que
+    # PostgreSQL intente bloquear el lado nulable de un LEFT OUTER JOIN -- por
+    # eso ese join solo se pide cuando no se bloquea.
+    manager = VistaPreviaExcelSolicitudColectivo.objects.select_related("request")
+    manager = manager.select_for_update() if lock else manager.select_related("response")
     try:
         item = manager.get(
             selector=selector,

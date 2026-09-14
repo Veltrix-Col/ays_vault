@@ -100,6 +100,23 @@ class PreviewDeadlineTests(TestCase):
         self.assertFalse(path.exists())
         self.assertFalse(RespuestaSolicitudColectivo.objects.exists())
 
+    def test_unlocked_preview_resolves_request_and_response_without_extra_queries(self):
+        """Only the locked path (select_for_update) needs to skip the join on
+        the nullable `response` relation. The common unlocked read should
+        still select_related both, not pay for two more round-trips."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        item, token = create_preview(
+            access=self.access, session_cookie=self.cookie, uploaded=self.workbook(),
+        )
+        with CaptureQueriesContext(connection) as queries:
+            resolved = resolve_preview(token=token, access=self.access, session_cookie=self.cookie)
+            resolved.request
+            resolved.response
+        self.assertEqual(resolved.pk, item.pk)
+        self.assertEqual(len(queries), 1)
+
     def test_novelties_template_keeps_canonical_identification_values_in_dropdown(self):
         import io
         from openpyxl import load_workbook
