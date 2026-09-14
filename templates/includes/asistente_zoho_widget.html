@@ -1,0 +1,26 @@
+{% load static %}
+{% if user.is_authenticated %}
+<div id="asistente-zoho-widget" data-endpoint="{% url 'asistente_zoho:mensaje' %}">
+  <button type="button" id="asistente-zoho-toggle" aria-haspopup="dialog" aria-expanded="false" aria-controls="asistente-zoho-panel" title="Preguntar al asistente de Zoho">
+    <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 5h16v11H8l-4 4V5Z"></path>
+    </svg>
+  </button>
+  <section id="asistente-zoho-panel" role="dialog" aria-label="Asistente de consulta Zoho" hidden>
+    <header class="asistente-zoho-header">
+      <h2>Asistente Zoho</h2>
+      <button type="button" id="asistente-zoho-close" aria-label="Cerrar asistente">&times;</button>
+    </header>
+    <div id="asistente-zoho-mensajes" class="asistente-zoho-mensajes" role="log" aria-live="polite"></div>
+    <form id="asistente-zoho-form" class="asistente-zoho-form" autocomplete="off">
+      {% csrf_token %}
+      <label for="asistente-zoho-input" class="visually-hidden">Escribe tu pregunta</label>
+      <input type="text" id="asistente-zoho-input" maxlength="500" placeholder="Ej: datos de la póliza 12345" required>
+      <button type="submit">Enviar</button>
+    </form>
+    <p class="asistente-zoho-nota">Solo consulta información existente en Zoho (clientes, pólizas y tareas). No guarda el historial de esta conversación.</p>
+  </section>
+</div>
+<link rel="stylesheet" href="{% static 'css/asistente-zoho.css' %}">
+<script defer src="{% static 'js/asistente-zoho.js' %}"></script>
+{% endif %}
