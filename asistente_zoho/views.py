@@ -12,8 +12,11 @@ from . import orchestrator
 
 logger = logging.getLogger("asistente_zoho")
 
-MAX_HISTORY_ITEMS = 8
-MAX_MESSAGE_LENGTH = 500
+# Un solo origen de verdad para estos límites (orchestrator los usa para
+# recortar de nuevo antes de llamar al modelo): mantenerlos como literales
+# separados en dos archivos los deja desincronizar en silencio.
+MAX_HISTORY_ITEMS = orchestrator.MAX_HISTORY_MESSAGES
+MAX_MESSAGE_LENGTH = orchestrator.MAX_MESSAGE_LENGTH
 
 
 @login_required

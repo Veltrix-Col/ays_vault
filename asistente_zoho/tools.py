@@ -118,19 +118,20 @@ def buscar_cliente(query: str) -> dict[str, Any]:
         )
     zoho = colectivos_zoho()
     profile = get_colectivos_profile()
+    # Un único criterio combinado con "or" en vez de una búsqueda por cada
+    # campo: mismo resultado, una sola llamada a Zoho en vez de hasta 4
+    # secuenciales.
+    criterio_combinado = "or".join(criterios)
     registros: dict[str, dict] = {}
     try:
-        for criterio in criterios:
-            if len(registros) >= SEARCH_LIMIT:
-                break
-            pagina = zoho.search.by_criteria(
-                module=CONTACTS_MODULE, criteria=criterio,
-                fields=CONTACT_SEARCH_FIELDS, page=1, limit=SEARCH_LIMIT,
-            )
-            for record in pagina.records:
-                record_id = str(record.get("id") or "")
-                if record_id:
-                    registros.setdefault(record_id, record)
+        pagina = zoho.search.by_criteria(
+            module=CONTACTS_MODULE, criteria=criterio_combinado,
+            fields=CONTACT_SEARCH_FIELDS, page=1, limit=SEARCH_LIMIT,
+        )
+        for record in pagina.records:
+            record_id = str(record.get("id") or "")
+            if record_id:
+                registros.setdefault(record_id, record)
     except ZohoError as exc:
         raise translate_zoho_error(exc, profile) from exc
     clientes = []
@@ -168,34 +169,31 @@ def detalle_cliente(record_id: str) -> dict[str, Any]:
     if not contacto:
         return {"encontrado": False}
     poliza_ids: set[str] = set()
-    try:
-        for campo in INSURED_ROLE_FIELDS:
+    for campo in INSURED_ROLE_FIELDS:
+        try:
             pagina = zoho.search.by_criteria(
                 module=INSURED_MODULE, criteria=f"({campo}:equals:{escape_criteria_value(value)})",
                 fields=("id", "P_liza"), page=1, limit=SEARCH_LIMIT,
             )
-            for relacion in pagina.records:
-                lookup = relacion.get("P_liza")
-                poliza_id = _lookup_id(lookup)
-                if poliza_id:
-                    poliza_ids.add(poliza_id)
-    except ZohoError:
-        poliza_ids = set()  # el detalle del contacto no depende de esto
-    polizas = []
-    for poliza_id in list(poliza_ids)[:SEARCH_LIMIT]:
-        try:
-            registro = _get_by_id(zoho, module=POLICIES_MODULE, record_id=poliza_id, fields=POLICY_SEARCH_FIELDS)
         except ZohoError:
+            # Un rol que falla no debe tirar los pólizas ya encontradas por
+            # los otros roles -- se degrada, no se vacía todo el resultado.
             continue
-        if not registro:
-            continue
-        polizas.append({
+        for relacion in pagina.records:
+            poliza_id = _lookup_id(relacion.get("P_liza"))
+            if poliza_id:
+                poliza_ids.add(poliza_id)
+    polizas_por_id = _batch_policies(zoho, poliza_ids)
+    polizas = [
+        {
             "referencia": mask_reference(registro.get("Name")),
             "ramo": _text(registro.get("Ramo")),
             "aseguradora": _text(registro.get("Aseguradora1")),
             "estado": _text(registro.get("Estado_de_la_p_liza"), "Sin estado"),
             "link": _zoho_record_link(zoho, module=POLICIES_MODULE, record_id=poliza_id),
-        })
+        }
+        for poliza_id, registro in polizas_por_id.items()
+    ]
     return {
         "encontrado": True,
         "nombre": _text(
@@ -221,6 +219,27 @@ def _get_by_id(zoho, *, module: str, record_id: str, fields: tuple[str, ...]) ->
         fields=fields, page=1, limit=1,
     )
     return dict(pagina.records[0]) if pagina.records else {}
+
+
+def _batch_policies(zoho, poliza_ids: set[str]) -> dict[str, dict]:
+    """Trae varias pólizas en una sola consulta COQL en vez de una llamada por
+    id -- un cliente con varias pólizas ya no paga una ronda de red por cada
+    una. `poliza_ids` ya viene validado como solo dígitos (ver `_lookup_id`)."""
+    if not poliza_ids:
+        return {}
+    ids = sorted(poliza_ids)[:SEARCH_LIMIT]
+    valores = ",".join(f"'{value}'" for value in ids)
+    campos = ",".join(POLICY_SEARCH_FIELDS)
+    query = f"select {campos} from {POLICIES_MODULE} where id in ({valores}) limit {SEARCH_LIMIT}"
+    try:
+        pagina = zoho.coql.execute(query)
+    except ZohoError:
+        return {}
+    return {
+        str(registro.get("id")): registro
+        for registro in pagina.records
+        if str(registro.get("id") or "").isdigit()
+    }
 
 
 def _lookup_id(value: object) -> str:

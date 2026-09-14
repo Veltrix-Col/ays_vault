@@ -10,14 +10,14 @@ from integrations.zoho.exceptions import ZohoTimeoutError
 from integrations.zoho.schemas import Page
 
 
-def _fake_zoho(*, by_criteria=None, by_field=None, get_by_id=None, org_id="4933790000000020005"):
+def _fake_zoho(*, by_criteria=None, by_field=None, coql=None, org_id="4933790000000020005"):
     zoho = Mock()
     zoho.config.expected_org_id = org_id
     zoho.search.by_criteria.side_effect = by_criteria
     if by_field is not None:
         zoho.search.by_field.return_value = by_field
-    if get_by_id is not None:
-        zoho.records.get_by_id.side_effect = get_by_id
+    if coql is not None:
+        zoho.coql.execute.side_effect = coql
     return zoho
 
 
@@ -44,15 +44,19 @@ class BuscarClienteTests(SimpleTestCase):
             "id": "111", "Full_Name": "Juan Pérez", "Tipo_de_persona": "Persona natural",
             "Tipo_ID": "CC", "N_mero_de_ID": "1037672230", "Estado": "Cliente",
         }
-        # 4 criterios se intentan (documento, Full_Name, Raz_n_social, Nombre_comercial)
-        # -- todos apuntan al mismo id, debe quedar una sola vez.
-        pagina_con_datos = Page(records=(registro,))
-        pagina_vacia = Page(records=())
-        zoho = _fake_zoho(by_criteria=[pagina_con_datos, pagina_con_datos, pagina_vacia, pagina_vacia])
+        # documento + 3 campos de nombre van en un único criterio "or" -- una
+        # sola llamada a Zoho, no una por campo.
+        zoho = _fake_zoho(by_criteria=[Page(records=(registro,))])
         colectivos_zoho.return_value = zoho
 
         resultado = tools.buscar_cliente("Juan Pérez cc 1037672230")
 
+        zoho.search.by_criteria.assert_called_once()
+        criterio = zoho.search.by_criteria.call_args.kwargs["criteria"]
+        self.assertIn("N_mero_de_ID", criterio)
+        self.assertIn("Full_Name", criterio)
+        self.assertIn("Raz_n_social", criterio)
+        self.assertIn("Nombre_comercial", criterio)
         self.assertEqual(resultado["total"], 1)
         cliente = resultado["clientes"][0]
         self.assertEqual(cliente["nombre"], "Juan Pérez")
@@ -96,9 +100,10 @@ class DetalleClienteTests(SimpleTestCase):
 
     @patch("asistente_zoho.tools.colectivos_zoho")
     def test_incluye_polizas_relacionadas_con_link(self, colectivos_zoho):
-        # detalle_cliente resuelve todo por search.by_criteria(id:equals:...),
-        # nunca por records.get_by_id (poco confiable en el backend SDK de
-        # Zoho -- mismo hallazgo que ya documenta EntityDetailService).
+        # El contacto se resuelve por search.by_criteria(id:equals:...), nunca
+        # por records.get_by_id (poco confiable en el backend SDK de Zoho --
+        # mismo hallazgo que ya documenta EntityDetailService). Las pólizas
+        # relacionadas se traen en una sola consulta COQL, no una por id.
         contacto = Page(records=({
             "id": "111", "Full_Name": "Juan Pérez", "Tipo_ID": "CC",
             "N_mero_de_ID": "1037672230", "Estado": "Cliente", "Email": "juan@example.com",
@@ -109,11 +114,12 @@ class DetalleClienteTests(SimpleTestCase):
             "id": "222", "Name": "POL-0913", "Ramo": "Vida",
             "Aseguradora1": "Aseguradora X", "Estado_de_la_p_liza": "Vigente",
         },))
-        zoho = _fake_zoho(by_criteria=[contacto, relacion, vacio, vacio, poliza])
+        zoho = _fake_zoho(by_criteria=[contacto, relacion, vacio, vacio], coql=[poliza])
         colectivos_zoho.return_value = zoho
 
         resultado = tools.detalle_cliente("111")
 
+        zoho.coql.execute.assert_called_once()
         self.assertTrue(resultado["encontrado"])
         self.assertEqual(resultado["nombre"], "Juan Pérez")
         self.assertEqual(len(resultado["polizas"]), 1)
@@ -121,6 +127,21 @@ class DetalleClienteTests(SimpleTestCase):
             resultado["polizas"][0]["link"],
             "https://crm.zoho.com/crm/org4933790000000020005/tab/Polizas/222",
         )
+
+    @patch("asistente_zoho.tools.colectivos_zoho")
+    def test_un_rol_fallido_no_descarta_las_polizas_de_los_otros_roles(self, colectivos_zoho):
+        contacto = Page(records=({"id": "111", "Full_Name": "Juan Pérez", "Estado": "Cliente"},))
+        relacion_ok = Page(records=({"id": "999", "P_liza": {"id": "222"}},))
+        poliza = Page(records=({"id": "222", "Name": "POL-0913", "Ramo": "Vida", "Estado_de_la_p_liza": "Vigente"},))
+        zoho = _fake_zoho(
+            by_criteria=[contacto, relacion_ok, ZohoTimeoutError("boom"), ZohoTimeoutError("boom")],
+            coql=[poliza],
+        )
+        colectivos_zoho.return_value = zoho
+
+        resultado = tools.detalle_cliente("111")
+
+        self.assertEqual(len(resultado["polizas"]), 1)
 
     @patch("asistente_zoho.tools.colectivos_zoho")
     def test_no_encontrado(self, colectivos_zoho):

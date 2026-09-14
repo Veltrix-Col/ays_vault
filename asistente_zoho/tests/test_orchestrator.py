@@ -43,6 +43,19 @@ class BuildToolExecutorTests(SimpleTestCase):
         salida = ejecutar("borrar_todo", {})
         self.assertEqual(json.loads(salida), {"error": "Herramienta desconocida."})
 
+    @patch("asistente_zoho.orchestrator.tools")
+    def test_mis_tareas_sin_correo_de_sesion_no_llama_al_tool(self, tools_mock):
+        # Usuarios provisionados por intranet_sso pueden no tener correo
+        # (get_or_create_intranet_user solo lo llena si el subject tiene forma
+        # de correo) -- sin este caso, tools.mis_tareas("") daría el genérico
+        # "criterio de búsqueda no válido", que no explica la causa real.
+        ejecutar = orchestrator.build_tool_executor(user_email="")
+
+        salida = ejecutar("mis_tareas", {})
+
+        tools_mock.mis_tareas.assert_not_called()
+        self.assertIn("correo", json.loads(salida)["error"])
+
 
 class ResponderTests(SimpleTestCase):
     def test_mensaje_vacio_no_llama_al_modelo(self):
@@ -64,3 +77,12 @@ class ResponderTests(SimpleTestCase):
             llm_cls.return_value.conversar.side_effect = RuntimeError("boom")
             respuesta = orchestrator.responder(mensaje="hola", historial=[], user_email="a@b.com")
         self.assertIn("No fue posible consultar el asistente", respuesta)
+
+    def test_proveedor_no_soportado_se_degrada_en_vez_de_reventar(self):
+        # GESTOR_LLM_PROVIDER es compartido con gestor_cotizaciones -- si queda
+        # apuntando a un proveedor que conversar() no soporta, el chat de todo
+        # el portal no puede responder con un 500 sin explicación.
+        with patch("asistente_zoho.orchestrator.LLM") as llm_cls:
+            llm_cls.return_value.conversar.side_effect = NotImplementedError()
+            respuesta = orchestrator.responder(mensaje="hola", historial=[], user_email="a@b.com")
+        self.assertIn("no está disponible", respuesta)

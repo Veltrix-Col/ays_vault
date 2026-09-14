@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +15,13 @@ from integrations.llm import LLM
 from . import tools
 
 logger = logging.getLogger("asistente_zoho")
+
+# Deployment propio de este flujo -- no comparte AZURE_FOUNDRY_COTIZACIONES_MODEL
+# (el de gestor_cotizaciones) para que repuntar/limitar ese deployment para
+# extracción por lotes no rompa silenciosamente el chat. Si no está configurado,
+# LLM() cae de vuelta a AZURE_FOUNDRY_COTIZACIONES_MODEL (mismo comportamiento
+# que ya se probó en vivo) hasta que se configure uno dedicado.
+_MODEL_ENV_VAR = "AZURE_FOUNDRY_ASISTENTE_MODEL"
 
 SYSTEM_PROMPT = (
     "Eres el asistente general de consulta de Zoho del Banco de Aplicaciones de AyS "
@@ -125,7 +133,15 @@ def build_tool_executor(*, user_email: str) -> Callable[[str, dict[str, Any]], s
             elif nombre == "obtener_poliza":
                 resultado = tools.obtener_poliza(str(argumentos.get("numero_poliza", "")))
             elif nombre == "mis_tareas":
-                resultado = tools.mis_tareas(user_email)
+                if not user_email:
+                    # Usuarios provisionados por intranet_sso pueden no tener
+                    # correo (get_or_create_intranet_user solo lo llena si el
+                    # subject tiene forma de correo) -- sin esto, tools.mis_tareas("")
+                    # daría el genérico "criterio de búsqueda no válido", que no dice
+                    # nada sobre la causa real.
+                    resultado = {"error": "Tu sesión no tiene un correo asociado, así que no puedo buscar tus tareas."}
+                else:
+                    resultado = tools.mis_tareas(user_email)
             elif nombre == "tareas_por_responsable":
                 resultado = tools.tareas_por_responsable(str(argumentos.get("nombre_responsable", "")))
             else:
@@ -150,7 +166,7 @@ def responder(*, mensaje: str, historial: list[dict[str, str]], user_email: str)
         if item.get("role") in {"user", "assistant"}
     ]
     mensajes.append({"role": "user", "content": mensaje_limpio})
-    llm = LLM()
+    llm = LLM(model=os.getenv(_MODEL_ENV_VAR, "").strip() or None)
     try:
         respuesta = llm.conversar(
             system=SYSTEM_PROMPT, mensajes=mensajes,
@@ -158,7 +174,12 @@ def responder(*, mensaje: str, historial: list[dict[str, str]], user_email: str)
             ejecutar_tool=build_tool_executor(user_email=user_email),
         )
     except NotImplementedError:
-        raise
+        # Config compartida entre features (GESTOR_LLM_PROVIDER): que el cotizador
+        # necesite otro proveedor no puede tumbar el chat en todo el portal con un
+        # 500 sin explicación -- se degrada con un mensaje claro y se deja rastro
+        # en logs para que operación lo note.
+        logger.error("asistente_zoho_provider_no_soportado provider=%s", llm.provider)
+        return "El asistente no está disponible con la configuración actual. Avisa a soporte."
     except Exception:
         logger.exception("asistente_zoho_conversar_error")
         return "No fue posible consultar el asistente en este momento. Intenta de nuevo en unos minutos."

@@ -48,12 +48,15 @@
 
   // Reconoce un subconjunto mínimo de Markdown -- **negrilla**, encabezados
   // "#"/"##", viñetas "-"/"*" y listas numeradas, y enlaces `[texto](url)`
-  // hacia una ruta propia del portal ("/...") o hacia Zoho
-  // (https://crm.zoho.com/...) -- siempre sobre texto ya escapado; cualquier
-  // otra cosa queda como texto plano, nunca como HTML.
+  // hacia una ruta propia del portal ("/...", nunca "//" -- eso es una URL
+  // protocol-relative hacia OTRO host) o hacia exactamente
+  // https://crm.zoho.com/ (el único host que arma asistente_zoho/tools.py;
+  // nada de comodines tipo crm.zoho.[a-z.]+, que "crm.zoho.evil.com" también
+  // cumpliría) -- siempre sobre texto ya escapado; cualquier otra cosa queda
+  // como texto plano, nunca como HTML.
   function transformarLinea(contenidoCrudo) {
     var escapado = escapeHtml(contenidoCrudo);
-    escapado = escapado.replace(/\[([^\[\]]+)\]\((\/[^\s()]*|https:\/\/crm\.zoho\.[a-z.]+\/[^\s()]*)\)/g, function (_m, etiqueta, url) {
+    escapado = escapado.replace(/\[([^\[\]]+)\]\((\/(?!\/)[^\s()]*|https:\/\/crm\.zoho\.com\/[^\s()]*)\)/g, function (_m, etiqueta, url) {
       return '<a href="' + url + '" target="_blank" rel="noopener">' + etiqueta + "</a>";
     });
     return escapado.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
