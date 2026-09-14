@@ -75,5 +75,6 @@
     {% if messages %}<div class="toast-stack" aria-live="polite">{% for message in messages %}<div class="toast {{ message.tags }}"><span class="toast-mark" aria-hidden="true"></span>{{ message }}</div>{% endfor %}</div>{% endif %}
     <div class="content-container">{% block content %}{% endblock %}</div>
   </main>
+  {% include "includes/asistente_zoho_widget.html" %}
 </body>
 </html>
