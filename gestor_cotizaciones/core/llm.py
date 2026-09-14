@@ -127,20 +127,38 @@ class LLM:
                                 schema: dict[str, Any]) -> dict[str, Any]:
         """Azure AI Foundry vía SDK `openai` (mismo patrón que
         `conciliador.sources.foundry_recibo.extraer_recibo`): Structured Outputs con
-        `text.format.type = "json_schema"`. Sin `strict` (los schemas de este motor son
-        anidados y no se escribieron pensando en el `additionalProperties`/`required`
-        exhaustivo que exige el modo estricto); `core.adaptador.extraer_con_llm` ya
-        descarta cualquier `cobertura_id`/`plan_id` que no exista en el catálogo, así que
-        una respuesta no perfectamente estricta no compromete la validación."""
+        `text.format.type = "json_schema"`. Azure exige `additionalProperties: false`
+        en todo objeto del schema aunque no se pida `strict` (probado en vivo: sin esto
+        responde 400 `invalid_json_schema`) -- se agrega automáticamente aquí para que
+        quien escriba un `_SCHEMA` en un adaptador/ramo nuevo no tenga que saberlo."""
         if not self.model:
             raise RuntimeError(
                 "Falta AZURE_FOUNDRY_COTIZACIONES_MODEL (deployment) en el entorno para "
                 "usar el proveedor azure_foundry.")
         nombre_schema = re.sub(r"[^A-Za-z0-9_]", "_", nombre)[:64] or "extraccion"
+        schema_azure = _sin_propiedades_extra(schema)
         respuesta = self._cliente().responses.create(
             model=self.model,
             instructions=system,
             input=user,
-            text={"format": {"type": "json_schema", "name": nombre_schema, "schema": schema}},
+            text={"format": {"type": "json_schema", "name": nombre_schema, "schema": schema_azure}},
         )
         return json.loads(respuesta.output_text)
+
+
+def _sin_propiedades_extra(nodo: Any) -> Any:
+    """Copia `nodo` normalizando todo objeto JSON schema al formato que exige
+    Azure/OpenAI Structured Outputs (probado en vivo, aplica aunque no se pida
+    `strict`): `additionalProperties: false`, y `required` con TODAS las claves
+    de `properties` (una clave puede seguir siendo "opcional" en la práctica si
+    su `type` incluye `null` -- el modelo la manda en `null` en vez de omitirla).
+    Recursivo: respeta `properties`, `items` y uniones como `anyOf`/`oneOf`/`allOf`."""
+    if isinstance(nodo, dict):
+        copia = {clave: _sin_propiedades_extra(valor) for clave, valor in nodo.items()}
+        if copia.get("type") == "object" and "properties" in copia:
+            copia.setdefault("additionalProperties", False)
+            copia["required"] = list(copia["properties"].keys())
+        return copia
+    if isinstance(nodo, list):
+        return [_sin_propiedades_extra(valor) for valor in nodo]
+    return nodo
