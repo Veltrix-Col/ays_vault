@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +150,89 @@ class LLM:
             text={"format": {"type": "json_schema", "name": nombre_schema, "schema": schema_azure}},
         )
         return json.loads(respuesta.output_text)
+
+    # ---------- conversación corta con herramientas (sin caché, sin persistencia) ----------
+    def conversar(
+        self, *, system: str, mensajes: list[dict[str, str]], herramientas: list[dict[str, Any]],
+        ejecutar_tool: Callable[[str, dict[str, Any]], str], max_tool_iterations: int = 4,
+        max_output_tokens: int = 1200,
+    ) -> str:
+        """Un turno de una conversación corta que puede invocar `herramientas` de solo
+        lectura antes de responder. No cachea (cada mensaje del usuario es distinto por
+        diseño) y no persiste nada: quien llama es responsable de guardar/recortar el
+        historial fuera de este método (p. ej. en el propio navegador).
+
+        `herramientas`: lista de `{"name", "description", "parameters"}` (JSON schema).
+        `ejecutar_tool(nombre, argumentos) -> str`: ejecuta la tool y devuelve su
+        resultado ya serializado (normalmente `json.dumps(...)`); cualquier excepción
+        debe resolverla quien la implementa (nunca debe propagar acá).
+        """
+        if self.provider != "azure_foundry":
+            raise NotImplementedError(
+                "conversar() sólo está implementado para el proveedor azure_foundry por ahora.")
+        return self._conversar_azure_foundry(
+            system=system, mensajes=mensajes, herramientas=herramientas,
+            ejecutar_tool=ejecutar_tool, max_tool_iterations=max_tool_iterations,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def _conversar_azure_foundry(
+        self, *, system: str, mensajes: list[dict[str, str]], herramientas: list[dict[str, Any]],
+        ejecutar_tool: Callable[[str, dict[str, Any]], str], max_tool_iterations: int,
+        max_output_tokens: int,
+    ) -> str:
+        """Responses API de Azure AI Foundry con function calling.
+
+        NOTA: a diferencia de `_extraer_azure_foundry` (Structured Outputs, probado en
+        vivo), este camino todavía no se ha ejecutado contra un deployment real -- la
+        forma de los `tools`/`function_call`/`function_call_output` está tomada de los
+        tipos del SDK `openai` instalado (`openai/types/responses/*`), no de una prueba
+        en vivo. Confirmar contra sandbox antes de depender de esto en producción.
+        """
+        if not self.model:
+            raise RuntimeError(
+                "Falta AZURE_FOUNDRY_COTIZACIONES_MODEL (deployment) en el entorno para "
+                "usar el proveedor azure_foundry.")
+        cliente = self._cliente()
+        tools = [
+            {
+                "type": "function",
+                "name": herramienta["name"],
+                "description": herramienta.get("description", ""),
+                "parameters": herramienta["parameters"],
+                "strict": False,
+            }
+            for herramienta in herramientas
+        ]
+        respuesta = cliente.responses.create(
+            model=self.model, instructions=system, input=list(mensajes),
+            tools=tools, max_output_tokens=max_output_tokens,
+        )
+        for _ in range(max_tool_iterations):
+            llamadas = [item for item in respuesta.output if getattr(item, "type", "") == "function_call"]
+            if not llamadas:
+                return respuesta.output_text
+            salidas = []
+            for llamada in llamadas:
+                try:
+                    argumentos = json.loads(llamada.arguments or "{}")
+                except json.JSONDecodeError:
+                    argumentos = {}
+                resultado = ejecutar_tool(llamada.name, argumentos)
+                salidas.append({
+                    "type": "function_call_output",
+                    "call_id": llamada.call_id,
+                    "output": resultado,
+                })
+            respuesta = cliente.responses.create(
+                model=self.model, instructions=system, tools=tools,
+                max_output_tokens=max_output_tokens,
+                previous_response_id=respuesta.id, input=salidas,
+            )
+        # Tope de iteraciones alcanzado: se devuelve lo último que haya respondido el
+        # modelo (puede ser vacío si sólo encadenaba tool calls) en vez de reventar la
+        # conversación.
+        return respuesta.output_text
 
 
 def _sin_propiedades_extra(nodo: Any) -> Any:
