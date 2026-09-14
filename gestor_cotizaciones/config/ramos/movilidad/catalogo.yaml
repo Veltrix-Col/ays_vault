@@ -1,0 +1,123 @@
+# Catálogo canónico del ramo MOVILIDAD (autos colectivo / flota).
+# Es la "columna vertebral" del consolidado: define las filas de la hoja Coberturas,
+# los sinónimos que usan las aseguradoras y las categorías de scoring.
+# Para agregar una cobertura nueva basta con añadirla aquí; el render la incluye automáticamente.
+
+ramo: movilidad
+nombre: MOVILIDAD COLECTIVO
+
+# Segmentos de vehículo estándar (columnas superiores del consolidado). Cada adaptador mapea
+# sus planes a uno de estos segmentos.
+segmentos:
+  - id: livianos
+    nombre: "Automoviles, Camperos y Pickup"
+  - id: pesados
+    nombre: "Pesados"
+  - id: motos
+    nombre: "Motos"
+  - id: blindados
+    nombre: "Blindados"
+
+# Clases de vehículo canónicas para Flota_Analisis y scoring por tipo (se mapean desde cada aseguradora)
+clases:
+  - {id: automovil,  nombre: "Automóviles",          segmento: livianos, sinonimos: [AUTOMOVIL, "Automóviles"]}
+  - {id: campero,    nombre: "Camperos y pickups",   segmento: livianos, sinonimos: [CAMPERO, "CAMIONETA PASAJ.", "Camperos y pickups", "PICKUP DOBLE CAB", "PICKUP SENCILLA"]}
+  - {id: pesado,     nombre: "Pesados",              segmento: pesados,  sinonimos: [FURGON, "Camion Mediano", Camion, PESADO, Volqueta, Remolque]}
+  - {id: moto,       nombre: "Motos",                segmento: motos,    sinonimos: [MOTOCICLETA, "Motos 0 - 125 CC", "Motos 125 - 250 CC", "Motos > 250 CC", MOTO]}
+  - {id: motocarro,  nombre: "Motocarro",            segmento: motos,    sinonimos: [MOTOCARRO, Motocarro]}
+
+# Filas de la hoja Coberturas. `grupo` produce las filas de título; `id` es la clave canónica.
+coberturas:
+  - grupo: "Responsabilidad Civil Extracontractual"
+    items:
+      - {id: rc_bienes,        nombre: "Daños a bienes de terceros",                 sinonimos: ["límite RC", "RC", "responsabilidad civil", "limite unico combinado"]}
+      - {id: rc_una_persona,   nombre: "Muerte o lesiones a una persona"}
+      - {id: rc_dos_personas,  nombre: "Muerte o lesiones a dos o más personas"}
+      - {id: rc_asist_juridica,nombre: "Asistencia juridica en proceso penal y civil", sinonimos: ["asistencia jurídica", "defensa jurídica"]}
+      - {id: rc_amparo_patrimonial, nombre: "Amparo patrimonial", sinonimos: ["protección patrimonial"]}
+      - {id: rc_dano_moral,    nombre: "Daño moral y perjuicios sicologicos", sinonimos: ["perjuicios morales", "perjuicios extrapatrimoniales"]}
+  - grupo: "Coberturas al Vehículo"
+    items:
+      - {id: ptd,              nombre: "Perdida total por DAÑOS (PTD)",   sinonimos: [PTD, "P.T.D.", "pérdida total por daños"]}
+      - {id: ppd,              nombre: "Perdida parcial por DAÑOS (PPD)", sinonimos: [PPD, "P.P.D.", "pérdida parcial por daños"]}
+      - {id: gt_danos,         nombre: "Gastos de transporte por DAÑOS",  sinonimos: ["gastos de transporte"]}
+      - {id: pth,              nombre: "Perdida total por HURTO (PTH)",   sinonimos: [PTH, "P.T.H."]}
+      - {id: pph,              nombre: "Perdida parcial por HURTO (PPH)", sinonimos: [PPH, "P.P.H", "P.P.H."]}
+      - {id: gt_hurto,         nombre: "Gastos de transporte por HURTO"}
+      - {id: asistencia,       nombre: "Asistencia"}
+      - {id: veh_reemplazo,    nombre: "Vehículo de reemplazo",           sinonimos: ["vehículo sustituto", "alternativas de movilidad"]}
+      - {id: ap_conductor,     nombre: "Accidentes personales al conductor", sinonimos: ["accidentes al conductor"]}
+      - {id: ap_acompanantes,  nombre: "Accidentes personales a los acompañantes", sinonimos: ["accidentes a ocupantes"]}
+      - {id: terremoto,        nombre: "Terremoto", sinonimos: ["temblor, terremoto y erupción volcánica"]}
+  - grupo: "Asistencía"
+    items:
+      - {id: as_transporte_lesion,   nombre: "Transporte por lesiones o enfermedad", sinonimos: [ambulancia]}
+      - {id: as_familiar,            nombre: "Desplazamiento y hospedaje de un familiar"}
+      - {id: as_fallecimiento_fam,   nombre: "Desplazamiento del asegurado por el fallecimiento de un familiar"}
+      - {id: as_muerte,              nombre: "Transporte en caso de muerte", sinonimos: [repatriación, "traslado del cuerpo"]}
+      - {id: as_conductor_prof,      nombre: "Conductor profesional"}
+      - {id: as_grua,                nombre: "Grúa"}
+      - {id: as_hospedaje_dano,      nombre: "Hospedaje y transporte por daño o hurto del carro"}
+      - {id: as_taller_movil,        nombre: "Taller móvil y cerrajeria", sinonimos: ["carro taller", "llave maestra"]}
+      - {id: as_repuestos,           nombre: "Localización y envío de repuestos"}
+      - {id: as_estado_vias,         nombre: "Informe estado de las vías"}
+      - {id: as_conductor_elegido,   nombre: "Conductor elegido", sinonimos: ["regreso seguro a casa"]}
+  - grupo: "Beneficios Adicionales"
+    items:
+      - {id: be_perdida_llaves,      nombre: "Cobertura de Pérdida de Llaves"}
+      - {id: be_parqueadero,         nombre: "Pago de Parqueadero en el Tránsito como Consecuencia de un Evento Cubierto", sinonimos: ["patios por inmovilización"]}
+      - {id: be_anticipo,            nombre: "Anticipo de Indemnización en Pérdidas Totales"}
+      - {id: be_mecanico_experto,    nombre: "Asesoría de mecánico experto"}
+      - {id: be_revision_preventiva, nombre: "Revisión preventiva sin costo", sinonimos: ["revisión previaje"]}
+      - {id: be_acomp_comercial,     nombre: "Acompañamiento Comercial para compra de vehiculos nuevos y usados", sinonimos: [peritaje]}
+      - {id: be_gastos_traspaso,     nombre: "Cobertura de Gastos de Traspaso por Pérdidas Totales"}
+      - {id: be_consulta_medica,     nombre: "Consulta médica domiciliaria"}
+      - {id: be_mensajes_urgentes,   nombre: "Transmisión de mensajes urgentes"}
+      - {id: be_equipaje,            nombre: "Equipaje protegido"}
+      - {id: be_hurto_documentos,    nombre: "Hurto de documentos"}
+      - {id: be_pequenos_choques,    nombre: "Pequeños Choques (Vehículos)"}
+      - {id: be_llantas,             nombre: "Llantas estalladas"}
+      - {id: be_vidrios,             nombre: "Vidrios"}
+      - {id: be_pequenos_accesorios, nombre: "Pequeños Accesorios"}
+      - {id: be_farolas_motos,       nombre: "Farolas, stop y retrovisores (Motos)"}
+      - {id: be_llantas_motos,       nombre: "Llantas, rines y suspensión (Motos)"}
+      - {id: be_mensajeria,          nombre: "Mensajeria Liviana"}
+      - {id: be_valet,               nombre: "Valet Parking"}
+      - {id: be_exequial,            nombre: "Asistencia exequial"}
+      - {id: be_hogar,               nombre: "Asistencias al hogar (plomería, electricidad, cerrajería, vidriería, tejas)"}
+      - {id: be_talleres,            nombre: "Talleres de Reparación", sinonimos: ["libre elección de taller", "arreglo directo"]}
+
+# Filas de la sección DEDUCIBLES (se extraen con el normalizador `deducible`)
+deducibles:
+  - {id: rc_bienes, nombre: "Responsabilidad Civil Extracontractual"}
+  - {id: ptd,       nombre: "Perdida total por DAÑOS (PTD)"}
+  - {id: ppd,       nombre: "Perdida parcial por DAÑOS (PPD)"}
+  - {id: pth,       nombre: "Perdida total por HURTO (PTH)"}
+  - {id: pph,       nombre: "Perdida parcial por HURTO (PPH)"}
+  - {id: terremoto, nombre: "Terremoto"}
+
+# Datos generales al pie de la hoja Coberturas
+generales:
+  - {id: modalidad_pago,  nombre: "Modalidad Pago"}
+  - {id: descuento_flota, nombre: "Descuento de flota"}
+  - {id: guia_fasecolda,  nombre: "Guia Fasecolda"}
+  - {id: condicionados,   nombre: "condicionados Vigentes:"}
+  - {id: notas,           nombre: "Notas aclaratorias"}
+
+# Categorías de scoring (hoja Resumen). Los pesos son editables por el analista; el LLM
+# propone el puntaje 0-10 por plan usando las coberturas de cada categoría como evidencia.
+scoring:
+  categorias:
+    - {id: rc,          nombre: "Responsabilidad Civil (Límite)", peso: 0.15, coberturas: [rc_bienes, rc_una_persona, rc_dos_personas]}
+    - {id: danos,       nombre: "Cobertura Daños (PTD/PPD)",      peso: 0.20, coberturas: [ptd, ppd, gt_danos]}
+    - {id: hurto,       nombre: "Cobertura Hurto (PTH/PPH)",      peso: 0.15, coberturas: [pth, pph, gt_hurto]}
+    - {id: deducibles,  nombre: "Deducibles Favorables",          peso: 0.15, coberturas: [], usa_deducibles: true}
+    - {id: reemplazo,   nombre: "Vehículo de Reemplazo",          peso: 0.10, coberturas: [veh_reemplazo]}
+    - {id: asistencias, nombre: "Asistencias en Carretera",       peso: 0.10, coberturas: [as_grua, as_taller_movil, as_conductor_elegido, as_conductor_prof, as_repuestos]}
+    - {id: ap,          nombre: "Accidentes Personales",          peso: 0.08, coberturas: [ap_conductor, ap_acompanantes]}
+    - {id: beneficios,  nombre: "Beneficios Adicionales",         peso: 0.07, coberturas: [be_perdida_llaves, be_anticipo, be_pequenos_choques, be_llantas, be_vidrios, be_gastos_traspaso, be_exequial, be_hogar]}
+  matriz_decision:
+    - {id: precio,      nombre: "Precio/Prima",          peso: 0.30}
+    - {id: coberturas,  nombre: "Calidad de Coberturas", peso: 0.40}
+    - {id: deducibles,  nombre: "Deducibles Favorables", peso: 0.20}
+    - {id: servicios,   nombre: "Servicios Adicionales", peso: 0.10}

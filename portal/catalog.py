@@ -41,6 +41,8 @@ def application_catalog():
     soat_url = external_soat_url or reverse("soat:upload")
     external_conciliacion_url = _safe_external_url(getattr(settings, "CONCILIACION_APP_URL", ""))
     conciliacion_url = external_conciliacion_url or reverse("conciliacion:index")
+    external_cotizador_url = _safe_external_url(getattr(settings, "COTIZADOR_APP_URL", ""))
+    cotizador_url = external_cotizador_url or reverse("cotizador:index")
     return [
         {
             "name": "CardManager",
@@ -113,6 +115,18 @@ def application_catalog():
             "active": True,
             "external": bool(external_conciliacion_url),
             "search_terms": "conciliación facturas asegurados cobros",
+        },
+        {
+            "name": "Cotizador de Renovaciones",
+            "area": "Colectivos",
+            "description": "Genere el consolidado estándar de un ramo a partir de las cotizaciones de flota de cada aseguradora.",
+            "logo": "",
+            "logo_class": "",
+            "icon_path": "M9 3h6l3 3v15H6V6l3-3Zm0 0v4H6M9 12h6M9 16h6",
+            "url": cotizador_url,
+            "active": True,
+            "external": bool(external_cotizador_url),
+            "search_terms": "cotizaciones flota consolidado movilidad renovación aseguradoras",
         },
         {
             "name": "Excepciones de Facturación",

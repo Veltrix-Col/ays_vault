@@ -1,0 +1,19 @@
+# Registro de adaptadores del ramo Movilidad.
+# Para agregar una aseguradora: crear gestor_cotizaciones/ramos/movilidad/adaptadores/<id>.py
+# con una clase Adaptador y registrarla aquí. `patrones` (regex sobre el nombre de archivo)
+# permite auto-detección.
+# `es_actual` marca la compañía vigente (aporta "prima anterior" al análisis de flota).
+adaptadores:
+  - id: sura
+    clase: gestor_cotizaciones.ramos.movilidad.adaptadores.sura.AdaptadorSura
+    patrones: ["sura"]
+  - id: bolivar
+    clase: gestor_cotizaciones.ramos.movilidad.adaptadores.bolivar.AdaptadorBolivar
+    patrones: ["bolivar", "bol[ií]var"]
+  - id: axa
+    clase: gestor_cotizaciones.ramos.movilidad.adaptadores.axa.AdaptadorAxa
+    patrones: ["axa"]
+
+# Fallback: cualquier archivo no reconocido se procesa 100% con LLM contra el catálogo
+generico:
+  clase: gestor_cotizaciones.ramos.generico.AdaptadorGenerico

@@ -1,0 +1,82 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cotizador de Renovaciones | A&amp;S</title>
+  <link rel="icon" href="{% static 'img/branding/favicon.ico' %}">
+  <link rel="stylesheet" href="{% static 'css/ays.css' %}">
+  <link rel="stylesheet" href="{% static 'css/tools-common.css' %}">
+</head>
+<body class="tool-page">
+  <a class="skip-link" href="#contenido">Ir al contenido principal</a>
+  <header class="tool-header">
+    <a href="{% url 'public_home' %}" class="tool-brand" aria-label="Volver al Banco de Herramientas">
+      <img src="{% static 'img/branding/logo-ays-azul.png' %}" alt="A&S">
+      <span>Banco de Herramientas</span>
+    </a>
+  </header>
+
+  <main id="contenido" class="tool-shell">
+    <section class="tool-heading">
+      <span class="eyebrow">Herramienta interna</span>
+      <h1>Cotizador de Renovaciones</h1>
+      <p>Suba las cotizaciones de flota que enviaron las aseguradoras (cualquier formato, cualquier
+         cantidad de archivos) y descargue el consolidado estándar del ramo, listo para validar.</p>
+      <div class="tool-banner is-warn">Por ahora solo está configurado el ramo <strong>Movilidad Colectivos</strong>.
+        El motor detecta cada aseguradora por el nombre del archivo; si sube una que aún no está
+        configurada, indique un nombre en «Nombre para archivos no reconocidos» para procesarla con IA.</div>
+    </section>
+
+    <section class="tool-card" aria-labelledby="form-title">
+      <h2 id="form-title">Datos de la renovación</h2>
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+
+        <div class="tool-fields">
+          <div class="tool-field">
+            <label for="{{ form.ramo.id_for_label }}">Ramo</label>
+            {{ form.ramo }}
+            {% if form.ramo.errors %}<p class="tool-error" role="alert">{{ form.ramo.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="tool-field">
+            <label for="{{ form.nit.id_for_label }}">{{ form.nit.label }}</label>
+            {{ form.nit }}
+            {% if form.nit.errors %}<p class="tool-error" role="alert">{{ form.nit.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="tool-field">
+            <label for="{{ form.actual.id_for_label }}">{{ form.actual.label }}</label>
+            {{ form.actual }}
+            {% if form.actual.errors %}<p class="tool-error" role="alert">{{ form.actual.errors|striptags }}</p>{% endif %}
+          </div>
+          <div class="tool-field">
+            <label for="{{ form.otra_aseguradora.id_for_label }}">{{ form.otra_aseguradora.label }}</label>
+            {{ form.otra_aseguradora }}
+            <p class="tool-muted">{{ form.otra_aseguradora.help_text }}</p>
+            {% if form.otra_aseguradora.errors %}<p class="tool-error" role="alert">{{ form.otra_aseguradora.errors|striptags }}</p>{% endif %}
+          </div>
+        </div>
+
+        <div class="tool-field">
+          <label for="{{ form.archivos.id_for_label }}">{{ form.archivos.label }}</label>
+          {{ form.archivos }}
+          <p class="tool-muted">Cotización, slip, o ambos por aseguradora -- .xlsx o .docx. No hace falta
+             separarlos por compañía: el motor los agrupa solo por el nombre del archivo.</p>
+          {% if form.archivos.errors %}<p class="tool-error" role="alert">{{ form.archivos.errors|striptags }}</p>{% endif %}
+        </div>
+
+        {% if processing_error %}
+          <div class="tool-error tool-error--block" role="alert">
+            <strong>No fue posible generar el consolidado</strong><br>{{ processing_error }}
+          </div>
+        {% endif %}
+
+        <button class="tool-button tool-button--block" type="submit">Generar consolidado</button>
+        <p class="tool-muted">El proceso puede tomar uno o dos minutos (lee cada archivo con IA). Al
+           terminar, el navegador descarga el Excel directamente.</p>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

@@ -48,10 +48,19 @@ private_assets/soat/*.xlsx
 private_assets/colectivos/
 artifacts/zoho/
 runtime/zoho_sdk/
+runtime/gestor_cotizaciones/
+
+# Salidas locales del CLI del Cotizador (gestor_cotizaciones.cli): JSON
+# canónicos y consolidados de prueba, nunca se versionan.
+/out/
+gestor_cotizaciones/out/
 
 docker-compose.override.yml
 
 docs/cotizacion_colectivos/input/*.xlsx
 artifacts/input/*.xlsx
+# Cotizaciones reales de aseguradoras (tomador, NIT, flota, primas) usadas
+# para probar el motor de gestor_cotizaciones; nunca se versionan.
+gestor_cotizaciones/samples/
 
 .codex-deps/
