@@ -16,15 +16,24 @@ from . import tools
 logger = logging.getLogger("asistente_zoho")
 
 SYSTEM_PROMPT = (
-    "Eres el asistente de consulta de AyS Vault. Respondes en español, de forma breve, "
-    "clara y ordenada, sólo con datos que hayas obtenido de las herramientas -- nunca "
-    "inventes nombres, números de póliza, fechas ni estados. Si una herramienta no "
-    "encuentra nada o falla, dilo con honestidad y sugiere reformular la búsqueda. "
-    "Cuando una herramienta te dé un \"link\", inclúyelo como enlace Markdown "
-    "(`[texto](link)`) para que la persona pueda abrir el registro directamente en el "
-    "portal; nunca inventes un link que no venga de una herramienta. No hagas ni "
-    "sugieras cambios en Zoho: sólo puedes consultar información, nunca crearla, "
-    "editarla ni eliminarla."
+    "Eres el asistente general de consulta de Zoho del Banco de Aplicaciones de AyS "
+    "Vault -- no perteneces a ninguna app en particular (ni Colectivos, ni SOAT, "
+    "ni otra); cualquier persona que haya iniciado sesión en el portal puede "
+    "preguntarte por clientes, pólizas o tareas de cualquier área del negocio. "
+    "Respondes en español, de forma breve, clara y ordenada, sólo con datos que "
+    "hayas obtenido de las herramientas -- nunca inventes nombres, números de "
+    "póliza, fechas ni estados. Antes de llamar una herramienta, extrae del mensaje "
+    "solo el dato relevante (nombre, número de documento o número de póliza): si la "
+    "persona escribe una frase completa con saludo, cédula y nombre mezclados, igual "
+    "puedes pasar esa frase tal cual a buscar_cliente porque ya sabe separar nombre "
+    "de documento, pero nunca le pases una pregunta genérica sin ningún dato "
+    "identificador. Si una herramienta no encuentra nada o falla, dilo con "
+    "honestidad y sugiere reformular la búsqueda -- nunca asumas que un resultado "
+    "vacío es un error. Cuando una herramienta te dé un \"link\", inclúyelo como "
+    "enlace Markdown (`[texto](link)`) para que la persona pueda abrir el registro "
+    "directamente en Zoho; nunca inventes un link que no venga de una herramienta ni "
+    "muestres la URL cruda. No hagas ni sugieras cambios en Zoho: sólo puedes "
+    "consultar información, nunca crearla, editarla ni eliminarla."
 )
 
 MAX_MESSAGE_LENGTH = 500
@@ -33,11 +42,16 @@ MAX_HISTORY_MESSAGES = 8
 TOOL_SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "buscar_cliente",
-        "description": "Busca clientes (empresas o personas) en Zoho por nombre o número de documento.",
+        "description": (
+            "Busca clientes (personas o empresas, cualquier tipo de documento) en Zoho "
+            "por nombre y/o número de documento. Acepta texto natural con ambos mezclados "
+            "(p. ej. \"Juan Pérez cc 123456\" o un saludo con la pregunta incluida) -- "
+            "separa nombre de documento internamente, no hace falta limpiarlo antes."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Nombre o número de documento a buscar."},
+                "query": {"type": "string", "description": "Nombre y/o número de documento, en lenguaje natural."},
             },
             "required": ["query"],
         },
@@ -46,23 +60,19 @@ TOOL_SPECS: tuple[dict[str, Any], ...] = (
         "name": "detalle_cliente",
         "description": (
             "Trae el detalle completo (pólizas incluidas) de un cliente ya localizado "
-            "con buscar_cliente. Requiere el entity_kind y token que devolvió esa búsqueda."
+            "con buscar_cliente. Requiere el `id` que devolvió esa búsqueda."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "entity_kind": {"type": "string", "enum": ["company", "person"]},
-                "token": {"type": "string"},
+                "record_id": {"type": "string", "description": "El campo id devuelto por buscar_cliente."},
             },
-            "required": ["entity_kind", "token"],
+            "required": ["record_id"],
         },
     },
     {
         "name": "obtener_poliza",
-        "description": (
-            "Busca una póliza por su número exacto y devuelve su resumen "
-            "(vigencia, aseguradora, estado, conteo de asegurados)."
-        ),
+        "description": "Busca una póliza por su número exacto y devuelve su resumen (tomador, vigencia, aseguradora, estado).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -111,9 +121,7 @@ def build_tool_executor(*, user_email: str) -> Callable[[str, dict[str, Any]], s
             if nombre == "buscar_cliente":
                 resultado = tools.buscar_cliente(str(argumentos.get("query", "")))
             elif nombre == "detalle_cliente":
-                resultado = tools.detalle_cliente(
-                    str(argumentos.get("entity_kind", "")), str(argumentos.get("token", "")),
-                )
+                resultado = tools.detalle_cliente(str(argumentos.get("record_id", "")))
             elif nombre == "obtener_poliza":
                 resultado = tools.obtener_poliza(str(argumentos.get("numero_poliza", "")))
             elif nombre == "mis_tareas":

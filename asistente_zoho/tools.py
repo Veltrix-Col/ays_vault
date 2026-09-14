@@ -1,105 +1,233 @@
 """Herramientas de solo lectura para el asistente conversacional de Zoho.
 
-Cada función devuelve un dict JSON-serializable pensado para que el modelo lo
-resuma en lenguaje natural. Ninguna función escribe en Zoho: sólo se usan
-`records.get_by_id`, `search.by_field` / `search.by_criteria` de la fachada
-(nunca `records.create/update/upsert`). Se reutilizan a propósito los mismos
-servicios que ya usa el resto de Colectivos (masking de documentos, tokens
-firmados para los links) en vez de duplicar consultas o criterios de Zoho.
+Deliberadamente NO reutilizan los servicios de búsqueda/detalle de
+`cotizacion_colectivos` (`UnifiedClientSearchService`, `EntityDetailService`,
+`PolicyService`): esos están hechos para el flujo operativo de Colectivos
+(exigen Tipo_de_persona/Tipo_ID exactos, arman tokens firmados propios de esa
+app y -- en el caso de pólizas -- pasan por un caché de "Workspace" pensado
+para su revisión humana, no para una consulta rápida de chat). Este asistente
+es de alcance general: consulta Zoho directamente vía la fachada y linkea a
+los registros en Zoho CRM, no a páginas internas de ninguna app del portal.
+
+Solo se usan `records.get_by_id` y `search.by_field` / `search.by_criteria`
+(nunca `records.create/update/upsert`).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
-
-from django.urls import reverse
 
 from cotizacion_colectivos.services.common import (
     ColectivosServiceError,
     colectivos_zoho,
+    escape_criteria_value,
     get_colectivos_profile,
-    sign_record_id,
+    mask_document,
+    mask_reference,
     translate_zoho_error,
 )
-from cotizacion_colectivos.services.entity_detail import EntityDetailService
-from cotizacion_colectivos.services.mappings import POLICIES_MODULE
-from cotizacion_colectivos.services.policies import PolicyService
-from cotizacion_colectivos.services.search import UnifiedClientSearchService
 from integrations.zoho.exceptions import ZohoError
 
+CONTACTS_MODULE = "Contacts"
+POLICIES_MODULE = "Polizas"
+INSURED_MODULE = "Riesgos1"
 TASKS_MODULE = "Tasks"
+
+CONTACT_SEARCH_FIELDS = (
+    "id", "Tipo_de_persona", "Tipo_ID", "N_mero_de_ID", "Full_Name",
+    "First_Name", "Last_Name", "Raz_n_social", "Nombre_comercial", "Estado",
+    "Email", "Phone", "Mobile",
+)
+INSURED_ROLE_FIELDS = ("Asegurado", "Contacto_facturaci_n_dividida_colectivas", "Beneficiario")
+POLICY_SEARCH_FIELDS = (
+    "id", "Name", "Tomador_principal1", "Estado_de_la_p_liza", "Ramo",
+    "Aseguradora1", "P_liza_Fecha_de_inicio_vigencia", "P_liza_Fecha_fin_de_la_vigencia",
+    "Modo_de_pago", "Frecuencia",
+)
 TASK_SEARCH_FIELDS = (
     "id", "Subject", "Responsable", "Correo_responsable", "Estado",
     "tipo_de_solicitud", "rea", "Fecha_de_solicitud_del_cliente",
 )
-TASK_SEARCH_LIMIT = 20
-MAX_QUERY_LENGTH = 120
+
+MAX_QUERY_LENGTH = 160
+SEARCH_LIMIT = 10
+_DOCUMENT_PATTERN = re.compile(r"\d{5,}")
+_ID_LABEL_PATTERN = re.compile(
+    r"\b(cc|c\.c\.?|nit|ti|t\.i\.?|ce|c\.e\.?|pasaporte|documento|c[eé]dula|n[uú]mero|no\.?)\b",
+    re.IGNORECASE,
+)
+
+
+def _text(value: object, default: str = "") -> str:
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("display_label") or value.get("value")
+    clean = str(value or "").strip()
+    return clean or default
 
 
 def _clean_query(value: str) -> str:
-    clean = str(value or "").strip()
+    clean = re.sub(r"\s+", " ", str(value or "")).strip()
     if not clean or len(clean) > MAX_QUERY_LENGTH:
         raise ColectivosServiceError("invalid_query", "El criterio de búsqueda no es válido.")
     return clean
 
 
+def _extract_document(text: str) -> str:
+    match = _DOCUMENT_PATTERN.search(text)
+    return match.group(0) if match else ""
+
+
+def _extract_name(text: str, document: str) -> str:
+    """Deja solo lo que parece nombre: quita el número de documento (si lo
+    hay) y etiquetas comunes de tipo de documento ("cc", "nit", ...), para que
+    una frase natural como "Juan Pérez cc 123" busque por "Juan Pérez"."""
+    sin_documento = text.replace(document, "") if document else text
+    sin_etiquetas = _ID_LABEL_PATTERN.sub("", sin_documento)
+    sin_simbolos = re.sub(r"[^\w\sÁÉÍÓÚáéíóúÑñ.&'’-]", " ", sin_etiquetas, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", sin_simbolos).strip(" .-")
+
+
+def _zoho_record_link(zoho, *, module: str, record_id: str) -> str:
+    """Link directo al registro en Zoho CRM (no a ninguna página del portal),
+    para que el alcance no quede atado a lo que una app en particular decida
+    exponer. Requiere el organization_id del perfil activo (ya validado al
+    construir la fachada)."""
+    org_id = str(getattr(getattr(zoho, "config", None), "expected_org_id", "") or "").strip()
+    record = str(record_id or "").strip()
+    if not org_id or not record:
+        return ""
+    return f"https://crm.zoho.com/crm/org{org_id}/tab/{module}/{record}"
+
+
 def buscar_cliente(query: str) -> dict[str, Any]:
-    """Busca clientes (empresas o personas) por nombre o número de documento."""
+    """Busca clientes en Contacts por nombre y/o número de documento, en
+    cualquier combinación y sin asumir un tipo de persona o de documento fijo
+    (sirve igual para personas y empresas, y para cualquier tipo de ID)."""
     clean = _clean_query(query)
-    resultados = UnifiedClientSearchService().search(clean)
-    return {
-        "total": len(resultados),
-        "clientes": [
-            {
-                "tipo": item.entity_label,
-                "nombre": item.display_name,
-                "documento": f"{item.document_label} {item.masked_document}",
-                "estado": item.state,
-                "entity_kind": item.source_kind,
-                "token": item.detail_token,
-                "link": reverse(
-                    "cotizacion_colectivos:client_detail",
-                    kwargs={"entity_kind": item.source_kind, "token": item.detail_token},
-                ),
-            }
-            for item in resultados
-        ],
-    }
-
-
-def _entity_service() -> EntityDetailService:
+    documento = _extract_document(clean)
+    nombre = _extract_name(clean, documento)
+    criterios = []
+    if documento:
+        criterios.append(f"(N_mero_de_ID:equals:{escape_criteria_value(documento)})")
+    if len(nombre) >= 3:
+        for field in ("Full_Name", "Raz_n_social", "Nombre_comercial"):
+            criterios.append(f"({field}:starts_with:{escape_criteria_value(nombre)})")
+    if not criterios:
+        raise ColectivosServiceError(
+            "invalid_query", "Escribe al menos un nombre (3+ letras) o un número de documento.",
+        )
+    zoho = colectivos_zoho()
+    profile = get_colectivos_profile()
+    registros: dict[str, dict] = {}
     try:
-        return EntityDetailService()
+        for criterio in criterios:
+            if len(registros) >= SEARCH_LIMIT:
+                break
+            pagina = zoho.search.by_criteria(
+                module=CONTACTS_MODULE, criteria=criterio,
+                fields=CONTACT_SEARCH_FIELDS, page=1, limit=SEARCH_LIMIT,
+            )
+            for record in pagina.records:
+                record_id = str(record.get("id") or "")
+                if record_id:
+                    registros.setdefault(record_id, record)
     except ZohoError as exc:
-        raise translate_zoho_error(exc, get_colectivos_profile()) from exc
+        raise translate_zoho_error(exc, profile) from exc
+    clientes = []
+    for record in list(registros.values())[:SEARCH_LIMIT]:
+        clientes.append({
+            "id": str(record.get("id")),
+            "nombre": _text(
+                record.get("Full_Name") or record.get("Nombre_comercial") or record.get("Raz_n_social"),
+                "Sin nombre",
+            ),
+            "tipo": _text(record.get("Tipo_de_persona")),
+            "documento": f"{_text(record.get('Tipo_ID'))} {mask_document(record.get('N_mero_de_ID'))}".strip(),
+            "estado": _text(record.get("Estado"), "Sin estado"),
+            "link": _zoho_record_link(zoho, module=CONTACTS_MODULE, record_id=str(record.get("id") or "")),
+        })
+    return {"total": len(clientes), "clientes": clientes}
 
 
-def detalle_cliente(entity_kind: str, token: str) -> dict[str, Any]:
-    """Trae el detalle de un cliente ya localizado por `buscar_cliente` (recibe
-    su `token` de link, no un ID de Zoho crudo)."""
-    servicio = _entity_service()
-    if entity_kind == "company":
-        detalle = servicio.company(token)
-        nombre = detalle.display_name
-    elif entity_kind == "person":
-        detalle = servicio.person(token)
-        nombre = detalle.full_name
-    else:
-        raise ColectivosServiceError("invalid_record", "El registro solicitado no es válido.")
+def detalle_cliente(record_id: str) -> dict[str, Any]:
+    """Trae el detalle de un cliente por su id de Zoho (el `id` que devolvió
+    `buscar_cliente`), incluidas las pólizas en las que aparece con algún rol
+    (asegurado, afiliado o beneficiario)."""
+    value = str(record_id or "").strip()
+    if not value.isdigit():
+        raise ColectivosServiceError("invalid_record", "El identificador de cliente no es válido.")
+    zoho = colectivos_zoho()
+    profile = get_colectivos_profile()
+    try:
+        contacto = _get_by_id(
+            zoho, module=CONTACTS_MODULE, record_id=value,
+            fields=CONTACT_SEARCH_FIELDS + ("Direcci_n", "Ciudad_de_direcci_n_principal", "Empresa"),
+        )
+    except ZohoError as exc:
+        raise translate_zoho_error(exc, profile) from exc
+    if not contacto:
+        return {"encontrado": False}
+    poliza_ids: set[str] = set()
+    try:
+        for campo in INSURED_ROLE_FIELDS:
+            pagina = zoho.search.by_criteria(
+                module=INSURED_MODULE, criteria=f"({campo}:equals:{escape_criteria_value(value)})",
+                fields=("id", "P_liza"), page=1, limit=SEARCH_LIMIT,
+            )
+            for relacion in pagina.records:
+                lookup = relacion.get("P_liza")
+                poliza_id = _lookup_id(lookup)
+                if poliza_id:
+                    poliza_ids.add(poliza_id)
+    except ZohoError:
+        poliza_ids = set()  # el detalle del contacto no depende de esto
+    polizas = []
+    for poliza_id in list(poliza_ids)[:SEARCH_LIMIT]:
+        try:
+            registro = _get_by_id(zoho, module=POLICIES_MODULE, record_id=poliza_id, fields=POLICY_SEARCH_FIELDS)
+        except ZohoError:
+            continue
+        if not registro:
+            continue
+        polizas.append({
+            "referencia": mask_reference(registro.get("Name")),
+            "ramo": _text(registro.get("Ramo")),
+            "aseguradora": _text(registro.get("Aseguradora1")),
+            "estado": _text(registro.get("Estado_de_la_p_liza"), "Sin estado"),
+            "link": _zoho_record_link(zoho, module=POLICIES_MODULE, record_id=poliza_id),
+        })
     return {
-        "nombre": nombre,
-        "documento": f"{detalle.id_type} {detalle.masked_document}",
-        "estado": detalle.state,
-        "polizas": [
-            {
-                "referencia": policy.masked_reference,
-                "ramo": policy.branch,
-                "aseguradora": policy.insurer,
-                "estado": policy.state,
-                "link": reverse("cotizacion_colectivos:policy_detail", kwargs={"token": policy.detail_token}),
-            }
-            for policy in (*detalle.policies, *detalle.direct_policies)
-        ],
+        "encontrado": True,
+        "nombre": _text(
+            contacto.get("Full_Name") or contacto.get("Nombre_comercial") or contacto.get("Raz_n_social"),
+            "Sin nombre",
+        ),
+        "documento": f"{_text(contacto.get('Tipo_ID'))} {mask_document(contacto.get('N_mero_de_ID'))}".strip(),
+        "estado": _text(contacto.get("Estado"), "Sin estado"),
+        "correo": _text(contacto.get("Email")),
+        "telefono": _text(contacto.get("Phone") or contacto.get("Mobile")),
+        "polizas": polizas,
+        "link": _zoho_record_link(zoho, module=CONTACTS_MODULE, record_id=value),
     }
+
+
+def _get_by_id(zoho, *, module: str, record_id: str, fields: tuple[str, ...]) -> dict:
+    """Trae un registro por id vía `search.by_criteria(id:equals:...)` en vez de
+    `records.get_by_id`: el backend SDK de Zoho es poco confiable resolviendo
+    detalle por id aunque Search sí funcione (mismo hallazgo ya documentado en
+    `cotizacion_colectivos.services.entity_detail`)."""
+    pagina = zoho.search.by_criteria(
+        module=module, criteria=f"(id:equals:{escape_criteria_value(record_id)})",
+        fields=fields, page=1, limit=1,
+    )
+    return dict(pagina.records[0]) if pagina.records else {}
+
+
+def _lookup_id(value: object) -> str:
+    if isinstance(value, dict):
+        candidate = str(value.get("id") or "").strip()
+        return candidate if candidate.isdigit() else ""
+    return ""
 
 
 def obtener_poliza(numero_poliza: str) -> dict[str, Any]:
@@ -110,7 +238,7 @@ def obtener_poliza(numero_poliza: str) -> dict[str, Any]:
     try:
         pagina = zoho.search.by_field(
             module=POLICIES_MODULE, field="Name", value=clean,
-            fields=("id", "Name"), page=1, limit=5,
+            fields=POLICY_SEARCH_FIELDS, page=1, limit=5,
         )
     except ZohoError as exc:
         raise translate_zoho_error(exc, profile) from exc
@@ -119,27 +247,20 @@ def obtener_poliza(numero_poliza: str) -> dict[str, Any]:
         return {"encontrada": False}
     if len(registros) > 1:
         return {"encontrada": False, "motivo": "ambiguo", "coincidencias": len(registros)}
-    policy_id = str(registros[0]["id"])
-    token = sign_record_id(policy_id, "policy")
-    try:
-        detalle = PolicyService(zoho=zoho).detail(token)
-    except ZohoError as exc:
-        raise translate_zoho_error(exc, profile) from exc
+    registro = registros[0]
+    record_id = str(registro.get("id"))
     return {
         "encontrada": True,
-        "referencia": detalle.masked_reference,
-        "ramo": detalle.branch_name,
-        "aseguradora": detalle.insurer,
-        "estado": detalle.state,
-        "tomador": detalle.holder,
-        "vigencia_inicio": detalle.start_date,
-        "vigencia_fin": detalle.end_date,
-        "modo_de_pago": detalle.payment_mode,
-        "frecuencia_de_pago": detalle.frequency,
-        "asegurados_activos": detalle.active_count,
-        "asegurados_excluidos": detalle.excluded_count,
-        "asegurados_retirados": detalle.retired_count,
-        "link": reverse("cotizacion_colectivos:policy_detail", kwargs={"token": detalle.detail_token}),
+        "referencia": mask_reference(registro.get("Name")),
+        "tomador": _text(registro.get("Tomador_principal1")),
+        "ramo": _text(registro.get("Ramo")),
+        "aseguradora": _text(registro.get("Aseguradora1")),
+        "estado": _text(registro.get("Estado_de_la_p_liza"), "Sin estado"),
+        "vigencia_inicio": _text(registro.get("P_liza_Fecha_de_inicio_vigencia")),
+        "vigencia_fin": _text(registro.get("P_liza_Fecha_fin_de_la_vigencia")),
+        "modo_de_pago": _text(registro.get("Modo_de_pago")),
+        "frecuencia_de_pago": _text(registro.get("Frecuencia")),
+        "link": _zoho_record_link(zoho, module=POLICIES_MODULE, record_id=record_id),
     }
 
 
@@ -149,20 +270,21 @@ def _buscar_tareas(campo: str, valor: str) -> dict[str, Any]:
     try:
         pagina = zoho.search.by_field(
             module=TASKS_MODULE, field=campo, value=clean,
-            fields=TASK_SEARCH_FIELDS, page=1, limit=TASK_SEARCH_LIMIT,
+            fields=TASK_SEARCH_FIELDS, page=1, limit=SEARCH_LIMIT,
         )
     except ZohoError as exc:
         raise translate_zoho_error(exc, get_colectivos_profile()) from exc
     tareas = [
         {
-            "asunto": str(record.get("Subject") or "").strip(),
-            "tipo": str(record.get("tipo_de_solicitud") or "").strip(),
-            "area": str(record.get("rea") or "").strip(),
-            "estado": str(record.get("Estado") or "Sin estado").strip(),
-            "responsable": str(record.get("Responsable") or "").strip(),
-            "fecha_solicitud": str(record.get("Fecha_de_solicitud_del_cliente") or "").strip(),
+            "asunto": _text(record.get("Subject")),
+            "tipo": _text(record.get("tipo_de_solicitud")),
+            "area": _text(record.get("rea")),
+            "estado": _text(record.get("Estado"), "Sin estado"),
+            "responsable": _text(record.get("Responsable")),
+            "fecha_solicitud": _text(record.get("Fecha_de_solicitud_del_cliente")),
+            "link": _zoho_record_link(zoho, module=TASKS_MODULE, record_id=str(record.get("id") or "")),
         }
-        for record in pagina.records[:TASK_SEARCH_LIMIT]
+        for record in pagina.records[:SEARCH_LIMIT]
     ]
     return {"total": len(tareas), "tareas": tareas}
 

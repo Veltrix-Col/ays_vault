@@ -46,14 +46,40 @@
     return div.innerHTML;
   }
 
-  // Únicamente reconoce enlaces Markdown `[texto](/ruta)` hacia rutas propias
-  // del portal (deben empezar por "/"); cualquier otro texto queda escapado
-  // como texto plano, nunca como HTML.
-  function renderContenido(texto) {
-    var escapado = escapeHtml(texto);
-    return escapado.replace(/\[([^\[\]]+)\]\((\/[^\s()]*)\)/g, function (_m, etiqueta, url) {
+  // Reconoce un subconjunto mínimo de Markdown -- **negrilla**, encabezados
+  // "#"/"##", viñetas "-"/"*" y listas numeradas, y enlaces `[texto](url)`
+  // hacia una ruta propia del portal ("/...") o hacia Zoho
+  // (https://crm.zoho.com/...) -- siempre sobre texto ya escapado; cualquier
+  // otra cosa queda como texto plano, nunca como HTML.
+  function transformarLinea(contenidoCrudo) {
+    var escapado = escapeHtml(contenidoCrudo);
+    escapado = escapado.replace(/\[([^\[\]]+)\]\((\/[^\s()]*|https:\/\/crm\.zoho\.[a-z.]+\/[^\s()]*)\)/g, function (_m, etiqueta, url) {
       return '<a href="' + url + '" target="_blank" rel="noopener">' + etiqueta + "</a>";
     });
+    return escapado.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  }
+
+  function renderContenido(texto) {
+    var lineas = String(texto == null ? "" : texto).split(/\r?\n/);
+    var html = "";
+    for (var i = 0; i < lineas.length; i++) {
+      var linea = lineas[i];
+      var encabezado = linea.match(/^#{1,6}\s+(.*)$/);
+      var numerada = linea.match(/^\s*(\d+\.)\s+(.*)$/);
+      var vinieta = linea.match(/^\s*[-*]\s+(.*)$/);
+      if (encabezado) {
+        html += '<div class="azh-heading">' + transformarLinea(encabezado[1]) + "</div>";
+      } else if (numerada) {
+        html += '<div class="azh-item">' + numerada[1] + " " + transformarLinea(numerada[2]) + "</div>";
+      } else if (vinieta) {
+        html += '<div class="azh-item">• ' + transformarLinea(vinieta[1]) + "</div>";
+      } else if (linea.trim() === "") {
+        html += '<div class="azh-blank"></div>';
+      } else {
+        html += "<div>" + transformarLinea(linea) + "</div>";
+      }
+    }
+    return html;
   }
 
   function agregarMensaje(rol, texto) {
@@ -62,6 +88,16 @@
     burbuja.innerHTML = renderContenido(texto);
     log.appendChild(burbuja);
     log.scrollTop = log.scrollHeight;
+  }
+
+  function mostrarIndicadorCarga() {
+    var burbuja = document.createElement("div");
+    burbuja.className = "asistente-zoho-mensaje asistente-zoho-mensaje--assistant asistente-zoho-mensaje--cargando";
+    burbuja.setAttribute("aria-label", "El asistente está pensando");
+    burbuja.innerHTML = "<span></span><span></span><span></span>";
+    log.appendChild(burbuja);
+    log.scrollTop = log.scrollHeight;
+    return burbuja;
   }
 
   function agregarAlHistorial(role, content) {
@@ -80,6 +116,7 @@
     agregarAlHistorial("user", texto);
     input.value = "";
     input.disabled = true;
+    var indicador = mostrarIndicadorCarga();
 
     fetch(endpoint, {
       method: "POST",
@@ -104,6 +141,7 @@
         agregarMensaje("assistant", "No fue posible consultar el asistente en este momento. Intenta de nuevo en unos minutos.");
       })
       .finally(function () {
+        indicador.remove();
         input.disabled = false;
         input.focus();
       });
