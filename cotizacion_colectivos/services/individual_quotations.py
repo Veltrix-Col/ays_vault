@@ -25,7 +25,6 @@ from ..models import (
 )
 from .task_publisher import (
     ColectivosTaskPayload,
-    NOVELTIES_ANALYST_REQUEST,
     enqueue_task,
     publish_task_outbox,
 )
@@ -36,6 +35,11 @@ from ..quotation_forms.security import sign_policy_context
 
 
 logger = logging.getLogger("cotizacion_colectivos")
+
+
+# Cotización Individual is not an analyst-request workflow. Keep this value
+# origin-specific so Novedades and other task producers retain their contract.
+INDIVIDUAL_ANALYST_REQUEST = "No"
 
 
 def _normalized(value: object) -> str:
@@ -512,7 +516,7 @@ def create_individual_quotation(*, schema, cleaned_data, actor, context=None):
                 str(task_fields.get("placa") or task_fields.get("plate") or ""),
             ))),
             area=str(task_context.get("task_area") or ""),
-            analyst_request=NOVELTIES_ANALYST_REQUEST,
+            analyst_request=INDIVIDUAL_ANALYST_REQUEST,
             observations=_individual_task_observations(task_context, task_fields, cleaned_data.get("normalized_items") or {}),
             responsible=str(task_context.get("task_responsible") or ""),
             responsible_email=str(task_context.get("task_responsible_email") or ""),

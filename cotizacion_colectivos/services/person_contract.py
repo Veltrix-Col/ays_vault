@@ -221,7 +221,6 @@ def resolve_contact_by_document(*, document: str, document_type: str, zoho=None)
         return {"status": "AMBIGUOUS", "count": len(typed)}
     item = typed[0]
     logger.info("contact_reconcile_read_final document_hash=%s result=FOUND candidate_count=1 mismatch_count=0", document_hash)
-    detail_keys = tuple(getattr(exc, "detail_keys", ()) or ())
     return {
         "status": "FOUND",
         "record_id": str(item.get("id") or "").strip(),

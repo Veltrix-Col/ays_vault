@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ from cotizacion_colectivos.services.preparations import (
     load_policy_preparation,
     store_policy_preparation,
 )
+from cotizacion_colectivos.services.riesgos1_status import is_operable_riesgos1, filter_operable_riesgos1_members
 
 
 POLICY_TOKEN = sign_record_id(
@@ -308,3 +310,23 @@ class FunctionalGroupingTests(SimpleTestCase):
             ), branch_code=branch)
             self.assertEqual(len(groups), 1)
             self.assertIn(label, groups[0]["action_label"].casefold())
+
+
+class Riesgos1OperabilityTests(SimpleTestCase):
+    def test_only_confirmed_active_states_are_operable(self):
+        for state in ("Activo", "Activo con ajuste"):
+            with self.subTest(state=state):
+                self.assertTrue(is_operable_riesgos1(state=state, reference_date=date(2026, 9, 11)))
+        self.assertTrue(is_operable_riesgos1(state="Activo sin cobro", reference_date=date(2026, 9, 11)))
+        for state in ("Excluido", "Excluido con cobro", "Cancelado", "Congelado", "", "Desconocido"):
+            with self.subTest(state=state):
+                self.assertFalse(is_operable_riesgos1(state=state, reference_date=date(2026, 9, 11)))
+
+    def test_effective_exit_date_excludes_active_member(self):
+        self.assertFalse(is_operable_riesgos1(state="Activo", exit_date="2026-09-10", reference_date=date(2026, 9, 11)))
+        self.assertFalse(is_operable_riesgos1(state="Activo", exit_date="2026-09-11", reference_date=date(2026, 9, 11)))
+        self.assertTrue(is_operable_riesgos1(state="Activo", exit_date="2026-09-12", reference_date=date(2026, 9, 11)))
+
+    def test_member_filter_preserves_only_operable_rows(self):
+        members = tuple(SimpleNamespace(state=state, exit_date="") for state in ("Activo", "Excluido", "Cancelado", "Activo con ajuste"))
+        self.assertEqual(len(filter_operable_riesgos1_members(members, reference_date=date(2026, 9, 11))), 2)

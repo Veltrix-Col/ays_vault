@@ -461,14 +461,31 @@ def no_changes_confirm(request, token):
 
 
 def _rows(request_obj):
-    return request_obj.records.select_related("policy").only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
+    return request_obj.records.select_related("policy").filter(active=True).only("public_key", "policy", "role", "initial_status", "entry_date", "exit_date", "plan", "economic_values", "encrypted_branch_payload").order_by("original_position")
+
+
+def _original_index_map(request_obj, *, policy=None):
+    """pk -> posición de un registro entre TODOS los que originalmente
+    existieron en su alcance (la solicitud completa, o una póliza), en orden
+    de `original_position`. El snapshot cifrado (`group`) se armó recorriendo
+    ese mismo conjunto sin filtrar en su momento, así que esta es la posición
+    que hay que usar para emparejar -- no el índice de `enumerate()` sobre
+    `_rows()`, que cambia en cuanto un registro pasa a `active=False` y deja
+    de aparecer ahí, desalineando cada registro siguiente contra la persona
+    equivocada del snapshot."""
+    queryset = request_obj.records.order_by("original_position")
+    if policy is not None:
+        queryset = queryset.filter(policy=policy)
+    return {pk: index for index, pk in enumerate(queryset.values_list("pk", flat=True))}
 
 
 def _display_rows(request_obj, snapshot):
     members = snapshot.get("group", []) if isinstance(snapshot, dict) else []
+    position_by_pk = _original_index_map(request_obj)
     result = []
-    for index, record in enumerate(_rows(request_obj)):
-        member = members[index] if index < len(members) and isinstance(members[index], dict) else {}
+    for record in _rows(request_obj):
+        position = position_by_pk.get(record.pk, -1)
+        member = members[position] if 0 <= position < len(members) and isinstance(members[position], dict) else {}
         result.append({
             "public_key": record.public_key,
             "role": record.role,
@@ -556,6 +573,7 @@ def _policy_sections(request_obj, snapshot):
         members = policy_snapshot.get("group", []) if isinstance(policy_snapshot, dict) else []
         rows = []
         scoped_records = list(_rows(request_obj).filter(policy=policy))
+        position_by_pk = _original_index_map(request_obj, policy=policy)
         if not scoped_records and len(policies) == 1:
             if all_request_rows is None:
                 all_request_rows = list(_rows(request_obj))
@@ -563,8 +581,14 @@ def _policy_sections(request_obj, snapshot):
             # records represent exactly this policy and retain their stable
             # public keys for response actions.
             scoped_records = all_request_rows
-        for row_index, record in enumerate(scoped_records):
-            member = members[row_index] if row_index < len(members) and isinstance(members[row_index], dict) else {}
+            # Estos registros tienen policy=NULL (no `policy`), así que el mapa
+            # de posiciones también debe recorrer la solicitud completa sin
+            # filtrar por póliza -- igual que como se armó el snapshot de esta
+            # única póliza en ese caso legacy.
+            position_by_pk = _original_index_map(request_obj)
+        for record in scoped_records:
+            position = position_by_pk.get(record.pk, -1)
+            member = members[position] if 0 <= position < len(members) and isinstance(members[position], dict) else {}
             rows.append({
                 "public_key": record.public_key, "role": record.role,
                 "display_name": member.get("display_name", ""),

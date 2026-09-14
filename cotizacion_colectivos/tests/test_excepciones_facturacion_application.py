@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from copy import deepcopy
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -15,14 +16,27 @@ from cotizacion_colectivos.excepciones_facturacion import (
     BillingExceptionType,
     get_billing_exceptions,
 )
-from cotizacion_colectivos.excepciones_facturacion.application import (
-    PRODUCTION_WRITE_FLAGS,
-)
-
-
 AS_OF = date(2026, 9, 7)
 POLICY_ID = "4933790000200703052"
 OPERATION_ID = "4933790000300000001"
+SHARED_PUBLISH_FLAGS = (
+    "COLECTIVOS_TASK_PUBLISH_ENABLED",
+    "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
+    "COLECTIVOS_RISK_PUBLISH_ENABLED",
+    "COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
+    "COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED",
+    "COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED",
+)
+SHARED_PUBLISH_ENTRY_POINTS = (
+    "cotizacion_colectivos.services.task_publisher.get_task_publisher",
+    "cotizacion_colectivos.services.task_publisher.publish_task_outbox",
+    "cotizacion_colectivos.services.person_contract.get_contacts_publisher",
+    "cotizacion_colectivos.services.risk_sandbox.create_sandbox_risk",
+    "cotizacion_colectivos.services.subrisk_sandbox.create_subrisk_sandbox",
+    "cotizacion_colectivos.services.subrisk_sandbox.create_mobility_subrisk_sandbox",
+    "cotizacion_colectivos.services.individual_attachment_publisher.publish_attachment",
+    "cotizacion_colectivos.services.invitation_attachment_publisher.prepare_invitation_attachment",
+)
 
 
 def policy(number="POL-1", record_id=POLICY_ID, **overrides):
@@ -95,9 +109,17 @@ class FakeZoho:
             get=lambda: SimpleNamespace(environment=profile)
         )
         self.coql = FakeCoql(**coql_options)
+        self.records = SimpleNamespace(
+            create=Mock(side_effect=AssertionError("CREATE no permitido")),
+            update=Mock(side_effect=AssertionError("UPDATE no permitido")),
+            delete=Mock(side_effect=AssertionError("DELETE no permitido")),
+        )
+        self.attachments = SimpleNamespace(
+            upload=Mock(side_effect=AssertionError("attachments no permitido")),
+            delete=Mock(side_effect=AssertionError("attachments no permitido")),
+        )
 
 
-@override_settings(**{flag: False for flag in PRODUCTION_WRITE_FLAGS})
 class BillingExceptionsApplicationTests(SimpleTestCase):
     def execute(self, zoho=None, **overrides):
         options = {
@@ -293,16 +315,51 @@ class BillingExceptionsApplicationTests(SimpleTestCase):
             get_billing_exceptions(profile="production", as_of=AS_OF)
         self.assertEqual(raised.exception.code, "production_confirmation_required")
 
-    def test_production_rejects_any_enabled_write_guard(self):
-        for flag in PRODUCTION_WRITE_FLAGS:
-            with self.subTest(flag=flag), self.settings(**{flag: True}):
-                with self.assertRaises(BillingExceptionsOperationalError) as raised:
-                    get_billing_exceptions(
-                        profile="production",
-                        as_of=AS_OF,
-                        allow_production_read=True,
-                    )
-                self.assertEqual(raised.exception.code, "write_guard_enabled")
+    @override_settings(ZOHO_PRODUCTION_WRITE_ENABLED=True)
+    def test_production_read_is_independent_from_shared_write_guard(self):
+        result = self.execute(
+            FakeZoho(profile="production", policies=[policy()]),
+            profile="production",
+            allow_production_read=True,
+        )
+        self.assertEqual(result.profile, "production")
+
+    @override_settings(**{flag: True for flag in SHARED_PUBLISH_FLAGS})
+    def test_production_read_is_independent_from_shared_publish_guards(self):
+        result = self.execute(
+            FakeZoho(profile="production", policies=[policy()]),
+            profile="production",
+            allow_production_read=True,
+        )
+        self.assertEqual(result.profile, "production")
+
+    @override_settings(
+        ZOHO_PRODUCTION_WRITE_ENABLED=True,
+        **{flag: True for flag in SHARED_PUBLISH_FLAGS},
+    )
+    def test_production_refresh_path_never_writes_or_invokes_publishers(self):
+        zoho = FakeZoho(profile="production", policies=[policy()])
+        with ExitStack() as stack:
+            publishers = [
+                stack.enter_context(
+                    patch(path, side_effect=AssertionError("publisher no permitido"))
+                )
+                for path in SHARED_PUBLISH_ENTRY_POINTS
+            ]
+            result = self.execute(
+                zoho,
+                profile="production",
+                allow_production_read=True,
+            )
+
+        self.assertEqual(result.profile, "production")
+        zoho.records.create.assert_not_called()
+        zoho.records.update.assert_not_called()
+        zoho.records.delete.assert_not_called()
+        zoho.attachments.upload.assert_not_called()
+        zoho.attachments.delete.assert_not_called()
+        for publisher in publishers:
+            publisher.assert_not_called()
 
     def test_facade_environment_must_match_requested_profile(self):
         zoho = FakeZoho(profile="sandbox", policies=[policy()])

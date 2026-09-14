@@ -184,7 +184,7 @@ class FakeEntityDetailService:
             display_name="Empresa autorizada", legal_name="Empresa autorizada",
             id_type="NIT", masked_document="•••789", state="Cliente",
             summary=ContactSummary("Persona jurídica", "NIT", "•••789", "Cliente", document="900123789"),
-            policies=(policy,), direct_policies=(), insured=(), risks=(), branches=(branch,),
+            policies=(policy,), direct_policies=(policy,), insured=(), risks=(), branches=(branch,),
             document="900123789",
         )
 
@@ -208,6 +208,21 @@ class PolicyNavigationTests(TestCase):
         self.assertIn(".individual-otp-toggle input[type=checkbox]", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
         self.assertIn(".individual-access-field[hidden]{display:none!important}", (Path(__file__).resolve().parents[2] / "static" / "css" / "colectivos.css").read_text(encoding="utf-8"))
         self.assertIn('toggle.setAttribute("aria-expanded"', (Path(__file__).resolve().parents[2] / "static" / "js" / "colectivos-access.js").read_text(encoding="utf-8"))
+
+    def test_manual_novelties_access_prefills_policy_commercial_email(self):
+        service = FakePolicyService(detail=_policy(commercial_email="comercial@example.test"))
+        response = self.policy_page(
+            service=service,
+            token=TOKEN,
+        )
+        self.assertContains(response, 'id="access-recipient"')
+        self.assertContains(response, 'value="comercial@example.test"')
+
+    def test_manual_recipient_edit_does_not_update_zoho_source(self):
+        service = FakePolicyService(detail=_policy(commercial_email="comercial@example.test"))
+        response = self.policy_page(service=service, token=TOKEN)
+        self.assertContains(response, 'name="recipient"')
+        self.assertNotContains(response, 'name="Correo_gesti_n_comercial"')
 
     def setUp(self):
         cache.clear()
@@ -252,6 +267,29 @@ class PolicyNavigationTests(TestCase):
         self.assertContains(response, "900123789")
         self.assertNotContains(response, "NIT •••789")
 
+    def test_client_detail_lists_only_policies_where_client_is_tomador(self):
+        company_token = sign_record_id(SOURCE_ID, "company")
+        base_detail = FakeEntityDetailService().company(company_token)
+        direct = base_detail.direct_policies[0]
+        relational = replace(
+            direct,
+            detail_token=sign_record_id(
+                "4234567890123456790", "policy",
+                context={"source_id": SOURCE_ID, "source_kind": "company"},
+            ),
+            full_reference="RELACIONADA-001",
+        )
+        branch = replace(base_detail.branches[0], policies=(direct, relational))
+        detail = replace(base_detail, policies=(direct, relational), branches=(branch,))
+        service = Mock()
+        service.company.return_value = detail
+        with patch("cotizacion_colectivos.views.EntityDetailService", return_value=service):
+            response = self.client.get(reverse(
+                "cotizacion_colectivos:client_detail", args=["company", company_token]
+            ))
+        self.assertContains(response, direct.full_reference)
+        self.assertNotContains(response, "RELACIONADA-001")
+
     def test_home_only_displays_active_zoho_profile_without_runtime_switch(self):
         response = self.client.get(reverse("cotizacion_colectivos:invitations_index"))
         self.assertContains(response, "Perfil Zoho activo: SANDBOX")
@@ -286,7 +324,8 @@ class PolicyNavigationTests(TestCase):
         )
         health = replace(base_detail.branches[0], policies=(other,))
         detail = replace(
-            base_detail, policies=(active, inactive, other), branches=(mobility, health),
+            base_detail, policies=(active, inactive, other),
+            direct_policies=(active, inactive, other), branches=(mobility, health),
         )
         service = Mock()
         service.company.return_value = detail
@@ -532,7 +571,7 @@ class PolicyNavigationTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Enlace listo para compartir")
-        self.assertContains(response, "El enlace puede generarse")
+        self.assertContains(response, "Puede continuar; el correo del cliente no es necesario si no solicita verificación.")
 
     @patch("cotizacion_colectivos.views.PolicyService", return_value=FakePolicyService())
     def test_legacy_single_policy_endpoint_reuses_request_until_force_new(self, _service):

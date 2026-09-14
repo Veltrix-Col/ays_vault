@@ -25,7 +25,7 @@ from cotizacion_colectivos.models import (
     VistaPreviaExcelSolicitudColectivo,
 )
 from cotizacion_colectivos.services.deadlines import process_deadlines
-from cotizacion_colectivos.services.excel_previews import cancel_preview, confirm_preview, create_preview
+from cotizacion_colectivos.services.excel_previews import cancel_preview, confirm_preview, create_preview, resolve_preview
 from cotizacion_colectivos.services.excel_roundtrip import build_novelties_template, parse_novelties
 from cotizacion_colectivos.services.external import ExternalAccessError, generate_access
 from cotizacion_colectivos.tests.fakes import mark_novelties_actions
@@ -74,6 +74,22 @@ class PreviewDeadlineTests(TestCase):
     def test_preview_does_not_create_response_and_cancel_removes_encrypted_file(self):
         item, token = create_preview(access=self.access, session_cookie=self.cookie, uploaded=self.workbook())
         self.assertFalse(RespuestaSolicitudColectivo.objects.exists())
+
+    def test_locked_preview_does_not_join_nullable_response(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        item, token = create_preview(
+            access=self.access, session_cookie=self.cookie, uploaded=self.workbook()
+        )
+        with CaptureQueriesContext(connection) as queries:
+            resolved = resolve_preview(
+                token=token, access=self.access,
+                session_cookie=self.cookie, lock=True,
+            )
+        self.assertEqual(resolved.pk, item.pk)
+        sql = " ".join(query["sql"] for query in queries).upper()
+        self.assertNotIn("LEFT OUTER JOIN", sql)
         path = Path(self.private.name) / "excel_previews" / item.stored_path
         self.assertTrue(path.exists())
         self.assertNotIn("PK", path.read_text(encoding="utf-8")[:20])
@@ -83,6 +99,23 @@ class PreviewDeadlineTests(TestCase):
         self.assertEqual(item.status, item.Status.CANCELLED)
         self.assertFalse(path.exists())
         self.assertFalse(RespuestaSolicitudColectivo.objects.exists())
+
+    def test_unlocked_preview_resolves_request_and_response_without_extra_queries(self):
+        """Only the locked path (select_for_update) needs to skip the join on
+        the nullable `response` relation. The common unlocked read should
+        still select_related both, not pay for two more round-trips."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        item, token = create_preview(
+            access=self.access, session_cookie=self.cookie, uploaded=self.workbook(),
+        )
+        with CaptureQueriesContext(connection) as queries:
+            resolved = resolve_preview(token=token, access=self.access, session_cookie=self.cookie)
+            resolved.request
+            resolved.response
+        self.assertEqual(resolved.pk, item.pk)
+        self.assertEqual(len(queries), 1)
 
     def test_novelties_template_keeps_canonical_identification_values_in_dropdown(self):
         import io

@@ -1,0 +1,171 @@
+#asistente-zoho-widget {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483000;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#asistente-zoho-toggle {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  border: none;
+  background: #152036;
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(21, 32, 54, .28);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#asistente-zoho-toggle:hover,
+#asistente-zoho-toggle:focus-visible {
+  background: #007cff;
+}
+
+#asistente-zoho-panel {
+  position: absolute;
+  right: 0;
+  bottom: 68px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 120px));
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 20px 48px rgba(21, 32, 54, .22);
+  overflow: hidden;
+}
+
+#asistente-zoho-panel[hidden] { display: none; }
+
+.asistente-zoho-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #152036;
+  color: #ffffff;
+}
+
+.asistente-zoho-header h2 { font-size: 15px; margin: 0; }
+
+#asistente-zoho-close {
+  background: none;
+  border: none;
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.asistente-zoho-mensajes {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 160px;
+}
+
+.asistente-zoho-mensaje {
+  max-width: 88%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.asistente-zoho-mensaje .azh-heading {
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.asistente-zoho-mensaje .azh-heading:first-child { margin-top: 0; }
+
+.asistente-zoho-mensaje .azh-item { padding-left: 2px; }
+
+.asistente-zoho-mensaje .azh-blank { height: 6px; }
+
+.asistente-zoho-mensaje--user {
+  align-self: flex-end;
+  background: #007cff;
+  color: #ffffff;
+}
+
+.asistente-zoho-mensaje--cargando {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.asistente-zoho-mensaje--cargando span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(21, 32, 54, .45);
+  animation: azh-pensando 1.1s infinite ease-in-out;
+}
+
+.asistente-zoho-mensaje--cargando span:nth-child(2) { animation-delay: .15s; }
+.asistente-zoho-mensaje--cargando span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes azh-pensando {
+  0%, 60%, 100% { transform: translateY(0); opacity: .5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.asistente-zoho-mensaje--assistant {
+  align-self: flex-start;
+  background: rgba(21, 32, 54, .07);
+  color: #152036;
+}
+
+.asistente-zoho-mensaje a { color: inherit; text-decoration: underline; }
+
+.asistente-zoho-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(21, 32, 54, .12);
+}
+
+.asistente-zoho-form input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(21, 32, 54, .2);
+  font-size: 14px;
+}
+
+.asistente-zoho-form button {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: none;
+  background: #152036;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.asistente-zoho-form button:disabled { opacity: .6; cursor: default; }
+
+.asistente-zoho-nota {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: 11px;
+  color: rgba(21, 32, 54, .6);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

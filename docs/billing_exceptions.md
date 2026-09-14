@@ -24,12 +24,27 @@ Para consumir automáticamente las solicitudes creadas desde la interfaz, se
 ejecuta en un proceso separado y persistente:
 
 ```console
-python manage.py colectivos_billing_exceptions_worker
+python manage.py colectivos_billing_exceptions_worker --poll-seconds 5
 ```
 
 El consumidor procesa una solicitud a la vez, reutiliza el mismo ejecutor y
 marca como fallida una ejecución `RUNNING` que lleve más de 15 minutos. Para
 una ejecución puntual de operación o diagnóstico puede usarse `--once`.
+
+En Production, Dokploy debe programar además el siguiente comando todos los
+días a las 08:00 a. m., usando la zona horaria configurada por Django
+(`America/Bogota`):
+
+```console
+python manage.py colectivos_queue_billing_exceptions_refresh
+```
+
+Cron conceptual: `0 8 * * *`. Este disparador únicamente crea un run
+`PENDING` con la fecha local y termina; no consulta Zoho ni ejecuta los
+motores. Si ya existe un run `PENDING` o `RUNNING`, termina correctamente sin
+crear otro. El worker permanente es quien toma el run y ejecuta el refresh.
+La configuración efectiva del scheduler en Dokploy queda como paso de
+despliegue posterior.
 
 También puede crearse y ejecutarse en una sola invocación, siempre con fecha
 explícita:

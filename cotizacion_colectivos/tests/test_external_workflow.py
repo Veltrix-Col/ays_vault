@@ -662,7 +662,7 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, "Ana Uno")
         self.assertContains(portal, "Bea Dos")
-        self.assertEqual(portal.content.decode().count("Novedades preparadas"), 1)
+        self.assertEqual(portal.content.decode().count("Ingresos preparados"), 1)
         self.assertNotContains(portal, "Previsualización de cambios guardados")
         self.assertContains(portal, "Cédula de ciudadanía")
 
@@ -704,7 +704,7 @@ class ExternalWorkflowTests(TestCase):
         portal = self.client.get(reverse("colectivos_external:portal"))
 
         self.assertEqual(portal.status_code, 200)
-        self.assertContains(portal, "Novedades preparadas")
+        self.assertContains(portal, "Ingresos preparados")
         self.assertContains(portal, "Aún no ha preparado novedades.")
         self.assertNotContains(portal, "Sin cambios")
         self.assertNotContains(portal, "Preparado")
@@ -767,7 +767,7 @@ class ExternalWorkflowTests(TestCase):
         self.assertTrue(marker.attachments.filter(category="SOPORTE").exists())
         portal = self.client.get(reverse("colectivos_external:portal"))
         self.assertContains(portal, "Camilo Vargas")
-        self.assertContains(portal, "Novedades preparadas")
+        self.assertContains(portal, "Ingresos preparados")
         self.assertTrue(self.request.responses.filter(status=RespuestaSolicitudColectivo.Status.DRAFT).first().changes.filter(action__in={"INCLUIR", "RETIRAR", "MODIFICAR"}).exists())
         submitted = self.client.post(reverse("colectivos_external:submit"), {"declaration": "on"})
         self.assertEqual(submitted.status_code, 200, submitted.content[:500])
@@ -1371,10 +1371,62 @@ class ExternalWorkflowTests(TestCase):
             }],
             observations="",
         )
+
         with self.captureOnCommitCallbacks(execute=True):
             submit_response(access=access, response=response, declaration=True)
         outbox = ColectivosTaskOutbox.objects.get(request=self.request, event_kind="RETIRO")
         publish.assert_called_once_with(outbox.pk)
+
+    def test_external_portal_does_not_render_inactive_materialized_record(self):
+        self.record.active = False
+        self.record.save(update_fields=("active",))
+        generated = self.access()
+        self.request.status = self.request.Status.SENT
+        self.request.save(update_fields=("status",))
+        self.enter_with_otp(generated)
+        portal = self.client.get(reverse("colectivos_external:portal"))
+        self.assertEqual(portal.status_code, 200)
+        self.assertContains(portal, "No hay información disponible para esta póliza.")
+
+    def test_inactive_record_does_not_shift_snapshot_data_onto_another_person(self):
+        """A record becoming inactive must not push every later record's
+        display data one slot to the left in the snapshot's `group` array.
+
+        `_rows()`/`_display_rows()` only show active records, but the
+        snapshot's `group` list still has an entry for every record that
+        EVER existed, in `original_position` order. Pairing by the position
+        of a record among all originals (not by its index in the filtered,
+        active-only list) is what keeps each active record matched to its
+        own snapshot data once an earlier one is deactivated.
+        """
+        second = SolicitudColectivoRegistro.objects.create(
+            request=self.request,
+            element_type=SolicitudColectivoRegistro.ElementType.PERSON,
+            role="Asegurado",
+            external_reference_hash="e" * 64,
+            initial_status="Activo",
+            plan="Plan vigente",
+            original_position=2,
+            checksum="f" * 64,
+        )
+        # self.record (original_position=1) queda inactivo; second
+        # (original_position=2) es el único que debe verse -- con SUS propios
+        # datos, no los de self.record.
+        self.record.active = False
+        self.record.save(update_fields=("active",))
+        members = [
+            {"display_name": "Primera Persona", "id_type": "CC", "masked_document": "•••1111"},
+            {"display_name": "Segunda Persona", "id_type": "CC", "masked_document": "•••2222"},
+        ]
+        snapshot = {"version": 1, "policy": {}, "group": members, "warnings": []}
+
+        sections = _policy_sections(self.request, snapshot)
+
+        rows = sections[0]["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["public_key"], second.public_key)
+        self.assertEqual(rows[0]["display_name"], "Segunda Persona")
+        self.assertEqual(rows[0]["masked_document"], "•••2222")
 
     def test_submit_response_lock_does_not_join_nullable_access(self):
         """The PostgreSQL-safe lock must target only the response row."""
