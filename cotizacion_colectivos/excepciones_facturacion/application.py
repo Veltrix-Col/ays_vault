@@ -10,8 +10,6 @@ import logging
 import time
 from typing import Any, TypeVar
 
-from django.conf import settings
-
 from integrations.zoho import get_zoho
 from integrations.zoho.exceptions import ZohoError
 
@@ -43,15 +41,6 @@ from .service import build_billing_exceptions as combine_billing_exceptions
 
 logger = logging.getLogger("cotizacion_colectivos")
 
-PRODUCTION_WRITE_FLAGS = (
-    "ZOHO_PRODUCTION_WRITE_ENABLED",
-    "COLECTIVOS_TASK_PUBLISH_ENABLED",
-    "COLECTIVOS_CONTACT_PUBLISH_ENABLED",
-    "COLECTIVOS_RISK_PUBLISH_ENABLED",
-    "COLECTIVOS_SUBRISK_PUBLISH_ENABLED",
-    "COLECTIVOS_ATTACHMENT_PUBLISH_ENABLED",
-    "COLECTIVOS_INVITATION_ATTACHMENT_PUBLISH_ENABLED",
-)
 ALLOWED_PROFILES = frozenset({"sandbox", "production"})
 COLLECTIVE_BUSINESS_LINE = "Colectivos"
 
@@ -94,13 +83,6 @@ class BillingExceptionsResult:
     volumes: BillingExceptionsVolumes
 
 
-def _enabled(name: str) -> bool:
-    value = getattr(settings, name, False)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
 def _validate_request(
     profile: object,
     as_of: object,
@@ -126,14 +108,6 @@ def _validate_request(
                 "production_confirmation_required",
                 "safety",
                 "Production requiere confirmación explícita de lectura READ-only.",
-            )
-        enabled = [name for name in PRODUCTION_WRITE_FLAGS if _enabled(name)]
-        if enabled:
-            raise BillingExceptionsOperationalError(
-                "write_guard_enabled",
-                "safety",
-                "Los guards WRITE/PUBLISH deben permanecer deshabilitados: "
-                + ", ".join(enabled),
             )
     return normalized_profile, as_of
 

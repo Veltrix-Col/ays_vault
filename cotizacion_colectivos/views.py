@@ -62,7 +62,7 @@ from .zoho import get_colectivos_environment
 from .actors import get_internal_actor, public_internal_access_enabled
 from .filenames import download_filename
 from .modes import HUB_MODE, INDIVIDUAL_MODE, INVITATIONS_MODE, NOVELTIES_MODE, resolve_tool_mode
-from .service_catalog import branch_workspaces
+from .service_catalog import branch_workspaces, operable_client_branches
 from .quotation_forms.catalog import VEHICLE_CLASS_CHOICES, VEHICLE_USE_CHOICES, get_branch_schema, with_relationship_choices
 from .quotation_forms.security import sign_receipt, unsign_receipt
 from .services.individual_quotations import (
@@ -769,7 +769,7 @@ def _render_client_detail(request, *, detail, token, entity_kind, environment=No
         "zoho_environment": environment,
         "colectivos_mode": mode,
         "branch_workspaces": branch_workspaces(
-            detail.branches,
+            operable_client_branches(detail),
             service_code=mode.code if mode.code != HUB_MODE else None,
         ),
         **extra,
@@ -864,7 +864,7 @@ def branch_detail(request, entity_kind, token, branch_code):
             "message": exc.message, "colectivos_mode": tool_mode,
             **_environment_context(),
         }, status=_error_status(exc))
-    branch = next((item for item in detail.branches if item.code == branch_code), None)
+    branch = next((item for item in operable_client_branches(detail) if item.code == branch_code), None)
     if branch is None:
         raise Http404("Ramo no encontrado")
     active_policies = tuple(
@@ -922,7 +922,7 @@ def branch_detail(request, entity_kind, token, branch_code):
 def _builder_policies(detail):
     available, unavailable = [], []
     seen = set()
-    for branch in detail.branches:
+    for branch in operable_client_branches(detail):
         if not branch.code:
             continue
         for policy in branch.policies:
@@ -1499,7 +1499,7 @@ def client_branch_individual_access(request, entity_kind, token, branch_code):
     if not has_internal_permission(request, "create_individual_quotation"):
         return permission_denied_response()
     detail = EntityDetailService().company(token) if entity_kind == "company" else EntityDetailService().person(token)
-    branch = next((item for item in detail.branches if str(item.code) == str(branch_code)), None)
+    branch = next((item for item in operable_client_branches(detail) if str(item.code) == str(branch_code)), None)
     if branch is None:
         raise Http404("Ramo no encontrado")
     schema = get_policy_branch_schema(branch_code, branch.name)
@@ -4443,7 +4443,7 @@ def individual_expedient(request, token):
             )
             target_branch = next(
                 (
-                    item for item in source_detail.branches
+                    item for item in operable_client_branches(source_detail)
                     if str(item.code) == str(context.get("branch_code") or quotation.branch_code)
                 ),
                 None,
@@ -4706,7 +4706,7 @@ def individual_destination_policy(request, token):
         entity_kind = str(context.get("source_kind") or "company")
         source_token = str(context.get("source_token") or "")
         detail = EntityDetailService().company(source_token) if entity_kind == "company" else EntityDetailService().person(source_token)
-        branch = next((item for item in detail.branches if str(item.code) == str(context.get("branch_code") or quotation.branch_code)), None)
+        branch = next((item for item in operable_client_branches(detail) if str(item.code) == str(context.get("branch_code") or quotation.branch_code)), None)
         allowed = {str(policy.detail_token): str(policy.full_reference or policy.masked_reference) for policy in (branch.policies if branch else ())}
         if selected_policy not in allowed:
             raise ValidationError("Seleccione una póliza válida para el cliente y ramo.")

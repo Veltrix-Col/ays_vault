@@ -112,9 +112,19 @@ def create_preview(*, access, session_cookie: str, uploaded, identification_choi
 
 def resolve_preview(*, token: str, access, session_cookie: str, lock: bool = False):
     selector, secret = _split_token(token)
-    manager = VistaPreviaExcelSolicitudColectivo.objects.select_for_update() if lock else VistaPreviaExcelSolicitudColectivo.objects
+    # Lock only the preview row. ``request`` no es nulable (join seguro con
+    # select_for_update en cualquier caso); ``response`` sí lo es, y combinar
+    # ``select_for_update()`` con ``select_related('response')`` hace que
+    # PostgreSQL intente bloquear el lado nulable de un LEFT OUTER JOIN -- por
+    # eso ese join solo se pide cuando no se bloquea.
+    manager = VistaPreviaExcelSolicitudColectivo.objects.select_related("request")
+    manager = manager.select_for_update() if lock else manager.select_related("response")
     try:
-        item = manager.select_related("request", "response").get(selector=selector, request=access.request, access=access)
+        item = manager.get(
+            selector=selector,
+            request=access.request,
+            access=access,
+        )
     except VistaPreviaExcelSolicitudColectivo.DoesNotExist as exc:
         raise ExternalAccessError("La vista previa no es válida.") from exc
     if not secrets.compare_digest(item.token_hash, _digest(secret)) or not secrets.compare_digest(item.session_hash, _digest(session_cookie)):
