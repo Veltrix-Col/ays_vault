@@ -69,5 +69,8 @@ class ExceptionCaseModelTests(TestCase):
         self.assertNotIn("payload", case_fields | message_fields)
 
     def test_choices_are_exactly_the_initial_catalogs(self):
-        self.assertEqual(tuple(ExceptionCase.Status.values), ("OPEN", "PENDING", "RESOLVED"))
+        self.assertEqual(
+            tuple(ExceptionCase.Status.values),
+            ("OPEN", "PENDING", "IN_PROGRESS", "WAITING", "RESOLVED", "CLOSED"),
+        )
         self.assertEqual(tuple(CaseMessage.Role.values), ("OPENING", "FOLLOW_UP", "RESOLUTION", "CONTEXT"))

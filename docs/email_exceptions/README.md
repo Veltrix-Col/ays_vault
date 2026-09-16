@@ -160,6 +160,12 @@ El retrieval usa referencias funcionales y `conversation_id`; no descarta candid
 
 La persistencia está dentro de `transaction.atomic(using=...)`. La evidencia se publica en `CandidateRetrievalSession` mediante `transaction.on_commit(..., using=...)`; rollback de la transacción o savepoint descarta el callback. Las consultas ORM y callbacks quedan ligados al mismo alias. Las claves únicas y `get_or_create` respaldan reintentos por `(source_mailbox, external_message_id)` y `(case, email)`.
 
+## Ciclo de vida operativo — Fase F.1
+
+`ExceptionCase.status` conserva `PENDING` únicamente por compatibilidad histórica; no se usa como destino de nuevas transiciones. Los nuevos casos nacen en `OPEN`. El flujo operativo permitido es `OPEN → IN_PROGRESS/WAITING`, `IN_PROGRESS → WAITING/RESOLVED`, `WAITING → IN_PROGRESS/RESOLVED`, `RESOLVED → CLOSED/IN_PROGRESS` y `CLOSED → IN_PROGRESS`. La transición desde `PENDING` a `IN_PROGRESS` es la única salida legacy permitida. Resolver exige motivo; reabrir exige motivo y limpia `resolved_at`, que representa la resolución actual. Cerrar registra `closed_at` y solo es posible desde `RESOLVED`.
+
+Las transiciones se ejecutan mediante `email_exceptions.case_workflow.transition_case`, que valida `operate_email_exceptions`, recupera el caso con bloqueo de fila dentro de `transaction.atomic(using=...)` y crea `CaseActivity` en la misma transacción. `CaseActivity` es auditoría del ciclo de vida y no reemplaza `CaseMessage` (comunicaciones) ni `EmailAuditEvent` (acciones de una excepción). F.1 no registra automáticamente `CASE_CREATED` durante ingestión ni modifica la correlación; la llegada de correos sobre casos `RESOLVED` o `CLOSED` conserva la política actual y queda pendiente de una fase posterior.
+
 ## Backfill histórico aislado
 
 `email_exceptions_backfill` es una herramienta explícita de importación histórica. Sin `--persist` opera como dry-run transaccional que revierte; con `--persist` exige un alias distinto de `default` y valida que la base física no coincida con la predeterminada. Acepta `--offset`/`--limit`, procesa en orden estable y usa una sola `CandidateRetrievalSession` por ejecución. No llama servicios externos ni Zoho. En local se conserva el alias configurable `backfill` (SQLite mediante `BACKFILL_SQLITE_PATH` o PostgreSQL mediante variables dedicadas `BACKFILL_DB_*`); aliases temporales de validación no forman parte de settings.

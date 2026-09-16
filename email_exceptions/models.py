@@ -60,7 +60,10 @@ class ExceptionCase(models.Model):
     class Status(models.TextChoices):
         OPEN = "OPEN", "Abierto"
         PENDING = "PENDING", "Pendiente"
+        IN_PROGRESS = "IN_PROGRESS", "En gestión"
+        WAITING = "WAITING", "En espera"
         RESOLVED = "RESOLVED", "Resuelto"
+        CLOSED = "CLOSED", "Cerrado"
 
     class Scope(models.TextChoices):
         CASE = "CASE", "Caso"
@@ -78,6 +81,7 @@ class ExceptionCase(models.Model):
     opened_at = models.DateTimeField()
     last_activity_at = models.DateTimeField()
     resolved_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -88,6 +92,27 @@ class ExceptionCase(models.Model):
             models.Index(fields=("organization", "event_type")),
             models.Index(fields=("scope", "status")),
         ]
+
+
+class CaseActivity(models.Model):
+    class EventType(models.TextChoices):
+        CASE_CREATED = "CASE_CREATED", "Caso creado"
+        STATUS_CHANGED = "STATUS_CHANGED", "Estado cambiado"
+        RESOLVED = "RESOLVED", "Caso resuelto"
+        CLOSED = "CLOSED", "Caso cerrado"
+        REOPENED = "REOPENED", "Caso reabierto"
+
+    case = models.ForeignKey(ExceptionCase, related_name="activities", on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=24, choices=EventType.choices)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="email_case_activities")
+    created_at = models.DateTimeField(auto_now_add=True)
+    from_status = models.CharField(max_length=12, blank=True)
+    to_status = models.CharField(max_length=12, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+        indexes = [models.Index(fields=("case", "created_at"))]
 
 
 class CaseMessage(models.Model):

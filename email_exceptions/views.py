@@ -11,6 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import CreateTaskForm, IgnoreExceptionForm
 from .models import CaseMessage, EmailException, ExceptionCase
+from .case_workflow import CaseTransitionError, transition_case
 from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
 from .zoho import create_exception_task, responsible_options, task_creation_available
@@ -152,6 +153,25 @@ def case_detail(request, pk):
         "case_messages": case_messages,
         "exception_items": exception_items,
     })
+
+
+@require_POST
+def transition_case_view(request, pk):
+    if not can_operate(getattr(request, "user", None)):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+    try:
+        transition_case(
+            pk,
+            request.POST.get("status"),
+            actor=request.user,
+            reason=request.POST.get("reason", ""),
+            comment=request.POST.get("comment", ""),
+        )
+    except CaseTransitionError as exc:
+        messages.error(request, str(exc))
+        return redirect("email_exceptions:case_detail", pk=pk)
+    messages.success(request, "Estado del caso actualizado.")
+    return redirect("email_exceptions:case_detail", pk=pk)
 
 @require_POST
 def ignore_exception(request, pk):
