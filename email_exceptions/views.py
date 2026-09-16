@@ -1,8 +1,9 @@
 import hmac, json, logging
+from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.contrib import messages
 from django.core.paginator import Paginator
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Case, CharField, Count, IntegerField, Prefetch, Q, Value, When
 from django.http import JsonResponse
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -43,6 +44,32 @@ def _token_ok(request):
     supplied = request.headers.get("X-Email-Exceptions-Token", "")
     return bool(expected and supplied and hmac.compare_digest(expected, supplied))
 
+
+_ACTIVE_CASE_STATUSES = (
+    ExceptionCase.Status.OPEN,
+    ExceptionCase.Status.PENDING,
+    ExceptionCase.Status.IN_PROGRESS,
+    ExceptionCase.Status.WAITING,
+)
+
+
+def _today_window():
+    start = timezone.make_aware(datetime.combine(timezone.localdate(), time.min))
+    return start, start + timedelta(days=1)
+
+
+def _quick_view_filter(qs, quick, *, user, now, today_start, tomorrow_start):
+    active = Q(status__in=_ACTIVE_CASE_STATUSES)
+    if quick == "mine":
+        return qs.filter(assigned_to_id=user.pk)
+    if quick == "unassigned":
+        return qs.filter(assigned_to__isnull=True)
+    if quick == "overdue":
+        return qs.filter(active, follow_up_at__lt=now)
+    if quick == "today":
+        return qs.filter(active, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start)
+    return qs
+
 @csrf_exempt
 @require_POST
 def inbound(request):
@@ -64,10 +91,30 @@ def inbound(request):
 def exception_list(request):
     if not can_view(getattr(request, "user", None)):
         return HttpResponseForbidden("No tiene permiso para consultar Excepciones de Correo.")
-    qs = ExceptionCase.objects.annotate(
+    now = timezone.now()
+    today_start, tomorrow_start = _today_window()
+    population = ExceptionCase.objects.all()
+    quick = request.GET.get("quick", "all").strip()
+    if quick not in {"all", "mine", "unassigned", "overdue", "today"}:
+        quick = "all"
+    qs = ExceptionCase.objects.select_related("assigned_to").annotate(
         message_count=Count("messages", distinct=True),
         exception_count=Count("exceptions", distinct=True),
+        follow_up_bucket=Case(
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__lt=now, then=Value("overdue")),
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start, then=Value("today")),
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__isnull=False, then=Value("future")),
+            default=Value("none"), output_field=CharField(),
+        ),
+        operational_order=Case(
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__lt=now, then=Value(0)),
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start, then=Value(1)),
+            When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__isnull=False, then=Value(2)),
+            When(status__in=_ACTIVE_CASE_STATUSES, then=Value(3)),
+            default=Value(4), output_field=IntegerField(),
+        ),
     )
+    qs = _quick_view_filter(qs, quick, user=request.user, now=now, today_start=today_start, tomorrow_start=tomorrow_start)
     case_status = request.GET.get("case_status", "").strip()
     if case_status in ExceptionCase.Status.values:
         qs = qs.filter(status=case_status)
@@ -81,6 +128,9 @@ def exception_list(request):
     action_type = request.GET.get("action_type", "").strip()
     if action_type:
         qs = qs.filter(action_type=action_type)
+    assigned_to = request.GET.get("assigned_to", "").strip()
+    if assigned_to.isdigit():
+        qs = qs.filter(assigned_to_id=int(assigned_to))
     query = request.GET.get("q", "").strip()
     if query:
         qs = qs.filter(
@@ -94,15 +144,32 @@ def exception_list(request):
             | Q(exceptions__last_subject__icontains=query)
             | Q(exceptions__exception_reason__icontains=query)
         )
-    qs = qs.distinct().order_by("-last_activity_at", "-pk")
+    qs = qs.distinct().order_by("operational_order", "follow_up_at", "-last_activity_at", "-pk")
     page_obj = Paginator(qs, 50).get_page(request.GET.get("page"))
     filters = request.GET.copy()
     filters.pop("page", None)
+    quick_counts = {
+        "all": population.count(),
+        "mine": population.filter(assigned_to_id=request.user.pk).count(),
+        "unassigned": population.filter(assigned_to__isnull=True).count(),
+        "overdue": population.filter(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__lt=now).count(),
+        "today": population.filter(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start).count(),
+    }
+    quick_views = (
+        {"key": "all", "label": "Todos", "count": quick_counts["all"]},
+        {"key": "mine", "label": "Mis casos", "count": quick_counts["mine"]},
+        {"key": "unassigned", "label": "Sin asignar", "count": quick_counts["unassigned"]},
+        {"key": "overdue", "label": "Seguimiento vencido", "count": quick_counts["overdue"]},
+        {"key": "today", "label": "Seguimiento hoy", "count": quick_counts["today"]},
+    )
     return render(request, "email_exceptions/list.html", {
         "page_obj": page_obj,
         "cases": page_obj.object_list,
         "filters_query": filters.urlencode(),
-        "counts": {status: EmailException.objects.filter(status=status).count() for status, _ in EmailException.STATUS_CHOICES},
+        "quick": quick,
+        "quick_counts": quick_counts,
+        "quick_views": quick_views,
+        "assignable_operators": get_assignable_operators(),
         "case_status_choices": ExceptionCase.Status.choices,
         "exception_status_choices": EmailException.STATUS_CHOICES,
         "action_types": ExceptionCase.objects.exclude(action_type="").values_list("action_type", flat=True).distinct().order_by("action_type"),

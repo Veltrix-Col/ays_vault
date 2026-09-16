@@ -11,6 +11,66 @@
   margin: 20px 0 22px;
 }
 
+.email-exceptions-page .email-case-quick-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 4px;
+}
+
+.email-exceptions-page .email-case-quick-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid var(--ays-border, var(--line));
+  border-radius: 999px;
+  background: var(--ays-surface, #fff);
+  color: var(--ays-muted, var(--muted));
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.email-exceptions-page .email-case-quick-link span {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #edf3f8;
+  color: var(--ays-primary-dark, var(--navy));
+  text-align: center;
+}
+
+.email-exceptions-page .email-case-quick-link:hover,
+.email-exceptions-page .email-case-quick-link.active {
+  border-color: var(--ays-primary, var(--blue));
+  background: #f2f7fc;
+  color: var(--ays-primary-strong, var(--blue-dark));
+}
+
+.email-exceptions-page .email-follow-up {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.email-exceptions-page .email-follow-up--overdue {
+  color: #b22c39;
+  font-weight: 800;
+}
+
+.email-exceptions-page .email-follow-up--today {
+  color: #875c00;
+  font-weight: 800;
+}
+
+.email-exceptions-page .email-follow-up--future {
+  color: var(--ays-primary-strong, var(--blue-dark));
+}
+
+.email-exceptions-page .muted {
+  color: var(--ays-muted, var(--muted));
+}
+
 .email-exceptions-page .metric-card,
 .email-exceptions-page .panel {
   background: var(--ays-surface, #fff);
