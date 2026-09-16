@@ -6,7 +6,7 @@ from django.test.utils import CaptureQueriesContext
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from email_exceptions.models import CaseMessage, EmailAuditEvent, EmailException, EmailExceptionMessage, ExceptionCase, InboundEmail
+from email_exceptions.models import CaseActivity, CaseMessage, EmailAuditEvent, EmailException, EmailExceptionMessage, ExceptionCase, InboundEmail
 
 
 class EmailExceptionsTemplateTests(TestCase):
@@ -135,7 +135,7 @@ class EmailExceptionsTemplateTests(TestCase):
         self.assertContains(response, reverse("email_exceptions:detail", args=[self.exception.pk]))
         self.assertContains(response, "Contenido sintético.")
 
-    def test_case_timeline_displays_roles_correlation_and_separate_exception_audit(self):
+    def test_case_timeline_displays_roles_correlation_and_consolidated_exception_events(self):
         for index, role, method, confidence, reason in (
             (2, CaseMessage.Role.FOLLOW_UP, CaseMessage.CorrelationMethod.FUNCTIONAL_ID, CaseMessage.CorrelationConfidence.HIGH, "Identificador funcional coincidente"),
             (3, CaseMessage.Role.RESOLUTION, CaseMessage.CorrelationMethod.CONVERSATION, CaseMessage.CorrelationConfidence.HIGH, "Conversación coincidente"),
@@ -159,8 +159,8 @@ class EmailExceptionsTemplateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         for label in ("Apertura", "Seguimiento", "Resolución", "Contexto", "Alta · HIGH", "Media", "Identificador funcional coincidente", "Conversación coincidente", "Contexto descriptivo"):
             self.assertContains(response, label)
-        self.assertContains(response, "Auditoría de la excepción")
-        self.assertContains(response, "IGNORED")
+        self.assertContains(response, "Evento de excepción")
+        self.assertContains(response, "Excepción ignorada")
         self.assertEqual(response.content.count(b"Comprobante de pago BEMSA"), 1)
         self.assertContains(response, "Cuerpo FOLLOW_UP.")
 
@@ -181,6 +181,32 @@ class EmailExceptionsTemplateTests(TestCase):
         response = self.client.get(reverse("email_exceptions:case_detail", args=[self.case.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.count(b"no debe interpretarse como una fusi"), 2)
+
+    def test_case_detail_consolidates_operational_activity_without_raw_metadata(self):
+        CaseActivity.objects.create(
+            case=self.case,
+            event_type=CaseActivity.EventType.STATUS_CHANGED,
+            actor=self.user,
+            from_status=ExceptionCase.Status.OPEN,
+            to_status=ExceptionCase.Status.IN_PROGRESS,
+            metadata={"reason": "Revisión iniciada", "comment": "Tomado por analista"},
+        )
+        CaseActivity.objects.create(
+            case=self.case,
+            event_type=CaseActivity.EventType.NOTE_ADDED,
+            actor=self.user,
+            metadata={"note": "Solicitar soporte al remitente"},
+        )
+        response = self.client.get(reverse("email_exceptions:case_detail", args=[self.case.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cronología consolidada")
+        self.assertContains(response, "Actividad")
+        self.assertContains(response, "Estado: Abierto → En gestión.")
+        self.assertContains(response, "Nota interna.")
+        self.assertContains(response, "Solicitar soporte al remitente")
+        self.assertNotContains(response, '"from_user_id"')
+        self.assertNotContains(response, '"reason"')
 
     def test_case_list_has_one_row_for_case_and_paginates(self):
         for index in range(205):

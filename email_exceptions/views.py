@@ -11,7 +11,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import CaseFollowUpForm, CaseNoteForm, CreateTaskForm, IgnoreExceptionForm
-from .models import CaseMessage, EmailException, ExceptionCase
+from .models import CaseActivity, CaseMessage, EmailAuditEvent, EmailException, ExceptionCase
 from .case_workflow import CaseOperationError, CaseTransitionError, add_case_note, assign_case, get_assignable_operators, take_case, transition_case, unassign_case, update_case_follow_up
 from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
@@ -188,9 +188,15 @@ def case_detail(request, pk):
     if not can_view(getattr(request, "user", None)):
         return HttpResponseForbidden("No tiene permiso para consultar Excepciones de Correo.")
     messages_qs = CaseMessage.objects.select_related("email", "linked_by").order_by("email__received_at", "pk")
-    exception_qs = EmailException.objects.select_related("policy_profile").prefetch_related("audit_events", "zoho_task")
+    exception_qs = EmailException.objects.select_related("policy_profile").prefetch_related(
+        Prefetch("audit_events", queryset=EmailAuditEvent.objects.select_related("actor").order_by("timestamp", "pk")),
+        "zoho_task",
+    )
     case = get_object_or_404(
-        ExceptionCase.objects.select_related("assigned_to").prefetch_related(
+        ExceptionCase.objects.select_related("assigned_to").annotate(
+            message_count=Count("messages", distinct=True),
+            exception_count=Count("exceptions", distinct=True),
+        ).prefetch_related(
             Prefetch("messages", queryset=messages_qs),
             Prefetch("exceptions", queryset=exception_qs),
             "activities__actor",
@@ -203,6 +209,62 @@ def case_detail(request, pk):
     }
     case_messages = list(case.messages.all())
     timeline_email_ids = {link.email_id for link in case_messages}
+    status_labels = dict(ExceptionCase.Status.choices)
+    timeline = [
+        {
+            "kind": "message",
+            "timestamp": link.email.received_at,
+            "sequence": (0, link.pk),
+            "message": link,
+        }
+        for link in case_messages
+    ]
+    activity_labels = {
+        CaseActivity.EventType.CASE_CREATED: "Caso creado.",
+        CaseActivity.EventType.STATUS_CHANGED: "Estado: {from_status} → {to_status}.",
+        CaseActivity.EventType.RESOLVED: "Caso resuelto.",
+        CaseActivity.EventType.CLOSED: "Caso cerrado.",
+        CaseActivity.EventType.REOPENED: "Caso reabierto.",
+        CaseActivity.EventType.ASSIGNED: "Responsable asignado.",
+        CaseActivity.EventType.REASSIGNED: "Responsable reasignado.",
+        CaseActivity.EventType.UNASSIGNED: "Responsable retirado.",
+        CaseActivity.EventType.FOLLOW_UP_UPDATED: "Seguimiento actualizado.",
+        CaseActivity.EventType.NOTE_ADDED: "Nota interna.",
+    }
+    for activity in case.activities.all():
+        if activity.event_type == CaseActivity.EventType.STATUS_CHANGED:
+            summary = activity_labels[activity.event_type].format(
+                from_status=status_labels.get(activity.from_status, activity.from_status or "—"),
+                to_status=status_labels.get(activity.to_status, activity.to_status or "—"),
+            )
+        else:
+            summary = activity_labels.get(activity.event_type, "Actividad operativa registrada.")
+        timeline.append({
+            "kind": "activity",
+            "timestamp": activity.created_at,
+            "sequence": (1, activity.pk),
+            "activity": activity,
+            "summary": summary,
+        })
+    audit_labels = {
+        "EMAIL_RECEIVED": "Correo recibido",
+        "CLASSIFIED": "Clasificación registrada",
+        "EXCEPTION_CREATED": "Excepción creada",
+        "EMAIL_LINKED": "Correo vinculado",
+        "IGNORED": "Excepción ignorada",
+        "TASK_CREATED": "Tarea Zoho registrada",
+    }
+    for item in case.exceptions.all():
+        for event in item.audit_events.all():
+            timeline.append({
+                "kind": "exception_event",
+                "timestamp": event.timestamp,
+                "sequence": (2, event.pk),
+                "audit_event": event,
+                "exception": item,
+                "summary": audit_labels.get(event.event_type, event.event_type.replace("_", " ").title()),
+            })
+    timeline.sort(key=lambda event: (event["timestamp"], event["sequence"]))
     exception_items = []
     for item in case.exceptions.all():
         prefix = f"exception-{item.pk}"
@@ -219,6 +281,7 @@ def case_detail(request, pk):
     return render(request, "email_exceptions/case_detail.html", {
         "case": case,
         "case_messages": case_messages,
+        "timeline": timeline,
         "exception_items": exception_items,
         "assignable_operators": get_assignable_operators() if can_operate(getattr(request, "user", None)) else (),
         "follow_up_form": CaseFollowUpForm(initial={"next_action": case.next_action, "follow_up_at": case.follow_up_at}),

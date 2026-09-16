@@ -466,6 +466,33 @@
   gap: 14px;
 }
 
+.email-exceptions-page .case-header-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 16px 0 0;
+}
+
+.email-exceptions-page .case-header-facts div {
+  display: grid;
+  gap: 3px;
+  min-width: 105px;
+}
+
+.email-exceptions-page .case-header-facts dt {
+  color: var(--ays-muted, var(--muted));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.email-exceptions-page .case-header-facts dd {
+  margin: 0;
+  color: var(--ays-text, var(--ink));
+  font-size: 13px;
+}
+
 .email-exceptions-page .case-message-card,
 .email-exceptions-page .case-exception-card {
   padding: 18px;
@@ -473,6 +500,51 @@
   border-radius: 12px;
   background: #fff;
   box-shadow: 0 3px 12px rgb(28 45 72 / 5%);
+}
+
+.email-exceptions-page .case-consolidated-timeline > .case-timeline-entry {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.email-exceptions-page .case-timeline-type {
+  padding-top: 12px;
+  color: var(--ays-muted, var(--muted));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.email-exceptions-page .case-activity-entry,
+.email-exceptions-page .case-exception-event {
+  padding: 14px 16px;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.email-exceptions-page .case-activity-entry header,
+.email-exceptions-page .case-exception-event header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  color: var(--ays-muted, var(--muted));
+  font-size: .85rem;
+}
+
+.email-exceptions-page .case-activity-entry p,
+.email-exceptions-page .case-exception-event p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.email-exceptions-page .case-timeline-entry--exception .case-exception-event {
+  background: #fffaf0;
+  border-color: #f0dfb3;
 }
 
 .email-exceptions-page .case-message-heading,
@@ -559,6 +631,8 @@
   .email-exceptions-page .case-message-heading,
   .email-exceptions-page .case-exception-card > header { flex-direction: column; }
   .email-exceptions-page .case-exception-actions { display: grid; }
+  .email-exceptions-page .case-consolidated-timeline > .case-timeline-entry { grid-template-columns: 1fr; gap: 0; }
+  .email-exceptions-page .case-timeline-type { padding: 8px 0 0; }
 }
 
 @media (max-width: 767px) {
