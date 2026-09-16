@@ -1,18 +1,30 @@
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from email_exceptions.models import EmailException, EmailExceptionMessage, InboundEmail
+from email_exceptions.models import CaseMessage, EmailAuditEvent, EmailException, EmailExceptionMessage, ExceptionCase, InboundEmail
 
 
 class EmailExceptionsTemplateTests(TestCase):
     def setUp(self):
+        self.user = get_user_model().objects.create_user(username="email-viewer")
+        self.user.user_permissions.add(
+            Permission.objects.get(content_type__app_label="email_exceptions", codename="view_email_exceptions_operational")
+        )
+        self.client.force_login(self.user)
         email = InboundEmail.objects.create(source_mailbox="comunicaciones@segurosays.com", external_message_id="template-test-1", received_at="2026-09-12T10:32:00Z", from_name="Remitente sintético", from_email="pagos@bemsa.com.co", subject="Comprobante de pago BEMSA", body_text="Contenido sintético.")
-        self.exception = EmailException.objects.create(primary_email=email, last_subject=email.subject, organization="BEMSA", family="CARTERA_ARRENDAMIENTO", event_type="COMPROBANTE_PAGO", exception_reason="Se recibió un comprobante de pago que requiere revisión.", rule_id="BEMSA_COMPROBANTE_PAGO_V1")
+        self.case = ExceptionCase.objects.create(case_key="case-template-test", organization="BEMSA", family="CARTERA_ARRENDAMIENTO", event_type="COMPROBANTE_PAGO", opened_at=email.received_at, last_activity_at=email.received_at)
+        self.exception = EmailException.objects.create(primary_email=email, case=self.case, last_subject=email.subject, organization="BEMSA", family="CARTERA_ARRENDAMIENTO", event_type="COMPROBANTE_PAGO", exception_reason="Se recibió un comprobante de pago que requiere revisión.", rule_id="BEMSA_COMPROBANTE_PAGO_V1")
         EmailExceptionMessage.objects.create(exception=self.exception, email=email)
+        CaseMessage.objects.create(case=self.case, email=email, role=CaseMessage.Role.OPENING, correlation_method=CaseMessage.CorrelationMethod.NEW_CASE, correlation_confidence=CaseMessage.CorrelationConfidence.LOW, correlation_reason="Apertura del caso")
 
     def test_list_uses_operational_banco_layout_and_filters(self):
-        response = self.client.get(reverse("email_exceptions:list"), {"q": "BEMSA", "status": "PENDING", "organization": "BEMSA"})
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(reverse("email_exceptions:list"), {"q": "BEMSA", "status": "PENDING", "organization": "BEMSA"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "/static/css/email-exceptions.css")
         self.assertContains(response, 'class="email-exceptions-page"')
@@ -23,8 +35,11 @@ class EmailExceptionsTemplateTests(TestCase):
         self.assertNotContains(response, "CardManager")
         self.assertContains(response, "metric-grid four")
         self.assertContains(response, "email-exception-table")
-        self.assertContains(response, "Correos para gestionar")
+        self.assertContains(response, "Bandeja operativa por caso")
+        self.assertContains(response, reverse("email_exceptions:case_detail", args=[self.case.pk]))
         self.assertContains(response, "Aplicar filtros")
+        self.assertTrue(captured)
+        self.assertFalse(any("body_text" in query["sql"].lower() for query in captured))
 
     def test_detail_uses_module_stylesheet_and_operational_ui(self):
         response = self.client.get(reverse("email_exceptions:detail", args=[self.exception.pk]))
@@ -105,6 +120,78 @@ class EmailExceptionsTemplateTests(TestCase):
         stylesheet = (settings.BASE_DIR / "static" / "css" / "email-exceptions.css").read_text(encoding="utf-8")
         self.assertIn(".email-exceptions-page", stylesheet)
         self.assertIn("background: #fff", stylesheet)
-        self.assertNotIn("body {", stylesheet)
+        self.assertNotRegex(stylesheet, r"(?m)^body\s*\{")
         self.assertNotIn(":root", stylesheet)
         self.assertNotIn("linear-gradient", stylesheet)
+
+    def test_case_detail_renders_case_timeline_and_linked_exception_once(self):
+        response = self.client.get(reverse("email_exceptions:case_detail", args=[self.case.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Historia del caso")
+        self.assertContains(response, "Apertura")
+        self.assertContains(response, "Caso nuevo")
+        self.assertContains(response, "Apertura del caso")
+        self.assertContains(response, "Excepciones asociadas")
+        self.assertContains(response, reverse("email_exceptions:detail", args=[self.exception.pk]))
+        self.assertContains(response, "Contenido sintético.")
+
+    def test_case_timeline_displays_roles_correlation_and_separate_exception_audit(self):
+        for index, role, method, confidence, reason in (
+            (2, CaseMessage.Role.FOLLOW_UP, CaseMessage.CorrelationMethod.FUNCTIONAL_ID, CaseMessage.CorrelationConfidence.HIGH, "Identificador funcional coincidente"),
+            (3, CaseMessage.Role.RESOLUTION, CaseMessage.CorrelationMethod.CONVERSATION, CaseMessage.CorrelationConfidence.HIGH, "Conversación coincidente"),
+            (4, CaseMessage.Role.CONTEXT, CaseMessage.CorrelationMethod.STRUCTURED, CaseMessage.CorrelationConfidence.MEDIUM, "Contexto descriptivo"),
+        ):
+            email = InboundEmail.objects.create(
+                source_mailbox="comunicaciones@segurosays.com",
+                external_message_id=f"template-case-message-{index}",
+                received_at=f"2026-09-12T10:{index:02d}:00Z",
+                subject=f"Evidencia {role}",
+                body_text=f"Cuerpo {role}.",
+            )
+            CaseMessage.objects.create(
+                case=self.case, email=email, role=role, correlation_method=method,
+                correlation_confidence=confidence, correlation_reason=reason,
+            )
+        EmailAuditEvent.objects.create(exception=self.exception, event_type="IGNORED", actor=self.user)
+
+        response = self.client.get(reverse("email_exceptions:case_detail", args=[self.case.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        for label in ("Apertura", "Seguimiento", "Resolución", "Contexto", "Alta · HIGH", "Media", "Identificador funcional coincidente", "Conversación coincidente", "Contexto descriptivo"):
+            self.assertContains(response, label)
+        self.assertContains(response, "Auditoría de la excepción")
+        self.assertContains(response, "IGNORED")
+        self.assertEqual(response.content.count(b"Comprobante de pago BEMSA"), 1)
+        self.assertContains(response, "Cuerpo FOLLOW_UP.")
+
+    def test_case_detail_warns_on_conflict_and_ambiguity_without_recomputing(self):
+        for index, reason in enumerate(("conflicting_functional_identifiers", "ambiguous_multiple_candidates"), start=5):
+            email = InboundEmail.objects.create(
+                source_mailbox="comunicaciones@segurosays.com",
+                external_message_id=f"template-case-warning-{index}",
+                received_at="2026-09-12T11:00:00Z",
+                subject=f"Evidencia {index}",
+            )
+            CaseMessage.objects.create(
+                case=self.case, email=email, role=CaseMessage.Role.FOLLOW_UP,
+                correlation_method=CaseMessage.CorrelationMethod.NEW_CASE,
+                correlation_confidence=CaseMessage.CorrelationConfidence.LOW,
+                correlation_reason=reason,
+            )
+        response = self.client.get(reverse("email_exceptions:case_detail", args=[self.case.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.count(b"no debe interpretarse como una fusi"), 2)
+
+    def test_case_list_has_one_row_for_case_and_paginates(self):
+        for index in range(205):
+            email = InboundEmail.objects.create(source_mailbox="comunicaciones@segurosays.com", external_message_id=f"template-page-{index}", received_at="2026-09-12T10:32:00Z", subject=f"Caso adicional {index}")
+            case = ExceptionCase.objects.create(case_key=f"case-page-{index}", organization="BEMSA", opened_at=email.received_at, last_activity_at=email.received_at)
+            CaseMessage.objects.create(case=case, email=email, role=CaseMessage.Role.OPENING, correlation_method=CaseMessage.CorrelationMethod.NEW_CASE, correlation_confidence=CaseMessage.CorrelationConfidence.LOW)
+        response = self.client.get(reverse("email_exceptions:list"), {"organization": "BEMSA"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["page_obj"].paginator.count, 206)
+        self.assertEqual(len(response.context["cases"]), 50)
+        response = self.client.get(reverse("email_exceptions:list"), {"page": 2, "organization": "BEMSA"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["cases"]), 50)
+        self.assertContains(response, "organization=BEMSA&amp;page=1")

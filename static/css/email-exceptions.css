@@ -378,6 +378,115 @@
   margin-top: 10px;
 }
 
+.email-exceptions-page .case-key {
+  display: block;
+  color: var(--ays-muted, #65748b);
+  overflow-wrap: anywhere;
+}
+
+.email-exceptions-page .email-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.email-exceptions-page .case-summary-panel,
+.email-exceptions-page .case-timeline-panel,
+.email-exceptions-page .case-exceptions-panel {
+  margin-top: 18px;
+}
+
+.email-exceptions-page .case-message-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 20px 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.email-exceptions-page .case-message-card,
+.email-exceptions-page .case-exception-card {
+  padding: 18px;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgb(28 45 72 / 5%);
+}
+
+.email-exceptions-page .case-message-heading,
+.email-exceptions-page .case-exception-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.email-exceptions-page .case-message-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.email-exceptions-page .case-message-heading time,
+.email-exceptions-page .case-exception-meta {
+  color: var(--ays-muted, #65748b);
+  font-size: .9rem;
+}
+
+.email-exceptions-page .case-message-card h3,
+.email-exceptions-page .case-exception-card h3 {
+  overflow-wrap: anywhere;
+}
+
+.email-exceptions-page .correlation-badge,
+.email-exceptions-page .case-role-badge {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #edf3fb;
+  color: #244f83;
+  font-size: .8rem;
+  font-weight: 700;
+}
+
+.email-exceptions-page .correlation-high { background: #e7f5ed; color: #17643c; }
+.email-exceptions-page .correlation-medium { background: #fff4dc; color: #79520a; }
+.email-exceptions-page .correlation-low { background: #f0f1f3; color: #535c69; }
+
+.email-exceptions-page .case-correlation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f6f8fb;
+  color: #33445c;
+}
+
+.email-exceptions-page .case-correlation p { flex-basis: 100%; margin: 0; }
+.email-exceptions-page .case-correlation-warning {
+  padding: 10px 12px;
+  border-left: 3px solid #d19a25;
+  background: #fff8e8;
+  color: #684c13;
+}
+
+.email-exceptions-page .case-email-body { margin-top: 14px; }
+.email-exceptions-page .case-email-body summary { color: var(--ays-primary, #245c99); cursor: pointer; font-weight: 700; }
+.email-exceptions-page .case-exceptions-panel > .case-exception-card { margin: 0 20px 16px; }
+.email-exceptions-page .case-exception-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.email-exceptions-page .case-audit-timeline { margin: 18px 0 0; }
+.email-exceptions-page .case-audit-heading { margin: 20px 20px 0; color: #33445c; font-size: 1rem; }
+
+@media (max-width: 767px) {
+  .email-exceptions-page .email-pagination { flex-wrap: wrap; }
+  .email-exceptions-page .case-message-heading,
+  .email-exceptions-page .case-exception-card > header { flex-direction: column; }
+  .email-exceptions-page .case-exception-actions { display: grid; }
+}
+
 @media (max-width: 767px) {
   .email-exceptions-page .email-exception-filter-form {
     display: grid;

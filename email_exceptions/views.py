@@ -1,41 +1,25 @@
 import hmac, json, logging
 from django.conf import settings
 from django.contrib import messages
-from django.db.models import Q
+from django.core.paginator import Paginator
+from django.db.models import Count, Prefetch, Q
 from django.http import JsonResponse
+from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import CreateTaskForm, IgnoreExceptionForm
-from .models import EmailException
+from .models import CaseMessage, EmailException, ExceptionCase
+from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
-from .zoho import create_exception_task, responsible_options
-from vault.models import UserProfile
+from .zoho import create_exception_task, responsible_options, task_creation_available
 
 logger = logging.getLogger("email_exceptions")
-OPERATORS = ("ADMIN", "LEADER", "ANALYST")
 
 
-def _operator_allowed(request):
-    delegated = getattr(request, "delegated_access", None)
-    if (
-        getattr(delegated, "allowed", False)
-        and getattr(request, "inherited_tool_application", "") == "email_exceptions"
-    ):
-        return True
-    user = getattr(request, "user", None)
-    if not user or not user.is_authenticated or not user.is_active:
-        return False
-    try:
-        profile = user.vault_profile
-    except UserProfile.DoesNotExist:
-        return False
-    return profile.active and profile.role in OPERATORS
-
-
-def _task_form(*, data=None, initial=None):
-    form = CreateTaskForm(data=data, initial=initial)
+def _task_form(*, data=None, initial=None, prefix=None):
+    form = CreateTaskForm(data=data, initial=initial, prefix=prefix)
     try:
         options = responsible_options()
         form.fields["responsible"].choices = [
@@ -44,6 +28,14 @@ def _task_form(*, data=None, initial=None):
     except Exception:
         form.fields["responsible"].choices = ()
     return form
+
+
+def _task_action_available(request, item):
+    return bool(
+        can_operate(getattr(request, "user", None))
+        and item.status == EmailException.PENDING
+        and task_creation_available()
+    )
 
 def _token_ok(request):
     expected = str(getattr(settings, "EMAIL_EXCEPTIONS_INBOUND_TOKEN", "") or "")
@@ -69,23 +61,105 @@ def inbound(request):
     return JsonResponse({"ok": True, "created": created, "email_id": email.pk, "exception_id": exception.pk if exception else None, "status": exception.status if exception else "IGNORED"}, status=201 if created else 200)
 
 def exception_list(request):
-    qs = EmailException.objects.select_related("primary_email", "policy_profile")
-    for key in ("status", "organization"):
-        if request.GET.get(key): qs = qs.filter(**{key: request.GET[key]})
-    if request.GET.get("q"): qs = qs.filter(Q(last_subject__icontains=request.GET["q"]) | Q(exception_reason__icontains=request.GET["q"]) | Q(primary_email__from_email__icontains=request.GET["q"]))
-    return render(request, "email_exceptions/list.html", {"exceptions": qs[:200], "counts": {status: EmailException.objects.filter(status=status).count() for status in ("PENDING", "MANAGED", "IGNORED", "ERROR")}})
+    if not can_view(getattr(request, "user", None)):
+        return HttpResponseForbidden("No tiene permiso para consultar Excepciones de Correo.")
+    qs = ExceptionCase.objects.annotate(
+        message_count=Count("messages", distinct=True),
+        exception_count=Count("exceptions", distinct=True),
+    )
+    case_status = request.GET.get("case_status", "").strip()
+    if case_status in ExceptionCase.Status.values:
+        qs = qs.filter(status=case_status)
+    # Keep the former status=... query parameter working for bookmarked inbox URLs.
+    exception_status = request.GET.get("exception_status", request.GET.get("status", "")).strip()
+    if exception_status in {value for value, _label in EmailException.STATUS_CHOICES}:
+        qs = qs.filter(exceptions__status=exception_status)
+    organization = request.GET.get("organization", "").strip()
+    if organization:
+        qs = qs.filter(organization__icontains=organization)
+    action_type = request.GET.get("action_type", "").strip()
+    if action_type:
+        qs = qs.filter(action_type=action_type)
+    query = request.GET.get("q", "").strip()
+    if query:
+        qs = qs.filter(
+            Q(case_key__icontains=query)
+            | Q(organization__icontains=query)
+            | Q(family__icontains=query)
+            | Q(event_type__icontains=query)
+            | Q(action_type__icontains=query)
+            | Q(messages__email__subject__icontains=query)
+            | Q(messages__email__from_email__icontains=query)
+            | Q(exceptions__last_subject__icontains=query)
+            | Q(exceptions__exception_reason__icontains=query)
+        )
+    qs = qs.distinct().order_by("-last_activity_at", "-pk")
+    page_obj = Paginator(qs, 50).get_page(request.GET.get("page"))
+    filters = request.GET.copy()
+    filters.pop("page", None)
+    return render(request, "email_exceptions/list.html", {
+        "page_obj": page_obj,
+        "cases": page_obj.object_list,
+        "filters_query": filters.urlencode(),
+        "counts": {status: EmailException.objects.filter(status=status).count() for status, _ in EmailException.STATUS_CHOICES},
+        "case_status_choices": ExceptionCase.Status.choices,
+        "exception_status_choices": EmailException.STATUS_CHOICES,
+        "action_types": ExceptionCase.objects.exclude(action_type="").values_list("action_type", flat=True).distinct().order_by("action_type"),
+    })
 
 def exception_detail(request, pk):
+    if not can_view(getattr(request, "user", None)):
+        return HttpResponseForbidden("No tiene permiso para consultar Excepciones de Correo.")
     item = get_object_or_404(EmailException.objects.select_related("primary_email", "policy_profile").prefetch_related("messages__email", "audit_events"), pk=pk)
-    task_form = _task_form(initial={"subject": item.last_subject, "description": item.exception_reason})
-    return render(request, "email_exceptions/detail.html", {"item": item, "ignore_form": IgnoreExceptionForm(), "task_form": task_form, "email_task_write_enabled": getattr(settings, "EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED", False)})
+    task_enabled = _task_action_available(request, item)
+    task_form = _task_form(initial={"subject": item.last_subject, "description": item.exception_reason}) if task_enabled else CreateTaskForm()
+    return render(request, "email_exceptions/detail.html", {"item": item, "ignore_form": IgnoreExceptionForm(), "task_form": task_form, "email_task_write_enabled": task_enabled})
+
+
+def case_detail(request, pk):
+    if not can_view(getattr(request, "user", None)):
+        return HttpResponseForbidden("No tiene permiso para consultar Excepciones de Correo.")
+    messages_qs = CaseMessage.objects.select_related("email", "linked_by").order_by("email__received_at", "pk")
+    exception_qs = EmailException.objects.select_related("policy_profile").prefetch_related("audit_events", "zoho_task")
+    case = get_object_or_404(
+        ExceptionCase.objects.prefetch_related(
+            Prefetch("messages", queryset=messages_qs),
+            Prefetch("exceptions", queryset=exception_qs),
+        ),
+        pk=pk,
+    )
+    task_actions = {
+        item.pk: _task_action_available(request, item)
+        for item in case.exceptions.all()
+    }
+    case_messages = list(case.messages.all())
+    timeline_email_ids = {link.email_id for link in case_messages}
+    exception_items = []
+    for item in case.exceptions.all():
+        prefix = f"exception-{item.pk}"
+        exception_items.append({
+            "item": item,
+            "primary_email_in_timeline": item.primary_email_id in timeline_email_ids,
+            "task_enabled": task_actions[item.pk],
+            "task_form": _task_form(
+                initial={"subject": item.last_subject, "description": item.exception_reason},
+                prefix=prefix,
+            ) if task_actions[item.pk] else CreateTaskForm(prefix=prefix),
+            "ignore_form": IgnoreExceptionForm(prefix=prefix),
+        })
+    return render(request, "email_exceptions/case_detail.html", {
+        "case": case,
+        "case_messages": case_messages,
+        "exception_items": exception_items,
+    })
 
 @require_POST
 def ignore_exception(request, pk):
-    if not _operator_allowed(request):
+    if not can_operate(getattr(request, "user", None)):
         return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
     item = get_object_or_404(EmailException, pk=pk)
-    form = IgnoreExceptionForm(request.POST)
+    prefix = f"exception-{pk}" if any(key.startswith(f"exception-{pk}-") for key in request.POST) else None
+    form = IgnoreExceptionForm(request.POST, prefix=prefix)
     if form.is_valid() and item.status == EmailException.PENDING:
         item.status, item.ignored_reason, item.ignored_comment, item.handled_by, item.handled_at = EmailException.IGNORED, form.cleaned_data["reason"], form.cleaned_data["comment"], request.user, timezone.now(); item.save(update_fields=("status", "ignored_reason", "ignored_comment", "handled_by", "handled_at")); record_audit(item, "IGNORED", request.user, {"reason": item.ignored_reason}); messages.success(request, "La excepción fue ignorada y permanece auditable.")
     else: messages.error(request, "No fue posible ignorar la excepción.")
@@ -93,10 +167,14 @@ def ignore_exception(request, pk):
 
 @require_POST
 def create_task(request, pk):
-    if not _operator_allowed(request):
+    if not can_operate(getattr(request, "user", None)):
         return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
     item = get_object_or_404(EmailException, pk=pk)
-    form = _task_form(data=request.POST)
+    if not _task_action_available(request, item):
+        messages.error(request, "La creación de Tasks no está habilitada para este usuario o perfil.")
+        return redirect("email_exceptions:detail", pk=pk)
+    prefix = f"exception-{pk}" if any(key.startswith(f"exception-{pk}-") for key in request.POST) else None
+    form = _task_form(data=request.POST, prefix=prefix)
     if not form.is_valid() or item.status != EmailException.PENDING: messages.error(request, "La solicitud no es válida o ya fue gestionada."); return redirect("email_exceptions:detail", pk=pk)
     try:
         create_exception_task(exception=item, actor=request.user, **form.cleaned_data)

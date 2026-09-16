@@ -3,13 +3,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from email_exceptions.models import EmailException, InboundEmail, ZohoTaskCreation
 from email_exceptions.zoho import create_exception_task
 from cotizacion_colectivos.services.task_publisher import PRODUCTION_WRITE_CONFIRMATION
-from vault.models import UserProfile
 
 
 class EmailExceptionZohoTests(TestCase):
@@ -142,15 +142,17 @@ class EmailExceptionZohoTests(TestCase):
 
     @override_settings(DEBUG=True, RUNNING_TESTS=True, TOOLS_ACCESS_MODE="local_public")
     @patch("email_exceptions.views.create_exception_task")
-    def test_authorized_operator_can_submit_task_action(self, create_task):
-        UserProfile.objects.update_or_create(
-            user=self.user,
-            defaults={"role": UserProfile.LEADER, "active": True},
-        )
+    @patch("email_exceptions.views.responsible_options", return_value=[SimpleNamespace(actual_value="owner", display_value="Owner")])
+    @patch("email_exceptions.views.task_creation_available", return_value=True)
+    def test_authorized_operator_can_submit_task_action(self, task_available, responsible_options, create_task):
+        self.user.user_permissions.add(Permission.objects.get(
+            content_type__app_label="email_exceptions",
+            codename="operate_email_exceptions",
+        ))
         self.client.force_login(self.user)
         response = self.client.post(
             "/operaciones/excepciones-correo/1/create-task/",
-            {"responsible": "Sara Rua Vargas", "subject": "Subject", "description": "Description"},
+            {"responsible": "owner", "subject": "Subject", "description": "Description"},
         )
         self.assertEqual(response.status_code, 302)
         create_task.assert_called_once()
@@ -158,6 +160,11 @@ class EmailExceptionZohoTests(TestCase):
     @override_settings(DEBUG=True, RUNNING_TESTS=True, TOOLS_ACCESS_MODE="local_public")
     @patch("email_exceptions.views.create_exception_task")
     def test_get_never_produces_write(self, create_task):
+        self.user.user_permissions.add(Permission.objects.get(
+            content_type__app_label="email_exceptions",
+            codename="view_email_exceptions_operational",
+        ))
+        self.client.force_login(self.user)
         response = self.client.get("/operaciones/excepciones-correo/1/")
         self.assertEqual(response.status_code, 200)
         create_task.assert_not_called()

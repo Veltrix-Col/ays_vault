@@ -94,6 +94,20 @@ Recibir correos de buzones configurados, conservarlos para auditoría, clasifica
 
 Power Automate transporta el JSON a `POST /operaciones/excepciones-correo/api/inbound/`. Django valida el token, persiste `InboundEmail`, clasifica mediante `email_exceptions.services.classify_inbound_email`, crea `EmailException` cuando corresponde y registra `EmailAuditEvent`. La unicidad `source_mailbox + external_message_id` hace seguro el reintento.
 
+## Acceso humano y roles del módulo
+
+La UI requiere el acceso delegado SSO validado por `TrustedIntranetAccessMiddleware` y, por separado, un permiso Django asignado a la identidad provisionada para ese subject. SSO por sí solo no concede acceso funcional. `VIEWER` (`view_email_exceptions_operational`) permite consultar la bandeja por `ExceptionCase`, sus mensajes, cuerpos y trazabilidad; `OPERATOR` (`operate_email_exceptions`) incluye VIEWER y permite las acciones existentes. No se asignan roles de Vault ni se infiere autorización desde correo, dominio, organización, headers o datos del request.
+
+Después de que la identidad haya sido provisionada por un acceso SSO válido, un administrador con acceso al entorno puede otorgar o revocar el permiso desde la consola del servidor:
+
+```shell
+python manage.py email_exceptions_access --subject "subject-sso-exacto" --role viewer
+python manage.py email_exceptions_access --subject "subject-sso-exacto" --role operator
+python manage.py email_exceptions_access --subject "subject-sso-exacto" --role none
+```
+
+El comando solo localiza un `IntranetPrincipal` activo por subject exacto normalizado y administra los grupos propios `Email Exceptions Viewer` y `Email Exceptions Operator`; no modifica roles ni permisos de Vault. Revocar usa `--role none`. Los endpoints de mutación mantienen POST y CSRF, y crear Task conserva además todos los guards del publisher Zoho y el guard específico del módulo.
+
 ## Payload
 
 ```json
@@ -142,7 +156,7 @@ El flujo para cada correo nuevo es `InboundEmail` → `classify_inbound_email` (
 
 El retrieval usa referencias funcionales y `conversation_id`; no descarta candidatos por organización, familia, evento, asunto, remitente, dominio ni buzón. Las referencias conservan la fuerza definida por el motor: póliza o periodo aislados no bastan para `HIGH`. Un identificador fuerte contradictorio bloquea métodos inferiores; múltiples candidatos `HIGH` permanecen ambiguos. La política prefiere un caso separado antes que una fusión dudosa. `STRUCTURED`/`MEDIUM` y `LOW` no hacen auto-link. `BATCH` y `PLATFORM` no originan casos individuales; `SUCCESS` puede asociarse como `RESOLUTION` sin cerrar el caso; `INFORMATIONAL` puede asociarse como `CONTEXT` solo con correlación `HIGH`.
 
-`case_key` se genera canónicamente desde evidencia funcional cuando existe, `conversation_id` cuando corresponde y, de lo contrario, desde la identidad estable `(source_mailbox, external_message_id)`. La decisión de correlación tiene prioridad: una conversación nunca fuerza reutilización ante conflicto funcional. `CaseMessage` conserva rol, método, confianza y motivo. `EmailException.case` mantiene compatibilidad con la bandeja operativa.
+`case_key` se genera canónicamente desde evidencia funcional cuando existe, `conversation_id` cuando corresponde y, de lo contrario, desde la identidad estable `(source_mailbox, external_message_id)`. La decisión de correlación tiene prioridad: una conversación nunca fuerza reutilización ante conflicto funcional. `CaseMessage` conserva rol, método, confianza y motivo. La bandeja E muestra una fila por `ExceptionCase`; el detalle presenta una cronología de `CaseMessage` y las `EmailException` vinculadas. Las acciones siguen dirigidas a cada `EmailException` y la auditoría operativa se muestra separada de la cronología de mensajes. Los detalles de excepción por PK continúan disponibles por compatibilidad y usan el mismo permiso de lectura.
 
 La persistencia está dentro de `transaction.atomic(using=...)`. La evidencia se publica en `CandidateRetrievalSession` mediante `transaction.on_commit(..., using=...)`; rollback de la transacción o savepoint descarta el callback. Las consultas ORM y callbacks quedan ligados al mismo alias. Las claves únicas y `get_or_create` respaldan reintentos por `(source_mailbox, external_message_id)` y `(case, email)`.
 

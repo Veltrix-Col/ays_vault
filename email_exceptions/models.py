@@ -154,6 +154,10 @@ class EmailException(models.Model):
     class Meta:
         ordering = ["-detected_at", "-pk"]
         indexes = [models.Index(fields=("status", "detected_at")), models.Index(fields=("organization", "event_type")), models.Index(fields=("correlation_key",))]
+        permissions = (
+            ("view_email_exceptions_operational", "Can view operational email exceptions and cases"),
+            ("operate_email_exceptions", "Can perform operational email exception actions"),
+        )
 
 class EmailExceptionMessage(models.Model):
     exception = models.ForeignKey(EmailException, related_name="messages", on_delete=models.CASCADE)
