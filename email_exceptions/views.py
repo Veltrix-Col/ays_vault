@@ -1,5 +1,6 @@
 import hmac, json, logging
 from datetime import datetime, time, timedelta
+from statistics import mean, median
 from django.conf import settings
 from django.contrib import messages
 from django.core.paginator import Paginator
@@ -68,7 +69,130 @@ def _quick_view_filter(qs, quick, *, user, now, today_start, tomorrow_start):
         return qs.filter(active, follow_up_at__lt=now)
     if quick == "today":
         return qs.filter(active, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start)
+    if quick == "attention":
+        return qs.filter(
+            active,
+        ).filter(
+            Q(follow_up_at__lt=now)
+            | Q(assigned_to__isnull=True)
+            | Q(opened_at__lte=now - timedelta(days=4))
+        )
     return qs
+
+
+def _age_bucket(opened_at, *, now):
+    age = now - opened_at
+    days = age.total_seconds() / 86400
+    if days <= 1:
+        return "0–1 días"
+    if days <= 3:
+        return "2–3 días"
+    if days <= 7:
+        return "4–7 días"
+    return "8+ días"
+
+
+def _supervision_snapshot(*, now, today_start, tomorrow_start):
+    """Build read-only supervision metrics from the current case population."""
+    cases = ExceptionCase.objects.all()
+    active_filter = Q(status__in=_ACTIVE_CASE_STATUSES)
+    overdue_filter = active_filter & Q(follow_up_at__lt=now)
+    today_filter = active_filter & Q(follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start)
+    attention_filter = active_filter & (
+        Q(follow_up_at__lt=now)
+        | Q(assigned_to__isnull=True)
+        | Q(opened_at__lte=now - timedelta(days=4))
+    )
+    summary = cases.aggregate(
+        active=Count("pk", filter=active_filter),
+        unassigned=Count("pk", filter=active_filter & Q(assigned_to__isnull=True)),
+        overdue=Count("pk", filter=overdue_filter),
+        today=Count("pk", filter=today_filter),
+        resolved=Count("pk", filter=Q(status=ExceptionCase.Status.RESOLVED)),
+        attention=Count("pk", filter=attention_filter),
+    )
+
+    status_rows = cases.values("status").annotate(total=Count("pk")).order_by("status")
+    status_counts = {row["status"]: row["total"] for row in status_rows}
+    status_distribution = [
+        {"value": value, "label": label, "count": status_counts.get(value, 0)}
+        for value, label in ExceptionCase.Status.choices
+        if status_counts.get(value, 0) or value != ExceptionCase.Status.PENDING
+    ]
+
+    # Each aggregate/grouped query below is set-based: no per-assignee or
+    # per-case query is issued while rendering the supervision layer.
+    workload = []
+    for row in cases.filter(active_filter).values(
+        "assigned_to_id", "assigned_to__username", "assigned_to__first_name",
+        "assigned_to__last_name",
+    ).annotate(
+        active=Count("pk"), overdue=Count("pk", filter=Q(follow_up_at__lt=now)),
+        today=Count("pk", filter=Q(follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start)),
+    ):
+        assignee_id = row["assigned_to_id"]
+        workload.append({
+            "name": "Sin asignar" if not assignee_id else (
+                " ".join(part for part in (
+                    row["assigned_to__first_name"], row["assigned_to__last_name"],
+                ) if part).strip() or row["assigned_to__username"]
+            ),
+            "active": row["active"], "overdue": row["overdue"], "today": row["today"],
+        })
+
+    age_rows = cases.filter(active_filter).annotate(
+        age_bucket=Case(
+            When(opened_at__gte=now - timedelta(days=1), then=Value("0–1 días")),
+            When(opened_at__gte=now - timedelta(days=3), then=Value("2–3 días")),
+            When(opened_at__gte=now - timedelta(days=7), then=Value("4–7 días")),
+            default=Value("8+ días"), output_field=CharField(),
+        )
+    ).values("age_bucket").annotate(total=Count("pk"))
+    age_counts = {label: 0 for label in ("0–1 días", "2–3 días", "4–7 días", "8+ días")}
+    age_counts.update({row["age_bucket"]: row["total"] for row in age_rows})
+
+    follow_up_counts = {
+        "SIN_SEGUIMIENTO": cases.filter(active_filter, follow_up_at__isnull=True).count(),
+        "PROGRAMADO": cases.filter(active_filter, follow_up_at__gte=tomorrow_start).count(),
+        "HOY": summary["today"],
+        "VENCIDO": summary["overdue"],
+    }
+    resolution_values = list(
+        cases.filter(
+            status__in=(ExceptionCase.Status.RESOLVED, ExceptionCase.Status.CLOSED),
+            resolved_at__isnull=False,
+        ).values_list("created_at", "resolved_at")
+    )
+    resolution_seconds = [
+        (resolved_at - created_at).total_seconds()
+        for created_at, resolved_at in resolution_values
+        if resolved_at >= created_at
+    ]
+    resolution = {
+        "count": len(resolution_seconds),
+        "average_days": (mean(resolution_seconds) / 86400) if resolution_seconds else None,
+        "median_days": (median(resolution_seconds) / 86400) if resolution_seconds else None,
+    }
+    return {
+        "header": {
+            "active": summary["active"],
+            "unassigned": summary["unassigned"],
+            "overdue": summary["overdue"],
+            "today": summary["today"],
+            "resolved": summary["resolved"],
+        },
+        "status_distribution": status_distribution,
+        "workload": sorted(workload, key=lambda item: (item["name"] != "Sin asignar", item["name"].lower())),
+        "age_distribution": [{"label": label, "count": count} for label, count in age_counts.items()],
+        "follow_up_distribution": [
+            {"label": "Sin seguimiento", "count": follow_up_counts["SIN_SEGUIMIENTO"]},
+            {"label": "Programado", "count": follow_up_counts["PROGRAMADO"]},
+            {"label": "Hoy", "count": follow_up_counts["HOY"]},
+            {"label": "Vencido", "count": follow_up_counts["VENCIDO"]},
+        ],
+        "resolution": resolution,
+        "attention": summary["attention"],
+    }
 
 @csrf_exempt
 @require_POST
@@ -95,7 +219,7 @@ def exception_list(request):
     today_start, tomorrow_start = _today_window()
     population = ExceptionCase.objects.all()
     quick = request.GET.get("quick", "all").strip()
-    if quick not in {"all", "mine", "unassigned", "overdue", "today"}:
+    if quick not in {"all", "mine", "unassigned", "overdue", "today", "attention"}:
         quick = "all"
     qs = ExceptionCase.objects.select_related("assigned_to").annotate(
         message_count=Count("messages", distinct=True),
@@ -112,6 +236,12 @@ def exception_list(request):
             When(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__isnull=False, then=Value(2)),
             When(status__in=_ACTIVE_CASE_STATUSES, then=Value(3)),
             default=Value(4), output_field=IntegerField(),
+        ),
+        age_bucket=Case(
+            When(opened_at__gte=now - timedelta(days=1), then=Value("0_1")),
+            When(opened_at__gte=now - timedelta(days=3), then=Value("2_3")),
+            When(opened_at__gte=now - timedelta(days=7), then=Value("4_7")),
+            default=Value("8_plus"), output_field=CharField(),
         ),
     )
     qs = _quick_view_filter(qs, quick, user=request.user, now=now, today_start=today_start, tomorrow_start=tomorrow_start)
@@ -155,12 +285,15 @@ def exception_list(request):
         "overdue": population.filter(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__lt=now).count(),
         "today": population.filter(status__in=_ACTIVE_CASE_STATUSES, follow_up_at__gte=today_start, follow_up_at__lt=tomorrow_start).count(),
     }
+    supervision = _supervision_snapshot(now=now, today_start=today_start, tomorrow_start=tomorrow_start)
+    quick_counts["attention"] = supervision["attention"]
     quick_views = (
         {"key": "all", "label": "Todos", "count": quick_counts["all"]},
         {"key": "mine", "label": "Mis casos", "count": quick_counts["mine"]},
         {"key": "unassigned", "label": "Sin asignar", "count": quick_counts["unassigned"]},
         {"key": "overdue", "label": "Seguimiento vencido", "count": quick_counts["overdue"]},
         {"key": "today", "label": "Seguimiento hoy", "count": quick_counts["today"]},
+        {"key": "attention", "label": "Requiere atención", "count": quick_counts["attention"]},
     )
     return render(request, "email_exceptions/list.html", {
         "page_obj": page_obj,
@@ -169,6 +302,7 @@ def exception_list(request):
         "quick": quick,
         "quick_counts": quick_counts,
         "quick_views": quick_views,
+        "supervision": supervision,
         "assignable_operators": get_assignable_operators(),
         "case_status_choices": ExceptionCase.Status.choices,
         "exception_status_choices": EmailException.STATUS_CHOICES,

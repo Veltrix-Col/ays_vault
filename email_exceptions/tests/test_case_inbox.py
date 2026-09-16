@@ -55,11 +55,41 @@ class CaseInboxTests(TestCase):
         cases, response = self.ids_for(quick="mine")
         self.assertEqual([case.pk for case in cases], [mine.pk])
         self.assertEqual(response.context["quick_counts"], {
-            "all": 6, "mine": 1, "unassigned": 5, "overdue": 1, "today": 1,
+            "all": 6, "mine": 1, "unassigned": 5, "overdue": 1, "today": 1, "attention": 4,
         })
         self.assertEqual([case.pk for case in self.ids_for(quick="unassigned")[0]], [overdue.pk, today.pk, future.pk, unassigned.pk, closed.pk])
         self.assertEqual([case.pk for case in self.ids_for(quick="overdue")[0]], [overdue.pk])
         self.assertEqual([case.pk for case in self.ids_for(quick="today")[0]], [today.pk])
+
+    def test_supervision_metrics_are_case_based_and_age_is_derived(self):
+        self.case("metric-new", opened_at=self.now - timedelta(hours=2))
+        self.case("metric-old", opened_at=self.now - timedelta(days=5), follow_up_at=self.now - timedelta(hours=1))
+        self.case("metric-resolved", status=ExceptionCase.Status.RESOLVED,
+                  opened_at=self.now - timedelta(days=3),
+                  resolved_at=self.now + timedelta(days=2))
+        _cases, response = self.ids_for()
+        supervision = response.context["supervision"]
+        self.assertEqual(supervision["header"]["active"], 2)
+        self.assertEqual(supervision["header"]["unassigned"], 2)
+        self.assertEqual(supervision["header"]["overdue"], 1)
+        self.assertEqual(supervision["header"]["resolved"], 1)
+        self.assertEqual(supervision["resolution"]["count"], 1)
+        self.assertAlmostEqual(supervision["resolution"]["median_days"], 2, places=1)
+        self.assertEqual(
+            {row["label"]: row["count"] for row in supervision["age_distribution"]},
+            {"0–1 días": 1, "2–3 días": 0, "4–7 días": 1, "8+ días": 0},
+        )
+
+    def test_attention_view_excludes_terminal_cases_and_includes_transparent_conditions(self):
+        overdue = self.case("attention-overdue", follow_up_at=self.now - timedelta(hours=1))
+        unassigned = self.case("attention-unassigned")
+        old = self.case("attention-old", opened_at=self.now - timedelta(days=5), assigned_to=self.operator)
+        closed = self.case("attention-closed", status=ExceptionCase.Status.CLOSED,
+                           follow_up_at=self.now - timedelta(days=2), opened_at=self.now - timedelta(days=20))
+        cases, response = self.ids_for(quick="attention")
+        self.assertEqual({case.pk for case in cases}, {overdue.pk, unassigned.pk, old.pk})
+        self.assertEqual(response.context["quick_counts"]["attention"], 3)
+        self.assertNotIn(closed.pk, {case.pk for case in cases})
 
     def test_operational_order_places_overdue_then_today_then_future_then_closed(self):
         overdue = self.case("order-overdue", follow_up_at=self.now - timedelta(hours=2))
