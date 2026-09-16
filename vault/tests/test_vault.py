@@ -12,12 +12,12 @@ from django.utils import timezone
 from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from .forms import CardForm, luhn_valid
-from .identity import generate_recovery_codes, grant_reauthentication
-from .crypto import encrypt
-from .models import AuditEvent, MFARecoveryCode, PaymentCard, ProtectedOperationContext, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, SensitiveOperationWindow, UserDevice, UserProfile
-from .identity import role_home_name
-from .security import session_hash, verify_audit_chain
+from ..forms import CardForm, luhn_valid
+from ..identity import generate_recovery_codes, grant_reauthentication
+from ..crypto import encrypt
+from ..models import AuditEvent, MFARecoveryCode, PaymentCard, ProtectedOperationContext, ReauthenticationGrant, RevealGrant, SecureSession, SecurityAlert, SensitiveOperationWindow, UserDevice, UserProfile
+from ..identity import role_home_name
+from ..security import session_hash, verify_audit_chain
 
 
 PASSWORD = "LongPassword123!"
@@ -30,6 +30,8 @@ class VaultIdentitySecurityTests(TestCase):
     def setUpTestData(cls):
         User = get_user_model()
         cls.admin_user = User.objects.create_user("admin.persona", password=PASSWORD)
+        cls.admin_user.is_staff = True
+        cls.admin_user.save(update_fields=("is_staff",))
         cls.leader = User.objects.create_user("lider.persona", password=PASSWORD)
         cls.analyst = User.objects.create_user("analista.persona", password=PASSWORD)
         cls.unassigned = User.objects.create_user("pendiente.persona", password=PASSWORD)

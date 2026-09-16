@@ -3,6 +3,16 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 class InboundEmail(models.Model):
+    CLASSIFICATION_PENDING = "PENDING"
+    CLASSIFICATION_EXCEPTION = "EXCEPTION"
+    CLASSIFICATION_NO_MATCH = "NO_MATCH"
+    CLASSIFICATION_ERROR = "ERROR"
+    CLASSIFICATION_STATUS_CHOICES = (
+        (CLASSIFICATION_PENDING, "Pendiente de clasificación"),
+        (CLASSIFICATION_EXCEPTION, "Excepción"),
+        (CLASSIFICATION_NO_MATCH, "Sin coincidencia"),
+        (CLASSIFICATION_ERROR, "Error de clasificación"),
+    )
     source_mailbox = models.EmailField()
     external_message_id = models.CharField(max_length=500)
     conversation_id = models.CharField(max_length=500, blank=True)
@@ -15,6 +25,10 @@ class InboundEmail(models.Model):
     subject = models.CharField(max_length=998, blank=True)
     body_text = models.TextField(blank=True)
     has_attachments = models.BooleanField(default=False)
+    classification_status = models.CharField(max_length=12, choices=CLASSIFICATION_STATUS_CHOICES, default=CLASSIFICATION_PENDING)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    classification_rule_id = models.CharField(max_length=120, blank=True)
+    classification_reason = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         ordering = ["-received_at", "-pk"]
@@ -41,10 +55,85 @@ class EmailPolicyProfile(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=("code", "version"), name="email_unique_policy_version")]
 
+
+class ExceptionCase(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "OPEN", "Abierto"
+        PENDING = "PENDING", "Pendiente"
+        RESOLVED = "RESOLVED", "Resuelto"
+
+    class Scope(models.TextChoices):
+        CASE = "CASE", "Caso"
+        BATCH = "BATCH", "Lote"
+        PLATFORM = "PLATFORM", "Plataforma"
+        UNKNOWN = "UNKNOWN", "Desconocido"
+
+    case_key = models.CharField(max_length=255, unique=True)
+    organization = models.CharField(max_length=120, blank=True)
+    family = models.CharField(max_length=120, blank=True)
+    event_type = models.CharField(max_length=120, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.OPEN)
+    action_type = models.CharField(max_length=40, blank=True)
+    scope = models.CharField(max_length=10, choices=Scope.choices, default=Scope.CASE)
+    opened_at = models.DateTimeField()
+    last_activity_at = models.DateTimeField()
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_activity_at", "-pk"]
+        indexes = [
+            models.Index(fields=("status", "last_activity_at")),
+            models.Index(fields=("organization", "event_type")),
+            models.Index(fields=("scope", "status")),
+        ]
+
+
+class CaseMessage(models.Model):
+    class Role(models.TextChoices):
+        OPENING = "OPENING", "Apertura"
+        FOLLOW_UP = "FOLLOW_UP", "Seguimiento"
+        RESOLUTION = "RESOLUTION", "Resolución"
+        CONTEXT = "CONTEXT", "Contexto"
+
+    class CorrelationMethod(models.TextChoices):
+        FUNCTIONAL_ID = "FUNCTIONAL_ID", "Identificador funcional"
+        CONVERSATION = "CONVERSATION", "Conversación"
+        STRUCTURED = "STRUCTURED", "Estructurada"
+        MANUAL = "MANUAL", "Manual"
+        BACKFILL = "BACKFILL", "Backfill"
+        NEW_CASE = "NEW_CASE", "Caso nuevo"
+
+    class CorrelationConfidence(models.TextChoices):
+        HIGH = "HIGH", "Alta"
+        MEDIUM = "MEDIUM", "Media"
+        LOW = "LOW", "Baja"
+
+    case = models.ForeignKey(ExceptionCase, related_name="messages", on_delete=models.CASCADE)
+    email = models.ForeignKey("InboundEmail", related_name="case_links", on_delete=models.PROTECT)
+    role = models.CharField(max_length=10, choices=Role.choices)
+    correlation_method = models.CharField(max_length=20, choices=CorrelationMethod.choices)
+    correlation_confidence = models.CharField(max_length=6, choices=CorrelationConfidence.choices)
+    correlation_reason = models.CharField(max_length=500, blank=True)
+    linked_at = models.DateTimeField(auto_now_add=True)
+    linked_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="email_case_messages_linked")
+
+    class Meta:
+        ordering = ["linked_at", "pk"]
+        constraints = [
+            models.UniqueConstraint(fields=("case", "email"), name="email_unique_case_message"),
+        ]
+        indexes = [
+            models.Index(fields=("case", "linked_at")),
+            models.Index(fields=("email",)),
+        ]
+
 class EmailException(models.Model):
     PENDING = "PENDING"; MANAGED = "MANAGED"; IGNORED = "IGNORED"; ERROR = "ERROR"
     STATUS_CHOICES = ((PENDING, "Pendiente"), (MANAGED, "Gestionada"), (IGNORED, "Ignorada"), (ERROR, "Error"))
     primary_email = models.ForeignKey(InboundEmail, related_name="primary_exceptions", on_delete=models.PROTECT)
+    case = models.ForeignKey(ExceptionCase, null=True, blank=True, related_name="exceptions", on_delete=models.PROTECT)
     last_subject = models.CharField(max_length=998, blank=True)
     organization = models.CharField(max_length=120, blank=True)
     family = models.CharField(max_length=120, blank=True)

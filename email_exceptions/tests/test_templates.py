@@ -48,6 +48,55 @@ class EmailExceptionsTemplateTests(TestCase):
         self.assertContains(response, "Información técnica")
         self.assertNotContains(response, "EMAIL_RECEIVED")
 
+    def test_detail_keeps_wide_main_content_and_realistic_side_column(self):
+        response = self.client.get(reverse("email_exceptions:detail", args=[self.exception.pk]))
+        stylesheet = (settings.BASE_DIR / "static" / "css" / "email-exceptions.css").read_text(encoding="utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "email-exception-detail-grid")
+        self.assertContains(response, "email-detail-main")
+        self.assertContains(response, "email-detail-aside")
+        self.assertNotContains(response, "span-8 email-detail-main")
+        self.assertIn("minmax(320px, 380px)", stylesheet)
+        self.assertIn(".email-exceptions-page .email-action-card {", stylesheet)
+        self.assertIn("grid-row: 1", stylesheet)
+        self.assertIn(".email-exceptions-page .email-classification-card {", stylesheet)
+        self.assertIn("grid-row: 2", stylesheet)
+        self.assertIn("grid-column: 1 / -1", stylesheet)
+
+    def test_html_body_is_rendered_as_escaped_readable_text(self):
+        email = InboundEmail.objects.create(
+            source_mailbox="comunicaciones@segurosays.com",
+            external_message_id="html-message-1",
+            conversation_id="conversation-1",
+            received_at="2026-09-13T15:11:00Z",
+            from_name="Contacto sintético",
+            from_email="contacto@example.test",
+            to=["comunicaciones@segurosays.com"],
+            subject="Mensaje HTML",
+            body_text="<html><head><style>.x{display:none}</style><script>alert('x')</script></head><body><p>Buenos días,</p><div>La reunión quedó programada.</div><a href=\"https://example.test/agenda\">Ver agenda</a></body></html>",
+        )
+        item = EmailException.objects.create(
+            primary_email=email,
+            last_subject=email.subject,
+            exception_reason="Motivo sintético",
+            rule_id="TEST_RULE",
+        )
+        response = self.client.get(reverse("email_exceptions:detail", args=[item.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Buenos días,")
+        self.assertContains(response, "La reunión quedó programada.")
+        self.assertContains(response, "Ver agenda (https://example.test/agenda)")
+        self.assertNotContains(response, "<style>")
+        self.assertNotContains(response, "alert('x')")
+        self.assertContains(response, "html-message-1")
+        self.assertContains(response, "Información técnica")
+        self.assertContains(response, "Correo recibido")
+        self.assertContains(response, "Clasificación")
+        self.assertContains(response, "Lectura operativa")
+        self.assertContains(response, "Regla")
+        self.assertContains(response, "Motivo")
+
     def test_non_email_page_does_not_load_email_exceptions_stylesheet(self):
         response = self.client.get(reverse("public_home"))
         self.assertNotContains(response, "email-exceptions.css")

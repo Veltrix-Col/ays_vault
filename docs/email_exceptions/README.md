@@ -63,7 +63,7 @@ No registrar tokens, cuerpos completos ni adjuntos en logs. Rotar fuera de horar
 
 ## Zoho Safety Guards
 
-La app no busca ni actualiza Tasks existentes. La escritura futura debe comprobar `ZOHO_PRODUCTION_WRITE_ENABLED`, `EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED`, el perfil activo y la confirmación específica del publisher existente. Ningún default activa WRITE.
+La app no busca ni actualiza Tasks existentes. La escritura debe comprobar `ZOHO_PRODUCTION_WRITE_ENABLED`, `EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED`, el perfil activo y la confirmación específica del publisher existente. El guard específico de este módulo queda apagado por defecto; no se cambia el valor global de Production que utilizan otros módulos.
 
 ## Failure Modes
 
@@ -104,7 +104,25 @@ Enviar `Content-Type: application/json` y `X-Email-Exceptions-Token`. Configurar
 
 ## Estados y políticas
 
-Los estados son `PENDING`, `MANAGED`, `IGNORED` y `ERROR`. `COMUNICACIONES_V1` está activa para `comunicaciones@segurosays.com`. `SURA_V1` queda `REVIEW_ONLY` para `aysltda@asesorsura.com` hasta definir sus reglas. El ruido se registra como inbound sin crear excepción.
+Los estados operativos son `PENDING`, `MANAGED`, `IGNORED` y `ERROR`. El estado persistente de clasificación de `InboundEmail` es `PENDING`, `EXCEPTION`, `NO_MATCH` o `ERROR`. Solo un `EXCEPTION` crea un `EmailException`; un `NO_MATCH` conserva el correo recibido, pero no entra en la bandeja operativa. `COMUNICACIONES_V1` está activa para `comunicaciones@segurosays.com` y `SURA_V1` aporta contexto, pero no convierte automáticamente todo correo en excepción.
+
+## Filosofía de clasificación
+
+El clasificador es determinista, explicable y no usa IA. Las señales fuertes —por ejemplo `pago doble`, `pago duplicado`, facturas no recibidas, inconsistencias de aportes o documentación pendiente— pueden producir una excepción sin organización conocida. Las señales contextuales —como comprobante, factura, documentos, cobro o emisión— necesitan evidencia adicional: póliza, periodo, arrendamiento, organización, remitente coherente o una frase accionable. Una palabra genérica aislada termina en `NO_MATCH`.
+
+La organización se infiere desde el remitente, nombre, asunto y cuerpo, incluyendo texto de mensajes reenviados. Sirve para enriquecer confianza y familia, pero no es un gate global para eventos fuertes. Boletines, newsletters, reuniones, respuestas automáticas y avisos meramente informativos se excluyen si no existe una señal operativa concluyente.
+
+Cada excepción conserva `event_type`, `rule_id`, `confidence`, `exception_reason` y las señales coincidentes en `classification_details`. Para agregar una regla, definir primero la señal específica, sus contextos válidos y sus negativos; asignar un identificador estable; añadir casos positivos y negativos a `email_exceptions/tests/test_classification.py`; y verificar que el caso ambiguo continúe en `NO_MATCH`.
+
+## Clasificador universal V6.3.1
+
+El clasificador público único es `classify_inbound_email`. V6.3.1 se usa como primera política universal: el evento se determina por la semántica del mensaje actual y la organización solo enriquece el resultado. El resultado en memoria contiene `message_outcome`, `action_required`, `action_type` y `scope`, además de familia, evento, regla, confidence y motivo. El catálogo `action_type` incluye los diez valores canónicos de V6.3.1, incluido `EXPAND_ATTACHMENT`. No se crean clasificadores por buzón ni reglas universales condicionadas a SURA, BEMSA u otra organización.
+
+La política vigente recupera únicamente eventos accionables verificables: pagos duplicados, facturas no recibidas, comprobantes con contexto, inconsistencias de aportes, complementos o documentación explícitamente requeridos, solicitudes de emisión, cobros con documentación y señales universales V6.3.1 de reembolso rechazado, firma fallida, legalización, corrección y reagendamiento. Una confirmación actual de éxito prevalece sobre señales de fallo; las palabras genéricas aisladas terminan en `NO_MATCH`.
+
+La precedencia es: alcance `BATCH`/`PLATFORM`, éxito actual, fallas explícitas, acción pendiente, ruido y señales contextuales. El texto actual tiene prioridad sobre bloques citados; un éxito actual no crea una excepción aunque el mensaje anterior contenga un error. `BATCH` y `PLATFORM` pueden ser excepciones semánticas con `ACTION_REQUIRED`, pero nunca se convierten en excepciones individuales. La confianza documenta la clasificación, pero nunca sustituye una condición lógica.
+
+Las reglas históricas V4/V5 permanecen como referencia documental y no se cargan en runtime. Solo se absorben señales compatibles con V6.3.1 y con negativos protegidos; candidatos genéricos o reglas `REVIEW` amplias no crean excepciones automáticamente.
 
 ## Adjuntos y seguridad
 
@@ -117,3 +135,19 @@ Se registran recepción/clasificación implícitamente en el ingreso y `EXCEPTIO
 ## Extensión y troubleshooting
 
 Para agregar un buzón, añadir su perfil en `services.py` y sembrar `EmailPolicyProfile`. Para agregar una regla, incluirla en `classify_inbound_email` con identificador, versión, explicación y pruebas. Activar SURA requiere reemplazar `REVIEW_ONLY` por una política validada y pruebas de regresión. Si Power Automate recibe `401`, revisar el header/token; `415` indica content-type incorrecto; `400` payload incompleto; `200` significa reintento idempotente.
+
+## Casos, correlación y persistencia — Fases C–E.1
+
+El flujo para cada correo nuevo es `InboundEmail` → `classify_inbound_email` (V6.3.1) → retrieval B.2.1 → `correlate_email_to_case` → `ExceptionCase`/`CaseMessage` → `EmailException` cuando la clasificación es elegible. La clasificación es la única autoridad semántica; `correlation.py` es la autoridad de decisión de correlación; `candidate_retrieval.py` recupera casos sin decidir la asociación. `CandidateRetrievalSession` reutiliza un índice en memoria dentro de una ejecución y no mantiene cache global.
+
+El retrieval usa referencias funcionales y `conversation_id`; no descarta candidatos por organización, familia, evento, asunto, remitente, dominio ni buzón. Las referencias conservan la fuerza definida por el motor: póliza o periodo aislados no bastan para `HIGH`. Un identificador fuerte contradictorio bloquea métodos inferiores; múltiples candidatos `HIGH` permanecen ambiguos. La política prefiere un caso separado antes que una fusión dudosa. `STRUCTURED`/`MEDIUM` y `LOW` no hacen auto-link. `BATCH` y `PLATFORM` no originan casos individuales; `SUCCESS` puede asociarse como `RESOLUTION` sin cerrar el caso; `INFORMATIONAL` puede asociarse como `CONTEXT` solo con correlación `HIGH`.
+
+`case_key` se genera canónicamente desde evidencia funcional cuando existe, `conversation_id` cuando corresponde y, de lo contrario, desde la identidad estable `(source_mailbox, external_message_id)`. La decisión de correlación tiene prioridad: una conversación nunca fuerza reutilización ante conflicto funcional. `CaseMessage` conserva rol, método, confianza y motivo. `EmailException.case` mantiene compatibilidad con la bandeja operativa.
+
+La persistencia está dentro de `transaction.atomic(using=...)`. La evidencia se publica en `CandidateRetrievalSession` mediante `transaction.on_commit(..., using=...)`; rollback de la transacción o savepoint descarta el callback. Las consultas ORM y callbacks quedan ligados al mismo alias. Las claves únicas y `get_or_create` respaldan reintentos por `(source_mailbox, external_message_id)` y `(case, email)`.
+
+## Backfill histórico aislado
+
+`email_exceptions_backfill` es una herramienta explícita de importación histórica. Sin `--persist` opera como dry-run transaccional que revierte; con `--persist` exige un alias distinto de `default` y valida que la base física no coincida con la predeterminada. Acepta `--offset`/`--limit`, procesa en orden estable y usa una sola `CandidateRetrievalSession` por ejecución. No llama servicios externos ni Zoho. En local se conserva el alias configurable `backfill` (SQLite mediante `BACKFILL_SQLITE_PATH` o PostgreSQL mediante variables dedicadas `BACKFILL_DB_*`); aliases temporales de validación no forman parte de settings.
+
+No hacer backfill en producción sin una aprobación y un plan de restauración independientes. Los XLSX reproducibles de replay/backfill permanecen fuera de Git; las referencias históricas bajo `docs/email_exceptions/reference/` tampoco se cargan en runtime.

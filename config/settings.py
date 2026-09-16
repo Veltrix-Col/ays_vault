@@ -51,6 +51,25 @@ else:
         'NAME':BASE_DIR/'db.sqlite3',
         'OPTIONS':{'timeout':20,'transaction_mode':'IMMEDIATE'},
     }}
+    DATABASES['backfill'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': Path(os.getenv('BACKFILL_SQLITE_PATH', str(BASE_DIR / 'db_backfill.sqlite3'))),
+        'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'},
+    }
+
+# Optional isolated database for controlled historical backfills. It is only
+# registered when all dedicated credentials are present.
+_backfill_db_values = {
+    'NAME': os.getenv('BACKFILL_DB_NAME', '').strip(),
+    'USER': os.getenv('BACKFILL_DB_USER', '').strip(),
+    'PASSWORD': os.getenv('BACKFILL_DB_PASSWORD', ''),
+    'HOST': os.getenv('BACKFILL_DB_HOST', '').strip(),
+    'PORT': os.getenv('BACKFILL_DB_PORT', '5432').strip(),
+}
+if any(_backfill_db_values[key] for key in ('NAME', 'USER', 'PASSWORD', 'HOST')):
+    if not all(_backfill_db_values.values()):
+        raise ImproperlyConfigured('BACKFILL_DB_CONFIGURATION_INCOMPLETE')
+    DATABASES['backfill'] = {'ENGINE': 'django.db.backends.postgresql', **_backfill_db_values}
 AUTH_PASSWORD_VALIDATORS=[{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator','OPTIONS':{'min_length':10}},{'NAME':'django.contrib.auth.password_validation.CommonPasswordValidator'},{'NAME':'django.contrib.auth.password_validation.NumericPasswordValidator'}]
 LANGUAGE_CODE='es-co'; TIME_ZONE='America/Bogota'; USE_I18N=True; USE_TZ=True
 STATIC_URL='/static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; STATICFILES_DIRS=[BASE_DIR/'static']

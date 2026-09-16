@@ -146,13 +146,40 @@
 }
 
 .email-exceptions-page .email-exception-detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   margin-top: 18px;
 }
 
 .email-exceptions-page .email-detail-main,
 .email-exceptions-page .email-detail-aside {
-  min-width: 0;
+  display: contents;
 }
+
+.email-exceptions-page .email-message-card {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.email-exceptions-page .email-classification-card {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.email-exceptions-page .email-task-card,
+.email-exceptions-page .email-action-card {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.email-exceptions-page .associated-emails,
+.email-exceptions-page .email-audit-panel,
+.email-exceptions-page .email-technical {
+  grid-column: 1 / -1;
+}
+
+.email-exceptions-page .associated-emails { grid-row: 3; }
+.email-exceptions-page .email-audit-panel { grid-row: 4; }
+.email-exceptions-page .email-technical { grid-row: 5; }
 
 .email-exceptions-page .email-message-card,
 .email-exceptions-page .associated-emails,
@@ -171,10 +198,176 @@
 }
 
 .email-exceptions-page .email-body-content {
+  margin-top: 20px;
+  padding: 18px 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: #fbfcfe;
   border: 1px solid #edf1f5;
   border-radius: 12px;
   color: var(--ays-text, var(--ink));
+}
+
+.email-exceptions-page .email-message-meta,
+.email-exceptions-page .classification-facts,
+.email-exceptions-page .technical-facts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.email-exceptions-page .email-message-meta > div,
+.email-exceptions-page .classification-facts > div,
+.email-exceptions-page .technical-facts > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 34%) minmax(0, 1fr);
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.email-exceptions-page .email-message-meta > div:last-child,
+.email-exceptions-page .classification-facts > div:last-child,
+.email-exceptions-page .technical-facts > div:last-child {
+  border-bottom: 0;
+}
+
+.email-exceptions-page .email-message-meta dt,
+.email-exceptions-page .classification-facts dt,
+.email-exceptions-page .technical-facts dt,
+.email-exceptions-page .associated-label {
+  color: var(--ays-muted, var(--muted));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.email-exceptions-page .email-message-meta dd,
+.email-exceptions-page .classification-facts dd,
+.email-exceptions-page .technical-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ays-text, var(--ink));
+}
+
+.email-exceptions-page .email-message-meta dd small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ays-muted, var(--muted));
+}
+
+.email-exceptions-page .associated-email-list {
+  display: grid;
+  gap: 10px;
+}
+
+.email-exceptions-page .associated-email-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(150px, 1fr) minmax(130px, .8fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.email-exceptions-page .associated-email-row:last-child {
+  border-bottom: 0;
+}
+
+.email-exceptions-page .associated-email-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.email-exceptions-page .associated-email-row strong,
+.email-exceptions-page .associated-email-row > div > span:not(.associated-label) {
+  overflow-wrap: anywhere;
+}
+
+.email-exceptions-page .email-timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.email-exceptions-page .email-timeline li {
+  display: grid;
+  grid-template-columns: 52px 14px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.email-exceptions-page .email-timeline li:last-child {
+  border-bottom: 0;
+}
+
+.email-exceptions-page .email-timeline time {
+  color: var(--ays-muted, var(--muted));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.email-exceptions-page .email-timeline .timeline-dot {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--ays-primary, var(--blue));
+  border-radius: 50%;
+  background: #fff;
+}
+
+.email-exceptions-page .email-technical {
+  padding: 0;
+  overflow: hidden;
+}
+
+.email-exceptions-page .email-technical summary {
+  padding: 15px 18px;
+  color: var(--ays-primary-strong, var(--blue-dark));
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.email-exceptions-page .technical-facts {
+  padding: 0 18px 12px;
+}
+
+@media (max-width: 900px) {
+  .email-exceptions-page .email-exception-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .email-exceptions-page .email-message-card,
+  .email-exceptions-page .email-classification-card,
+  .email-exceptions-page .email-task-card,
+  .email-exceptions-page .email-action-card,
+  .email-exceptions-page .associated-emails,
+  .email-exceptions-page .email-audit-panel,
+  .email-exceptions-page .email-technical {
+    grid-column: 1;
+  }
+
+  .email-exceptions-page .email-message-card { grid-row: 1; }
+  .email-exceptions-page .email-action-card,
+  .email-exceptions-page .email-task-card { grid-row: 2; }
+  .email-exceptions-page .email-classification-card { grid-row: 3; }
+  .email-exceptions-page .associated-emails { grid-row: 4; }
+  .email-exceptions-page .email-audit-panel { grid-row: 5; }
+  .email-exceptions-page .email-technical { grid-row: 6; }
+
+  .email-exceptions-page .associated-email-row {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, .8fr);
+  }
+
+  .email-exceptions-page .associated-email-row > .status-badge {
+    justify-self: start;
+  }
 }
 
 .email-exceptions-page .email-task-disabled {
@@ -202,5 +395,16 @@
 
   .email-exceptions-page .email-exception-table-panel > .panel-head {
     padding-inline: 17px;
+  }
+
+  .email-exceptions-page .email-message-meta > div,
+  .email-exceptions-page .classification-facts > div,
+  .email-exceptions-page .technical-facts > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .email-exceptions-page .associated-email-row {
+    grid-template-columns: 1fr;
   }
 }

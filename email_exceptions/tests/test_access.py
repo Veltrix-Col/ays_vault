@@ -96,7 +96,7 @@ class EmailExceptionsAccessTests(TestCase):
     def test_inbound_valid_token_without_sso_reaches_m2m_view(self):
         response = self.client.post(
             reverse("email_exceptions:inbound"),
-            data='{"source_mailbox":"comunicaciones@segurosays.com","message_id":"trusted-m2m-1","subject":"Comprobante de pago"}',
+            data='{"source_mailbox":"comunicaciones@segurosays.com","message_id":"trusted-m2m-1","subject":"Comprobante de pago póliza BEMSA 123"}',
             content_type="application/json",
             HTTP_X_EMAIL_EXCEPTIONS_TOKEN="production-like-token",
         )

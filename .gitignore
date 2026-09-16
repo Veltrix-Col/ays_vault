@@ -57,3 +57,6 @@ artifacts/input/*.xlsx
 .codex-deps/
 
 docs/email_exceptions/reference/
+
+# Reproducible email-exceptions replay/backfill reports (keep local, not Git).
+reports/email_exceptions_*.xlsx

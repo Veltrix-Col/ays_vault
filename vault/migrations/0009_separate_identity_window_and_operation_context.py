@@ -7,13 +7,14 @@ from django.utils import timezone
 
 
 def migrate_operation_contexts(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Window = apps.get_model("vault", "SensitiveOperationWindow")
     Context = apps.get_model("vault", "ProtectedOperationContext")
     Grant = apps.get_model("vault", "RevealGrant")
     now = timezone.now()
 
-    for window in Window.objects.all().iterator():
-        grants = list(Grant.objects.filter(operation_window_id=window.pk).order_by("created_at", "pk"))
+    for window in Window.objects.using(db_alias).all().iterator():
+        grants = list(Grant.objects.using(db_alias).filter(operation_window_id=window.pk).order_by("created_at", "pk"))
         grouped = {}
         for grant in grants:
             grouped.setdefault(grant.card_id, []).append(grant)
@@ -22,7 +23,7 @@ def migrate_operation_contexts(apps, schema_editor):
 
         for card_id, card_grants in grouped.items():
             source = card_grants[0] if card_grants else window
-            context = Context.objects.create(
+            context = Context.objects.using(db_alias).create(
                 identity_window_id=window.pk,
                 user_id=window.user_id,
                 session_hash=window.session_hash,
@@ -33,14 +34,14 @@ def migrate_operation_contexts(apps, schema_editor):
                 closed_at=now,
                 close_reason="Contexto histórico migrado; requiere nueva confirmación",
             )
-            Context.objects.filter(pk=context.pk).update(created_at=window.created_at)
+            Context.objects.using(db_alias).filter(pk=context.pk).update(created_at=window.created_at)
             if card_grants:
-                Grant.objects.filter(pk__in=[item.pk for item in card_grants]).update(operation_context_id=context.pk)
+                Grant.objects.using(db_alias).filter(pk__in=[item.pk for item in card_grants]).update(operation_context_id=context.pk)
 
     # Grants creados antes de que 0008 incorporara SensitiveOperationWindow pueden
     # tener operation_window=NULL. Se preservan como historia cerrada: nunca deben
     # convertirse en una autorización reutilizable ni impedir la migración.
-    orphan_grants = Grant.objects.filter(operation_window_id__isnull=True).order_by("created_at", "pk")
+    orphan_grants = Grant.objects.using(db_alias).filter(operation_window_id__isnull=True).order_by("created_at", "pk")
     orphan_groups = {}
     for grant in orphan_grants.iterator():
         orphan_groups.setdefault((grant.user_id, grant.session_key), []).append(grant)
@@ -48,7 +49,7 @@ def migrate_operation_contexts(apps, schema_editor):
     for (user_id, session_hash), grants in orphan_groups.items():
         first_grant = grants[0]
         last_expiry = max(item.expires_at for item in grants)
-        window = Window.objects.create(
+        window = Window.objects.using(db_alias).create(
             user_id=user_id,
             session_hash=session_hash,
             purpose="protected_data",
@@ -58,14 +59,14 @@ def migrate_operation_contexts(apps, schema_editor):
             revoked_at=now,
             revocation_reason="Autorización histórica migrada",
         )
-        Window.objects.filter(pk=window.pk).update(created_at=first_grant.created_at)
+        Window.objects.using(db_alias).filter(pk=window.pk).update(created_at=first_grant.created_at)
 
         grants_by_card = {}
         for grant in grants:
             grants_by_card.setdefault(grant.card_id, []).append(grant)
         for card_id, card_grants in grants_by_card.items():
             source = card_grants[0]
-            context = Context.objects.create(
+            context = Context.objects.using(db_alias).create(
                 identity_window_id=window.pk,
                 user_id=user_id,
                 session_hash=session_hash,
@@ -76,27 +77,28 @@ def migrate_operation_contexts(apps, schema_editor):
                 closed_at=now,
                 close_reason="Contexto histórico migrado; requiere nueva confirmación",
             )
-            Context.objects.filter(pk=context.pk).update(created_at=source.created_at)
-            Grant.objects.filter(pk__in=[item.pk for item in card_grants]).update(
+            Context.objects.using(db_alias).filter(pk=context.pk).update(created_at=source.created_at)
+            Grant.objects.using(db_alias).filter(pk__in=[item.pk for item in card_grants]).update(
                 operation_window_id=window.pk,
                 operation_context_id=context.pk,
             )
 
 
 def restore_legacy_fields(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Window = apps.get_model("vault", "SensitiveOperationWindow")
     Context = apps.get_model("vault", "ProtectedOperationContext")
     Grant = apps.get_model("vault", "RevealGrant")
 
-    for window in Window.objects.all().iterator():
-        context = Context.objects.filter(identity_window_id=window.pk).order_by("created_at", "pk").first()
-        Window.objects.filter(pk=window.pk).update(
+    for window in Window.objects.using(db_alias).all().iterator():
+        context = Context.objects.using(db_alias).filter(identity_window_id=window.pk).order_by("created_at", "pk").first()
+        Window.objects.using(db_alias).filter(pk=window.pk).update(
             reason=context.reason if context else "Contexto migrado",
             internal_reference=context.internal_reference if context else "LEGACY",
         )
-    for grant in Grant.objects.select_related("operation_context").all().iterator():
+    for grant in Grant.objects.using(db_alias).select_related("operation_context").all().iterator():
         context = grant.operation_context
-        Grant.objects.filter(pk=grant.pk).update(
+        Grant.objects.using(db_alias).filter(pk=grant.pk).update(
             reason=context.reason,
             internal_reference=context.internal_reference,
         )
