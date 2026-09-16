@@ -166,6 +166,14 @@ La persistencia está dentro de `transaction.atomic(using=...)`. La evidencia se
 
 Las transiciones se ejecutan mediante `email_exceptions.case_workflow.transition_case`, que valida `operate_email_exceptions`, recupera el caso con bloqueo de fila dentro de `transaction.atomic(using=...)` y crea `CaseActivity` en la misma transacción. `CaseActivity` es auditoría del ciclo de vida y no reemplaza `CaseMessage` (comunicaciones) ni `EmailAuditEvent` (acciones de una excepción). F.1 no registra automáticamente `CASE_CREATED` durante ingestión ni modifica la correlación; la llegada de correos sobre casos `RESOLVED` o `CLOSED` conserva la política actual y queda pendiente de una fase posterior.
 
+### Gestión operativa — Fase F.2
+
+Cada `ExceptionCase` puede tener un responsable Django (`assigned_to`/`assigned_at`) y datos de seguimiento (`next_action` de hasta 500 caracteres y `follow_up_at`). Solo usuarios activos con el permiso efectivo `email_exceptions.operate_email_exceptions` aparecen como responsables asignables. La toma, asignación, reasignación y desasignación son acciones explícitas y no cambian el estado del caso.
+
+`assign_case`, `take_case`, `unassign_case`, `update_case_follow_up` y `add_case_note` viven en `case_workflow.py`, usan `transaction.atomic(using=...)` y bloqueo de fila. Las actividades `ASSIGNED`, `REASSIGNED`, `UNASSIGNED`, `FOLLOW_UP_UPDATED` y `NOTE_ADDED` se guardan junto con la mutación. Las notas internas son append-only, tienen un máximo de 4.000 caracteres y no son correos, `CaseMessage`, tareas Zoho ni envíos externos.
+
+Al resolver o cerrar se limpian `next_action` y `follow_up_at` dentro de la misma transición; una reapertura no restaura el seguimiento anterior. F.2 no implementa scheduler, SLA, colas, notificaciones, automatizaciones ni creación de Tasks Zoho.
+
 ## Backfill histórico aislado
 
 `email_exceptions_backfill` es una herramienta explícita de importación histórica. Sin `--persist` opera como dry-run transaccional que revierte; con `--persist` exige un alias distinto de `default` y valida que la base física no coincida con la predeterminada. Acepta `--offset`/`--limit`, procesa en orden estable y usa una sola `CandidateRetrievalSession` por ejecución. No llama servicios externos ni Zoho. En local se conserva el alias configurable `backfill` (SQLite mediante `BACKFILL_SQLITE_PATH` o PostgreSQL mediante variables dedicadas `BACKFILL_DB_*`); aliases temporales de validación no forman parte de settings.

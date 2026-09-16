@@ -70,6 +70,17 @@ class ExceptionCaseWorkflowTests(TestCase):
         self.assertEqual(activity.event_type, CaseActivity.EventType.RESOLVED)
         self.assertEqual(activity.metadata, {"reason": "Pago validado", "comment": "Confirmado con soporte"})
 
+    def test_resolving_clears_active_follow_up_without_extra_follow_up_event(self):
+        case = self.case(ExceptionCase.Status.IN_PROGRESS)
+        case.next_action = "Esperar soporte"
+        case.follow_up_at = timezone.now()
+        case.save(update_fields=("next_action", "follow_up_at"))
+        _, activity = self.transition(case, ExceptionCase.Status.RESOLVED, reason="Soporte validado")
+        case.refresh_from_db()
+        self.assertEqual((case.next_action, case.follow_up_at), ("", None))
+        self.assertEqual(activity.event_type, CaseActivity.EventType.RESOLVED)
+        self.assertFalse(CaseActivity.objects.filter(case=case, event_type=CaseActivity.EventType.FOLLOW_UP_UPDATED).exists())
+
     def test_resolve_requires_reason(self):
         case = self.case(ExceptionCase.Status.IN_PROGRESS)
         with self.assertRaises(CaseTransitionError):

@@ -9,9 +9,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from .forms import CreateTaskForm, IgnoreExceptionForm
+from .forms import CaseFollowUpForm, CaseNoteForm, CreateTaskForm, IgnoreExceptionForm
 from .models import CaseMessage, EmailException, ExceptionCase
-from .case_workflow import CaseTransitionError, transition_case
+from .case_workflow import CaseOperationError, CaseTransitionError, add_case_note, assign_case, get_assignable_operators, take_case, transition_case, unassign_case, update_case_follow_up
 from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
 from .zoho import create_exception_task, responsible_options, task_creation_available
@@ -123,9 +123,10 @@ def case_detail(request, pk):
     messages_qs = CaseMessage.objects.select_related("email", "linked_by").order_by("email__received_at", "pk")
     exception_qs = EmailException.objects.select_related("policy_profile").prefetch_related("audit_events", "zoho_task")
     case = get_object_or_404(
-        ExceptionCase.objects.prefetch_related(
+        ExceptionCase.objects.select_related("assigned_to").prefetch_related(
             Prefetch("messages", queryset=messages_qs),
             Prefetch("exceptions", queryset=exception_qs),
+            "activities__actor",
         ),
         pk=pk,
     )
@@ -152,6 +153,9 @@ def case_detail(request, pk):
         "case": case,
         "case_messages": case_messages,
         "exception_items": exception_items,
+        "assignable_operators": get_assignable_operators() if can_operate(getattr(request, "user", None)) else (),
+        "follow_up_form": CaseFollowUpForm(initial={"next_action": case.next_action, "follow_up_at": case.follow_up_at}),
+        "note_form": CaseNoteForm(),
     })
 
 
@@ -171,6 +175,67 @@ def transition_case_view(request, pk):
         messages.error(request, str(exc))
         return redirect("email_exceptions:case_detail", pk=pk)
     messages.success(request, "Estado del caso actualizado.")
+    return redirect("email_exceptions:case_detail", pk=pk)
+
+
+def _case_operation_redirect(request, pk, operation, success_message):
+    if not can_operate(getattr(request, "user", None)):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+    try:
+        operation()
+    except CaseOperationError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, success_message)
+    return redirect("email_exceptions:case_detail", pk=pk)
+
+
+@require_POST
+def assign_case_view(request, pk):
+    return _case_operation_redirect(request, pk, lambda: assign_case(pk, actor=request.user, assignee_id=request.POST.get("assignee")), "Responsable actualizado.")
+
+
+@require_POST
+def take_case_view(request, pk):
+    return _case_operation_redirect(request, pk, lambda: take_case(pk, actor=request.user), "Tomaste el caso.")
+
+
+@require_POST
+def unassign_case_view(request, pk):
+    return _case_operation_redirect(request, pk, lambda: unassign_case(pk, actor=request.user), "Caso dejado sin responsable.")
+
+
+@require_POST
+def follow_up_view(request, pk):
+    if not can_operate(getattr(request, "user", None)):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+    form = CaseFollowUpForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "La información de seguimiento no es válida.")
+    else:
+        try:
+            update_case_follow_up(pk, actor=request.user, **form.cleaned_data)
+        except CaseOperationError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, "Seguimiento actualizado.")
+    return redirect("email_exceptions:case_detail", pk=pk)
+
+
+@require_POST
+def note_view(request, pk):
+    if not can_operate(getattr(request, "user", None)):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+    form = CaseNoteForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "La nota interna no es válida.")
+    else:
+        try:
+            add_case_note(pk, actor=request.user, **form.cleaned_data)
+        except CaseOperationError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, "Nota interna añadida.")
     return redirect("email_exceptions:case_detail", pk=pk)
 
 @require_POST

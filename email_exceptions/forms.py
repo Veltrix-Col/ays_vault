@@ -1,4 +1,19 @@
 from django import forms
+
+
+class CaseFollowUpForm(forms.Form):
+    next_action = forms.CharField(required=False, max_length=500)
+    follow_up_at = forms.DateTimeField(
+        required=False,
+        input_formats=("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"),
+        widget=forms.DateTimeInput(format="%Y-%m-%dT%H:%M", attrs={"type": "datetime-local"}),
+    )
+
+
+class CaseNoteForm(forms.Form):
+    note = forms.CharField(max_length=4000, widget=forms.Textarea)
+
+
 class IgnoreExceptionForm(forms.Form):
     reason = forms.ChoiceField(choices=(("No requiere gestión", "No requiere gestión"), ("Informativo", "Informativo"), ("Duplicado", "Duplicado"), ("Ya gestionado por otro medio", "Ya gestionado por otro medio"), ("Ruido", "Ruido"), ("Otro", "Otro")))
     comment = forms.CharField(required=False, widget=forms.Textarea)

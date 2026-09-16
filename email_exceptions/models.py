@@ -82,6 +82,10 @@ class ExceptionCase(models.Model):
     last_activity_at = models.DateTimeField()
     resolved_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
+    assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_email_cases")
+    assigned_at = models.DateTimeField(null=True, blank=True)
+    next_action = models.CharField(max_length=500, blank=True)
+    follow_up_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -101,6 +105,11 @@ class CaseActivity(models.Model):
         RESOLVED = "RESOLVED", "Caso resuelto"
         CLOSED = "CLOSED", "Caso cerrado"
         REOPENED = "REOPENED", "Caso reabierto"
+        ASSIGNED = "ASSIGNED", "Caso asignado"
+        REASSIGNED = "REASSIGNED", "Caso reasignado"
+        UNASSIGNED = "UNASSIGNED", "Caso desasignado"
+        FOLLOW_UP_UPDATED = "FOLLOW_UP_UPDATED", "Seguimiento actualizado"
+        NOTE_ADDED = "NOTE_ADDED", "Nota interna añadida"
 
     case = models.ForeignKey(ExceptionCase, related_name="activities", on_delete=models.CASCADE)
     event_type = models.CharField(max_length=24, choices=EventType.choices)

@@ -479,6 +479,20 @@
 .email-exceptions-page .case-exception-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .email-exceptions-page .case-audit-timeline { margin: 18px 0 0; }
 .email-exceptions-page .case-audit-heading { margin: 20px 20px 0; color: #33445c; font-size: 1rem; }
+.email-exceptions-page .case-operations-panel { padding-bottom: 22px; }
+.email-exceptions-page .case-operations-controls,
+.email-exceptions-page .case-follow-up-form,
+.email-exceptions-page .case-note-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 0 20px 16px; }
+.email-exceptions-page .case-assignment-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.email-exceptions-page .case-assignment-form label { flex-basis: 100%; }
+.email-exceptions-page .case-assignment-form select { min-width: 220px; }
+.email-exceptions-page .case-follow-up-form .form-field { flex: 1 1 240px; }
+.email-exceptions-page .case-note-form { align-items: stretch; }
+.email-exceptions-page .case-note-form .form-field { flex: 1 1 100%; }
+.email-exceptions-page .case-note-form textarea { min-height: 90px; }
+.email-exceptions-page .case-operations-panel .classification-facts { margin-bottom: 20px; }
+.email-exceptions-page .case-operations-panel .classification-facts small { display: block; color: var(--ays-muted, var(--muted)); margin-top: 4px; }
+.email-exceptions-page .case-activity-timeline { margin: 0 20px; }
 
 @media (max-width: 767px) {
   .email-exceptions-page .email-pagination { flex-wrap: wrap; }
