@@ -114,10 +114,11 @@ class CaseInboxTests(TestCase):
             "assigned_to": str(self.operator.pk),
         })
         self.assertEqual(response.context["page_obj"].object_list[0].pk, match.pk)
-        self.assertContains(response, "quick=mine")
-        self.assertContains(response, "organization=BEMSA")
-        self.assertContains(response, "action_type=CONTACTAR")
-        self.assertContains(response, str(self.operator.pk))
+        self.assertEqual(response.context["quick"], "mine")
+        self.assertContains(response, 'name="organization" value="BEMSA"')
+        self.assertContains(response, 'name="action_type"')
+        self.assertContains(response, 'value="CONTACTAR" selected')
+        self.assertContains(response, f'value="{self.operator.pk}" selected')
 
     def test_list_has_one_case_row_and_paginates_at_fifty(self):
         for index in range(201):
@@ -126,4 +127,4 @@ class CaseInboxTests(TestCase):
         self.assertEqual(response.context["page_obj"].paginator.count, 201)
         self.assertEqual(len(response.context["cases"]), 50)
         self.assertContains(response, "page=2")
-        self.assertContains(response, "aria-label=\"Vistas rápidas de casos\"")
+        self.assertNotContains(response, "aria-label=\"Vistas rápidas de casos\"")

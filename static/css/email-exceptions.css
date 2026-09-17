@@ -3,6 +3,17 @@
   color: var(--ays-text, var(--ink));
 }
 
+/* La bandeja es una vista de trabajo: aprovecha el ancho disponible sin
+   alterar el shell compartido ni el layout de las demás herramientas. */
+.email-exceptions-layout .email-exceptions-shell {
+  width: min(1760px, calc(100% - 48px));
+}
+
+.email-exceptions-page .email-exception-filters,
+.email-exceptions-page .email-exception-table-panel {
+  width: 100%;
+}
+
 .email-exceptions-page .email-exceptions-heading {
   margin-bottom: 24px;
 }
@@ -142,6 +153,12 @@
 
   .email-exceptions-page .email-workload-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .email-exceptions-layout .email-exceptions-shell {
+    width: calc(100% - 24px);
   }
 }
 
