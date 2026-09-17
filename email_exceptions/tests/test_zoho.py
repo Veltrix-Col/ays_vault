@@ -6,9 +6,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 
 from email_exceptions.models import CaseActivity, CaseMessage, EmailException, ExceptionCase, InboundEmail, ZohoTaskCreation
-from email_exceptions.zoho import build_case_task_observations, build_case_task_subject, create_case_task, create_exception_task
+from email_exceptions.zoho import build_case_task_observations, build_case_task_subject, create_case_task, create_exception_task, ramo_options, responsible_options
 from cotizacion_colectivos.services.task_publisher import PRODUCTION_WRITE_CONFIRMATION, TaskPublicationUncertain
 
 
@@ -189,6 +190,41 @@ class CaseLevelZohoTaskTests(TestCase):
 
     def settings(self):
         return dict(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
+
+    @patch("email_exceptions.zoho.cached_metadata_fields")
+    @patch("email_exceptions.zoho.colectivos_zoho")
+    def test_ramo_options_accepts_dict_picklist_values(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+            {"actual_value": "Autos", "display_value": "Autos"},
+            {"actual_value": "Vida", "display_value": "Vida"},
+            {"actual_value": "-None-", "display_value": "-None-"},
+            {"actual_value": "", "display_value": ""},
+            {"actual_value": None, "display_value": None},
+        )),)
+        self.assertEqual(ramo_options(), (("Autos", "Autos"), ("Vida", "Vida")))
+
+    @patch("email_exceptions.zoho.cached_metadata_fields")
+    @patch("email_exceptions.zoho.colectivos_zoho")
+    def test_ramo_options_accepts_object_values_and_preserves_value_label(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+            SimpleNamespace(actual_value="AUTO", display_value="Automóviles"),
+        )),)
+        self.assertEqual(ramo_options(), (("AUTO", "Automóviles"),))
+
+    @patch("email_exceptions.zoho.cached_metadata_fields", return_value=())
+    @patch("email_exceptions.zoho.colectivos_zoho")
+    def test_ramo_options_fails_closed_without_field(self, facade, metadata):
+        with self.assertRaises(ValidationError):
+            ramo_options()
+
+    @patch("email_exceptions.zoho.cached_metadata_fields")
+    @patch("email_exceptions.zoho.colectivos_zoho")
+    def test_ramo_options_fails_closed_without_usable_values(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+            {"actual_value": "-None-", "display_value": "-None-"},
+        )),)
+        with self.assertRaises(ValidationError):
+            ramo_options()
 
     @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
     @patch("email_exceptions.zoho.task_creation_available", return_value=True)

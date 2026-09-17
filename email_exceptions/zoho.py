@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections.abc import Mapping
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -38,8 +39,14 @@ def ramo_options():
         raise ValidationError("No fue posible cargar los ramos confirmados de Zoho.")
     values, seen = [], set()
     for item in getattr(field, "pick_list_values", ()) or ():
-        actual = str(getattr(item, "actual_value", "") or getattr(item, "display_value", "") or "").strip()
-        display = str(getattr(item, "display_value", "") or actual).strip()
+        if isinstance(item, Mapping):
+            actual = item.get("actual_value") or item.get("display_value")
+            display = item.get("display_value") or actual
+        else:
+            actual = getattr(item, "actual_value", None) or getattr(item, "display_value", None)
+            display = getattr(item, "display_value", None) or actual
+        actual = str(actual or "").strip()
+        display = str(display or "").strip()
         if actual and display and actual not in {"None", "-None-"} and actual not in seen:
             seen.add(actual)
             values.append((actual, display))
