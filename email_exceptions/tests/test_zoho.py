@@ -295,9 +295,20 @@ class CaseLevelZohoTaskTests(TestCase):
     @patch("email_exceptions.zoho.get_task_publisher")
     def test_certain_rejection_is_failed_and_retryable(self, get_publisher, available):
         publisher = Mock()
-        publisher.publish_email_exception.side_effect = RuntimeError("rejected")
+        publisher.publish_email_exception.side_effect = [
+            RuntimeError("rejected"),
+            {"record_id": "1234567890"},
+        ]
         get_publisher.return_value = publisher
         task = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
         task.refresh_from_db()
         self.assertEqual(task.technical_status, "FAILED")
         self.assertEqual(task.error_category, "RuntimeError")
+
+        retried = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
+        retried.refresh_from_db()
+        self.assertEqual(retried.pk, task.pk)
+        self.assertEqual(ZohoTaskCreation.objects.filter(case=self.case).count(), 1)
+        self.assertEqual(retried.technical_status, "CREATED")
+        self.assertEqual(retried.task_id, "1234567890")
+        self.assertEqual(publisher.publish_email_exception.call_count, 2)

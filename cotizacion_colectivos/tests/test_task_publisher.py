@@ -110,6 +110,65 @@ class TaskPublisherTests(TestCase):
             "Correo_responsable", "Fecha_de_solicitud_del_cliente",
         })
 
+    @override_settings(**ENABLED_WRITE, EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True)
+    @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
+    def test_email_exception_payload_uses_area_contract(self, get_zoho):
+        create = Mock(return_value=successful_write())
+        get_zoho.return_value = SimpleNamespace(records=SimpleNamespace(create=create))
+        record = {
+            "Subject": "Excepción de correo - EMPRESA DEMO ALFA S.A.S",
+            "Responsable": "Katherine Muñoz Ramírez",
+            "rea": "Negocios empresariales",
+            "Caso_de_excepci_n": True,
+            "Observaciones": "Contexto QA",
+        }
+        result = get_task_publisher(
+            profile="sandbox", confirmation=SANDBOX_WRITE_CONFIRMATION,
+            feature_flag="EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED",
+        ).publish_email_exception(record)
+        create.assert_called_once_with(module="Tasks", records=(record,))
+        self.assertEqual(set(create.call_args.kwargs["records"][0]), set(record))
+        self.assertEqual(result["record_id"], "700000000000000001")
+
+    @override_settings(**ENABLED_WRITE, EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True)
+    @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
+    def test_email_exception_payload_rejects_old_ramo_contract(self, get_zoho):
+        create = Mock(return_value=successful_write())
+        get_zoho.return_value = SimpleNamespace(records=SimpleNamespace(create=create))
+        record = {
+            "Subject": "Subject", "Responsable": "Ana", "Ramo": "Autos",
+            "Caso_de_excepci_n": True, "Observaciones": "Contexto",
+        }
+        with self.assertRaises(ValidationError):
+            get_task_publisher(
+                profile="sandbox", confirmation=SANDBOX_WRITE_CONFIRMATION,
+                feature_flag="EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED",
+            ).publish_email_exception(record)
+        create.assert_not_called()
+
+    @override_settings(**ENABLED_WRITE, EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True)
+    @patch("cotizacion_colectivos.services.task_publisher.get_zoho")
+    def test_email_exception_payload_requires_area_and_rejects_extra_fields(self, get_zoho):
+        create = Mock(return_value=successful_write())
+        get_zoho.return_value = SimpleNamespace(records=SimpleNamespace(create=create))
+        publisher = get_task_publisher(
+            profile="sandbox", confirmation=SANDBOX_WRITE_CONFIRMATION,
+            feature_flag="EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED",
+        )
+        without_area = {
+            "Subject": "Subject", "Responsable": "Ana",
+            "Caso_de_excepci_n": True, "Observaciones": "Contexto",
+        }
+        with self.assertRaises(ValidationError):
+            publisher.publish_email_exception(without_area)
+
+        with_extra = {
+            **without_area, "rea": "Operaciones", "Owner": "No permitido",
+        }
+        with self.assertRaises(ValidationError):
+            publisher.publish_email_exception(with_extra)
+        create.assert_not_called()
+
     @patch("cotizacion_colectivos.services.task_publisher.colectivos_zoho")
     @patch("cotizacion_colectivos.services.task_publisher.cached_metadata_fields")
     def test_novelties_task_contract_includes_area_analyst_request_and_valid_seller(self, metadata, facade):

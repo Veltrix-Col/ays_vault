@@ -289,7 +289,7 @@ class GuardedTaskPublisher:
     ) -> Mapping[str, object]:
         normalized = dict(record)
         required_fields = (
-            frozenset({"Subject", "Responsable", "Ramo", "Caso_de_excepci_n", "Observaciones"})
+            frozenset({"Subject", "Responsable", "rea", "Caso_de_excepci_n", "Observaciones"})
             if allowed_fields == EMAIL_EXCEPTION_TASK_FIELDS and "tipo_de_solicitud" not in normalized
             else BASE_TASK_FIELDS
         )
