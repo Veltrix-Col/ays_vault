@@ -3,7 +3,6 @@
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from .models import CaseActivity, ExceptionCase
@@ -44,14 +43,11 @@ def _event_type(previous, target):
 
 
 def get_assignable_operators(*, using="default"):
-    """Return active Django users with the effective module operator permission."""
+    """Return active identities that can receive an internal case."""
     user_model = get_user_model()
     return user_model.objects.using(using).filter(
         is_active=True,
-    ).filter(
-        Q(user_permissions__content_type__app_label="email_exceptions", user_permissions__codename="operate_email_exceptions")
-        | Q(groups__permissions__content_type__app_label="email_exceptions", groups__permissions__codename="operate_email_exceptions")
-    ).distinct().order_by("last_name", "first_name", "username")
+    ).order_by("last_name", "first_name", "username")
 
 
 def _require_assignee(assignee_id, *, using):
@@ -59,8 +55,8 @@ def _require_assignee(assignee_id, *, using):
         assignee = get_user_model().objects.using(using).get(pk=assignee_id)
     except (TypeError, ValueError, get_user_model().DoesNotExist) as exc:
         raise CaseOperationError("El responsable seleccionado no existe.") from exc
-    if not (assignee.is_active and can_operate(assignee)):
-        raise CaseOperationError("El responsable debe estar activo y tener permiso de operación.")
+    if not assignee.is_active:
+        raise CaseOperationError("El responsable debe estar activo.")
     return assignee
 
 

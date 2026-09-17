@@ -63,6 +63,12 @@ class TrustedIntranetAccessMiddleware:
         if mode == LOCAL_PUBLIC and (
             settings.DEBUG or getattr(settings, "RUNNING_TESTS", False)
         ):
+            if application in {"soat", "conciliacion", "cotizacion_colectivos", "email_exceptions"}:
+                # local_public is the same inherited-access gate used by the
+                # normal operational tools in local development.  Propagate
+                # the read-access decision to module authorization helpers;
+                # it is never enabled outside DEBUG/tests.
+                request.user._local_inherited_access_granted = True
             return self._secured_response(request, application)
 
         if mode == TRUSTED_INTRANET:
@@ -79,6 +85,10 @@ class TrustedIntranetAccessMiddleware:
                     from intranet_sso.provisioning import get_or_create_intranet_user
                     principal_user = get_or_create_intranet_user(result.subject)
                     login(request, principal_user, backend="django.contrib.auth.backends.ModelBackend")
+                if application in {"soat", "conciliacion", "cotizacion_colectivos", "email_exceptions"}:
+                    # Set it after optional login: login() replaces
+                    # request.user with the provisioned SSO identity.
+                    request.user._intranet_access_granted = True
                 logger.info(
                     "tools_access result=accepted application=%s category=%s correlation=%s",
                     application,

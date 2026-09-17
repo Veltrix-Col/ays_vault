@@ -62,12 +62,12 @@ class CaseOperationsTests(TestCase):
         self.assertIsNone(no_op)
         self.assertEqual(CaseActivity.objects.count(), count)
 
-    def test_invalid_assignees_and_viewers_are_rejected(self):
+    def test_inactive_assignees_are_rejected_and_active_identities_are_allowed(self):
         inactive = get_user_model().objects.create_user(username="inactive", password="safe", is_active=False)
         with self.assertRaises(CaseOperationError):
             assign_case(self.case().pk, actor=self.operator, assignee_id=inactive.pk)
-        with self.assertRaises(CaseOperationError):
-            assign_case(self.case().pk, actor=self.operator, assignee_id=self.viewer.pk)
+        assigned, _activity = assign_case(self.case().pk, actor=self.operator, assignee_id=self.viewer.pk)
+        self.assertEqual(assigned.assigned_to_id, self.viewer.pk)
         with self.assertRaises(PermissionDenied):
             assign_case(self.case().pk, actor=self.viewer, assignee_id=self.operator.pk)
         with self.assertRaises(PermissionDenied):
@@ -113,7 +113,7 @@ class CaseOperationsTests(TestCase):
         self.assertIn(self.operator.pk, ids)
         self.assertIn(self.second_operator.pk, ids)
         self.assertIn(grouped.pk, ids)
-        self.assertNotIn(self.viewer.pk, ids)
+        self.assertIn(self.viewer.pk, ids)
         self.assertNotIn(inactive.pk, ids)
         self.assertEqual(len(ids), len(get_assignable_operators()))
 
