@@ -44,7 +44,7 @@ ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
 TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
 EMAIL_EXCEPTION_TASK_FIELDS = frozenset({
     "Subject", "tipo_de_solicitud", "Caso_de_excepci_n", "Motivo_de_excepci_n",
-    "rea", "Observaciones", "Responsable", "Ramo", "Fecha_de_vencimiento",
+    "rea", "Observaciones", "Responsable", "Fecha_de_vencimiento",
 })
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
 PRODUCTION_WRITE_CONFIRMATION = "PRODUCTION_TASK_WRITE"

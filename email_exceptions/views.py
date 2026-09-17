@@ -16,7 +16,7 @@ from .models import CaseActivity, CaseMessage, EmailAuditEvent, EmailException, 
 from .case_workflow import CaseOperationError, CaseTransitionError, add_case_note, assign_case, get_assignable_operators, take_case, transition_case, unassign_case, update_case_follow_up
 from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
-from .zoho import create_case_task, create_exception_task, ramo_options, responsible_options, task_creation_available
+from .zoho import area_options, create_case_task, create_exception_task, responsible_options, task_creation_available
 
 logger = logging.getLogger("email_exceptions")
 
@@ -347,10 +347,10 @@ def case_detail(request, pk):
     if case_task_available:
         try:
             case_task_form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options()]
-            case_task_form.fields["ramo"].choices = ramo_options()
+            case_task_form.fields["area"].choices = area_options()
         except Exception:
             case_task_form.fields["responsible"].choices = ()
-            case_task_form.fields["ramo"].choices = ()
+            case_task_form.fields["area"].choices = ()
     task_actions = {
         item.pk: _task_action_available(request, item)
         for item in case.exceptions.all()
@@ -451,11 +451,11 @@ def create_case_task_view(request, pk):
     form = CreateCaseTaskForm(request.POST)
     try:
         form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options()]
-        form.fields["ramo"].choices = ramo_options()
+        form.fields["area"].choices = area_options()
     except Exception:
         form.add_error(None, "No fue posible cargar los catálogos autorizados de Zoho.")
     if not form.is_valid():
-        messages.error(request, "Seleccione un Responsable y un Ramo válidos.")
+        messages.error(request, "Seleccione un Responsable y un Área válidos.")
         return redirect("email_exceptions:case_detail", pk=pk)
     try:
         task = create_case_task(case=case, actor=request.user, **form.cleaned_data)

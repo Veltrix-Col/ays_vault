@@ -30,4 +30,4 @@ class CreateTaskForm(forms.Form):
 
 class CreateCaseTaskForm(forms.Form):
     responsible = forms.ChoiceField(required=True, label="Responsable")
-    ramo = forms.ChoiceField(required=True, label="Ramo")
+    area = forms.ChoiceField(required=True, label="Área")

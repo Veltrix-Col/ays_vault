@@ -9,7 +9,8 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 
 from email_exceptions.models import CaseActivity, CaseMessage, EmailException, ExceptionCase, InboundEmail, ZohoTaskCreation
-from email_exceptions.zoho import build_case_task_observations, build_case_task_subject, create_case_task, create_exception_task, ramo_options, responsible_options
+from email_exceptions.forms import CreateCaseTaskForm
+from email_exceptions.zoho import area_options, build_case_task_observations, build_case_task_subject, create_case_task, create_exception_task, responsible_options
 from cotizacion_colectivos.services.task_publisher import PRODUCTION_WRITE_CONFIRMATION, TaskPublicationUncertain
 
 
@@ -193,38 +194,38 @@ class CaseLevelZohoTaskTests(TestCase):
 
     @patch("email_exceptions.zoho.cached_metadata_fields")
     @patch("email_exceptions.zoho.colectivos_zoho")
-    def test_ramo_options_accepts_dict_picklist_values(self, facade, metadata):
-        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+    def test_area_options_accepts_dict_picklist_values(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="rea", pick_list_values=(
             {"actual_value": "Autos", "display_value": "Autos"},
             {"actual_value": "Vida", "display_value": "Vida"},
             {"actual_value": "-None-", "display_value": "-None-"},
             {"actual_value": "", "display_value": ""},
             {"actual_value": None, "display_value": None},
         )),)
-        self.assertEqual(ramo_options(), (("Autos", "Autos"), ("Vida", "Vida")))
+        self.assertEqual(area_options(), (("Autos", "Autos"), ("Vida", "Vida")))
 
     @patch("email_exceptions.zoho.cached_metadata_fields")
     @patch("email_exceptions.zoho.colectivos_zoho")
-    def test_ramo_options_accepts_object_values_and_preserves_value_label(self, facade, metadata):
-        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+    def test_area_options_accepts_object_values_and_preserves_value_label(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="rea", pick_list_values=(
             SimpleNamespace(actual_value="AUTO", display_value="Automóviles"),
         )),)
-        self.assertEqual(ramo_options(), (("AUTO", "Automóviles"),))
+        self.assertEqual(area_options(), (("AUTO", "Automóviles"),))
 
     @patch("email_exceptions.zoho.cached_metadata_fields", return_value=())
     @patch("email_exceptions.zoho.colectivos_zoho")
-    def test_ramo_options_fails_closed_without_field(self, facade, metadata):
+    def test_area_options_fails_closed_without_field(self, facade, metadata):
         with self.assertRaises(ValidationError):
-            ramo_options()
+            area_options()
 
     @patch("email_exceptions.zoho.cached_metadata_fields")
     @patch("email_exceptions.zoho.colectivos_zoho")
-    def test_ramo_options_fails_closed_without_usable_values(self, facade, metadata):
-        metadata.return_value = (SimpleNamespace(api_name="Ramo", pick_list_values=(
+    def test_area_options_fails_closed_without_usable_values(self, facade, metadata):
+        metadata.return_value = (SimpleNamespace(api_name="rea", pick_list_values=(
             {"actual_value": "-None-", "display_value": "-None-"},
         )),)
         with self.assertRaises(ValidationError):
-            ramo_options()
+            area_options()
 
     @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
     @patch("email_exceptions.zoho.task_creation_available", return_value=True)
@@ -233,14 +234,26 @@ class CaseLevelZohoTaskTests(TestCase):
         publisher = Mock()
         publisher.publish_email_exception.return_value = {"record_id": "1234567890"}
         get_publisher.return_value = publisher
-        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
-        again = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        task = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
+        again = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
         payload = publisher.publish_email_exception.call_args.args[0]
-        self.assertEqual(set(payload), {"Subject", "Responsable", "Ramo", "Caso_de_excepci_n", "Observaciones"})
+        self.assertEqual(set(payload), {"Subject", "Responsable", "rea", "Caso_de_excepci_n", "Observaciones"})
+        self.assertEqual(payload["rea"], "Operaciones")
         self.assertEqual(task.pk, again.pk)
         self.assertEqual(ZohoTaskCreation.objects.filter(case=self.case).count(), 1)
         self.assertEqual(task.technical_status, "CREATED")
+        self.assertEqual(task.area, "Operaciones")
+        self.assertTrue(task.fingerprint)
         self.assertEqual(CaseActivity.objects.filter(case=self.case, event_type=CaseActivity.EventType.TASK_CREATED).count(), 1)
+        requested = CaseActivity.objects.get(case=self.case, event_type=CaseActivity.EventType.TASK_CREATE_REQUESTED)
+        self.assertEqual(requested.metadata["area"], "Operaciones")
+        self.assertNotIn("ramo", requested.metadata)
+
+    def test_case_task_form_uses_area_and_not_ramo(self):
+        form = CreateCaseTaskForm()
+        self.assertEqual(set(form.fields), {"responsible", "area"})
+        self.assertTrue(form.fields["responsible"].required)
+        self.assertTrue(form.fields["area"].required)
 
     @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
     @patch("email_exceptions.zoho.task_creation_available", return_value=True)
@@ -249,8 +262,8 @@ class CaseLevelZohoTaskTests(TestCase):
         publisher = Mock()
         publisher.publish_email_exception.side_effect = TaskPublicationUncertain("uncertain")
         get_publisher.return_value = publisher
-        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
-        create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        task = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
+        create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
         task.refresh_from_db()
         self.assertEqual(task.technical_status, "RECONCILE")
         publisher.publish_email_exception.assert_called_once()
@@ -266,16 +279,16 @@ class CaseLevelZohoTaskTests(TestCase):
 
     @override_settings(DEBUG=True, RUNNING_TESTS=True, TOOLS_ACCESS_MODE="local_public")
     @patch("email_exceptions.views.create_case_task")
-    @patch("email_exceptions.views.ramo_options", return_value=(("Arrendamiento", "Arrendamiento"),))
+    @patch("email_exceptions.views.area_options", return_value=(("Operaciones", "Operaciones"),))
     @patch("email_exceptions.views.responsible_options", return_value=(SimpleNamespace(actual_value="ana", display_value="Ana"),))
     @patch("email_exceptions.views.task_creation_available", return_value=True)
     def test_case_endpoint_is_post_only_and_validates_catalog_choices(self, available, responsables, ramos, publish):
         self.user.user_permissions.add(Permission.objects.get(content_type__app_label="email_exceptions", codename="operate_email_exceptions"))
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(f"/operaciones/excepciones-correo/casos/{self.case.pk}/create-task/").status_code, 405)
-        response = self.client.post(f"/operaciones/excepciones-correo/casos/{self.case.pk}/create-task/", {"responsible": "ana", "ramo": "Arrendamiento"})
+        response = self.client.post(f"/operaciones/excepciones-correo/casos/{self.case.pk}/create-task/", {"responsible": "ana", "area": "Operaciones"})
         self.assertEqual(response.status_code, 302)
-        publish.assert_called_once_with(case=self.case, actor=self.user, responsible="ana", ramo="Arrendamiento")
+        publish.assert_called_once_with(case=self.case, actor=self.user, responsible="ana", area="Operaciones")
 
     @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
     @patch("email_exceptions.zoho.task_creation_available", return_value=True)
@@ -284,7 +297,7 @@ class CaseLevelZohoTaskTests(TestCase):
         publisher = Mock()
         publisher.publish_email_exception.side_effect = RuntimeError("rejected")
         get_publisher.return_value = publisher
-        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        task = create_case_task(case=self.case, responsible="Ana", area="Operaciones", actor=self.user)
         task.refresh_from_db()
         self.assertEqual(task.technical_status, "FAILED")
         self.assertEqual(task.error_category, "RuntimeError")

@@ -28,15 +28,15 @@ def responsible_options():
     return task_responsible_options(collective_only=False)
 
 
-def ramo_options():
+def area_options():
     try:
         facade = colectivos_zoho()
         field = next((item for item in cached_metadata_fields(facade, "Tasks")
-                      if str(getattr(item, "api_name", "")) == "Ramo"), None)
+                      if str(getattr(item, "api_name", "")) == "rea"), None)
     except Exception as exc:
-        raise ValidationError("No fue posible cargar los ramos confirmados de Zoho.") from exc
+        raise ValidationError("No fue posible cargar las áreas confirmadas de Zoho.") from exc
     if field is None:
-        raise ValidationError("No fue posible cargar los ramos confirmados de Zoho.")
+        raise ValidationError("No fue posible cargar las áreas confirmadas de Zoho.")
     values, seen = [], set()
     for item in getattr(field, "pick_list_values", ()) or ():
         if isinstance(item, Mapping):
@@ -51,7 +51,7 @@ def ramo_options():
             seen.add(actual)
             values.append((actual, display))
     if not values:
-        raise ValidationError("No hay ramos disponibles para seleccionar.")
+        raise ValidationError("No hay áreas disponibles para seleccionar.")
     return tuple(values)
 
 
@@ -90,8 +90,8 @@ def build_case_task_observations(case: ExceptionCase) -> str:
     return "\n".join(sections)[:2000]
 
 
-def _case_task_fingerprint(case, responsible, ramo, subject, observations):
-    payload = "|".join((case.case_key, subject, responsible, ramo, "true", observations))
+def _case_task_fingerprint(case, responsible, area, subject, observations):
+    payload = "|".join((case.case_key, subject, responsible, area, "true", observations))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -100,7 +100,7 @@ def _case_task_existing(case, *, using="default"):
     return task or ZohoTaskCreation.objects.using(using).filter(exception__case=case).first()
 
 
-def create_case_task(*, case: ExceptionCase, responsible: str, ramo: str, actor, using="default"):
+def create_case_task(*, case: ExceptionCase, responsible: str, area: str, actor, using="default"):
     """Persist a case-level intent, then publish once through the shared guard."""
     if not task_creation_available():
         raise ValidationError("La escritura de Tasks de Excepciones está deshabilitada.")
@@ -108,7 +108,7 @@ def create_case_task(*, case: ExceptionCase, responsible: str, ramo: str, actor,
     confirmation = configured_confirmation("task", profile, legacy_setting="COLECTIVOS_TASK_WRITE_CONFIRMATION")
     subject = build_case_task_subject(case)
     observations = build_case_task_observations(case)
-    fingerprint = _case_task_fingerprint(case, responsible, ramo, subject, observations)
+    fingerprint = _case_task_fingerprint(case, responsible, area, subject, observations)
     with transaction.atomic(using=using):
         locked_case = ExceptionCase.objects.using(using).select_for_update().get(pk=case.pk)
         if locked_case.scope != ExceptionCase.Scope.CASE:
@@ -119,18 +119,18 @@ def create_case_task(*, case: ExceptionCase, responsible: str, ramo: str, actor,
         if task is None:
             task = ZohoTaskCreation.objects.using(using).create(
                 case=locked_case, subject=subject, description=observations,
-                responsible=responsible, ramo=ramo, fingerprint=fingerprint,
+                responsible=responsible, area=area, fingerprint=fingerprint,
                 requested_by=actor, created_by=actor, technical_status="REQUESTED",
             )
         else:
             if task.case_id is None:
                 task.case = locked_case
             task.subject, task.description = subject, observations
-            task.responsible, task.ramo, task.fingerprint = responsible, ramo, fingerprint
+            task.responsible, task.area, task.fingerprint = responsible, area, fingerprint
             task.requested_by, task.technical_status, task.error_category = actor, "REQUESTED", ""
-            task.save(using=using, update_fields=("case", "subject", "description", "responsible", "ramo", "fingerprint", "requested_by", "technical_status", "error_category", "updated_at"))
-        CaseActivity.objects.using(using).create(case=locked_case, event_type=CaseActivity.EventType.TASK_CREATE_REQUESTED, actor=actor, metadata={"responsable": responsible, "ramo": ramo, "fingerprint": fingerprint[:12]})
-    record = {"Subject": subject, "Responsable": responsible, "Ramo": ramo, "Caso_de_excepci_n": True, "Observaciones": observations}
+            task.save(using=using, update_fields=("case", "subject", "description", "responsible", "area", "fingerprint", "requested_by", "technical_status", "error_category", "updated_at"))
+        CaseActivity.objects.using(using).create(case=locked_case, event_type=CaseActivity.EventType.TASK_CREATE_REQUESTED, actor=actor, metadata={"responsable": responsible, "area": area, "fingerprint": fingerprint[:12]})
+    record = {"Subject": subject, "Responsable": responsible, "rea": area, "Caso_de_excepci_n": True, "Observaciones": observations}
     remote_id = ""
     try:
         result = get_task_publisher(profile=profile, confirmation=confirmation, feature_flag="EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED").publish_email_exception(record)
@@ -150,7 +150,7 @@ def create_case_task(*, case: ExceptionCase, responsible: str, ramo: str, actor,
         task.task_url = f"https://crm.zoho.com/crm/tab/Tasks/{task.task_id}" if task.task_id else ""
         task.technical_status, task.error_category = status, category
         task.save(using=using, update_fields=("task_id", "task_url", "technical_status", "error_category", "updated_at"))
-        CaseActivity.objects.using(using).create(case_id=task.case_id, event_type=event, actor=actor, metadata={"responsable": responsible, "ramo": ramo, **({"task_id": task.task_id} if task.task_id else {}), **({"category": category} if category else {})})
+        CaseActivity.objects.using(using).create(case_id=task.case_id, event_type=event, actor=actor, metadata={"responsable": responsible, "area": area, **({"task_id": task.task_id} if task.task_id else {}), **({"category": category} if category else {})})
     return task
 
 

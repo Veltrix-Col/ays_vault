@@ -228,7 +228,7 @@ class ZohoTaskCreation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     technical_status = models.CharField(max_length=30, default="PENDING")
     responsible = models.CharField(max_length=120, blank=True)
-    ramo = models.CharField(max_length=120, blank=True)
+    area = models.CharField(max_length=120, blank=True)
     fingerprint = models.CharField(max_length=64, blank=True)
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="email_case_task_requests")
     error_category = models.CharField(max_length=80, blank=True)
