@@ -3,7 +3,8 @@
 ## 1. Objetivo
 
 El Banco de Herramientas separa la autenticación fuerte propia de CardManager
-del acceso heredado que recibirán SOAT, Cotización – Colectivos y el Portal
+del acceso heredado que recibirán SOAT, Cotización – Colectivos, Excepciones de
+Correo y el Portal
 desde la intranet autenticada de A&S.
 
 Esta intervención no define un token de intranet. No existe todavía una
@@ -18,6 +19,7 @@ un validador aprobado.
 | Vault/CardManager | Login CardManager | Login CardManager | Sí | Sí |
 | SOAT | Acceso directo | Acceso delegado validado | No | No |
 | Cotización – Colectivos | Acceso directo | Acceso delegado validado | No | No |
+| Excepciones de Correo | Acceso directo | Acceso delegado validado | No | No |
 | Portal | Acceso directo | Acceso delegado validado | No | No |
 
 ## 3. Clasificación cerrada
@@ -26,6 +28,8 @@ La clasificación usa la resolución de URLs de Django:
 
 - namespace `soat`;
 - namespace `cotizacion_colectivos`;
+- namespace `email_exceptions` para la UI humana (su inbound M2M está
+  explícitamente excluido);
 - nombre exacto `public_home` para el Portal.
 
 No se usan coincidencias parciales de paths, parámetros, `Referer`, `Origin`,
@@ -107,6 +111,12 @@ tokens firmados temporales, anti-IDOR, perfil Sandbox fijo y solo lectura.
 
 El acceso a Portal, SOAT o Colectivos no autentica un usuario Django, no crea
 una sesión segura Vault y no marca MFA como completado.
+
+Excepciones de Correo consume el mismo gate heredado. En local, el gate
+`local_public` permite la lectura de la herramienta solo con `DEBUG=true` o
+durante tests; sus acciones mutables conservan sus controles funcionales.
+En Production, la validación SSO confiable es la autoridad de acceso y no se
+requieren permisos, grupos ni perfiles de Vault para entrar.
 
 ## 8. Logs
 

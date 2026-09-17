@@ -94,19 +94,21 @@ Recibir correos de buzones configurados, conservarlos para auditoría, clasifica
 
 Power Automate transporta el JSON a `POST /operaciones/excepciones-correo/api/inbound/`. Django valida el token, persiste `InboundEmail`, clasifica mediante `email_exceptions.services.classify_inbound_email`, crea `EmailException` cuando corresponde y registra `EmailAuditEvent`. La unicidad `source_mailbox + external_message_id` hace seguro el reintento.
 
-## Acceso humano y roles del módulo
+## Acceso humano y acciones del módulo
 
-La UI requiere el acceso delegado SSO validado por `TrustedIntranetAccessMiddleware` y, por separado, un permiso Django asignado a la identidad provisionada para ese subject. SSO por sí solo no concede acceso funcional. `VIEWER` (`view_email_exceptions_operational`) permite consultar la bandeja por `ExceptionCase`, sus mensajes, cuerpos y trazabilidad; `OPERATOR` (`operate_email_exceptions`) incluye VIEWER y permite las acciones existentes. No se asignan roles de Vault ni se infiere autorización desde correo, dominio, organización, headers o datos del request.
+La UI pertenece a las herramientas internas generales y reutiliza el acceso
+heredado de Intranet aplicado por `TrustedIntranetAccessMiddleware`. En
+Production, un contexto SSO validado permite entrar sin `UserProfile` de Vault,
+roles Card Manager, grupos manuales ni permisos Django específicos del módulo.
+En local, `local_public` permite el acceso de lectura únicamente con
+`DEBUG=true` o durante tests, siguiendo el mismo gate general.
 
-Después de que la identidad haya sido provisionada por un acceso SSO válido, un administrador con acceso al entorno puede otorgar o revocar el permiso desde la consola del servidor:
-
-```shell
-python manage.py email_exceptions_access --subject "subject-sso-exacto" --role viewer
-python manage.py email_exceptions_access --subject "subject-sso-exacto" --role operator
-python manage.py email_exceptions_access --subject "subject-sso-exacto" --role none
-```
-
-El comando solo localiza un `IntranetPrincipal` activo por subject exacto normalizado y administra los grupos propios `Email Exceptions Viewer` y `Email Exceptions Operator`; no modifica roles ni permisos de Vault. Revocar usa `--role none`. Los endpoints de mutación mantienen POST y CSRF, y crear Task conserva además todos los guards del publisher Zoho y el guard específico del módulo.
+El acceso a la herramienta no elimina los controles de las acciones: las
+mutaciones siguen siendo POST con CSRF y validaciones funcionales; las acciones
+operativas requieren una identidad activa y el contexto/permiso operativo que
+corresponda. No se asignan roles de Vault ni se infiere autorización desde
+correo, dominio, organización, headers o datos del request. El antiguo comando
+de administración de permisos del módulo ya no forma parte del proyecto.
 
 ## Payload
 
@@ -164,11 +166,11 @@ La persistencia está dentro de `transaction.atomic(using=...)`. La evidencia se
 
 `ExceptionCase.status` conserva `PENDING` únicamente por compatibilidad histórica; no se usa como destino de nuevas transiciones. Los nuevos casos nacen en `OPEN`. El flujo operativo permitido es `OPEN → IN_PROGRESS/WAITING`, `IN_PROGRESS → WAITING/RESOLVED`, `WAITING → IN_PROGRESS/RESOLVED`, `RESOLVED → CLOSED/IN_PROGRESS` y `CLOSED → IN_PROGRESS`. La transición desde `PENDING` a `IN_PROGRESS` es la única salida legacy permitida. Resolver exige motivo; reabrir exige motivo y limpia `resolved_at`, que representa la resolución actual. Cerrar registra `closed_at` y solo es posible desde `RESOLVED`.
 
-Las transiciones se ejecutan mediante `email_exceptions.case_workflow.transition_case`, que valida `operate_email_exceptions`, recupera el caso con bloqueo de fila dentro de `transaction.atomic(using=...)` y crea `CaseActivity` en la misma transacción. `CaseActivity` es auditoría del ciclo de vida y no reemplaza `CaseMessage` (comunicaciones) ni `EmailAuditEvent` (acciones de una excepción). F.1 no registra automáticamente `CASE_CREATED` durante ingestión ni modifica la correlación; la llegada de correos sobre casos `RESOLVED` o `CLOSED` conserva la política actual y queda pendiente de una fase posterior.
+Las transiciones se ejecutan mediante `email_exceptions.case_workflow.transition_case`, que valida el contexto operativo (SSO heredado confiable o permiso local `operate_email_exceptions`), recupera el caso con bloqueo de fila dentro de `transaction.atomic(using=...)` y crea `CaseActivity` en la misma transacción. `CaseActivity` es auditoría del ciclo de vida y no reemplaza `CaseMessage` (comunicaciones) ni `EmailAuditEvent` (acciones de una excepción). F.1 no registra automáticamente `CASE_CREATED` durante ingestión ni modifica la correlación; la llegada de correos sobre casos `RESOLVED` o `CLOSED` conserva la política actual y queda pendiente de una fase posterior.
 
 ### Gestión operativa — Fase F.2
 
-Cada `ExceptionCase` puede tener un responsable Django (`assigned_to`/`assigned_at`) y datos de seguimiento (`next_action` de hasta 500 caracteres y `follow_up_at`). Solo usuarios activos con el permiso efectivo `email_exceptions.operate_email_exceptions` aparecen como responsables asignables. La toma, asignación, reasignación y desasignación son acciones explícitas y no cambian el estado del caso.
+Cada `ExceptionCase` puede tener un responsable Django (`assigned_to`/`assigned_at`) y datos de seguimiento (`next_action` de hasta 500 caracteres y `follow_up_at`). Solo usuarios activos aparecen como responsables asignables. La toma, asignación, reasignación y desasignación son acciones explícitas y no cambian el estado del caso; ejecutarlas requiere el contexto operativo validado o el permiso local correspondiente.
 
 `assign_case`, `take_case`, `unassign_case`, `update_case_follow_up` y `add_case_note` viven en `case_workflow.py`, usan `transaction.atomic(using=...)` y bloqueo de fila. Las actividades `ASSIGNED`, `REASSIGNED`, `UNASSIGNED`, `FOLLOW_UP_UPDATED` y `NOTE_ADDED` se guardan junto con la mutación. Las notas internas son append-only, tienen un máximo de 4.000 caracteres y no son correos, `CaseMessage`, tareas Zoho ni envíos externos.
 
