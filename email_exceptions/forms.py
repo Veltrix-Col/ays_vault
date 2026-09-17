@@ -26,3 +26,8 @@ class CreateTaskForm(forms.Form):
     subject = forms.CharField(max_length=255)
     due_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     description = forms.CharField(widget=forms.Textarea)
+
+
+class CreateCaseTaskForm(forms.Form):
+    responsible = forms.ChoiceField(required=True, label="Responsable")
+    ramo = forms.ChoiceField(required=True, label="Ramo")

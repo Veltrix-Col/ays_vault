@@ -44,7 +44,7 @@ ALLOWED_TASK_FIELDS = CONFIRMED_TASK_FIELDS
 TEST_TASK_ALLOWED_FIELDS = CONFIRMED_TASK_FIELDS
 EMAIL_EXCEPTION_TASK_FIELDS = frozenset({
     "Subject", "tipo_de_solicitud", "Caso_de_excepci_n", "Motivo_de_excepci_n",
-    "rea", "Observaciones", "Responsable", "Fecha_de_vencimiento",
+    "rea", "Observaciones", "Responsable", "Ramo", "Fecha_de_vencimiento",
 })
 SANDBOX_WRITE_CONFIRMATION = "SANDBOX_TASK_WRITE"
 PRODUCTION_WRITE_CONFIRMATION = "PRODUCTION_TASK_WRITE"
@@ -288,7 +288,12 @@ class GuardedTaskPublisher:
         self, record: Mapping[str, object], *, allowed_fields: frozenset[str] = ALLOWED_TASK_FIELDS,
     ) -> Mapping[str, object]:
         normalized = dict(record)
-        if not BASE_TASK_FIELDS.issubset(normalized) or set(normalized) - allowed_fields:
+        required_fields = (
+            frozenset({"Subject", "Responsable", "Ramo", "Caso_de_excepci_n", "Observaciones"})
+            if allowed_fields == EMAIL_EXCEPTION_TASK_FIELDS and "tipo_de_solicitud" not in normalized
+            else BASE_TASK_FIELDS
+        )
+        if not required_fields.issubset(normalized) or set(normalized) - allowed_fields:
             raise ValidationError("El payload Tasks no coincide con el contrato autorizado.")
         try:
             # La fachada vuelve a comprobar write_enabled antes de construir el POST.

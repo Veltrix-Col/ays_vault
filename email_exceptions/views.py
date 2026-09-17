@@ -11,12 +11,12 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from .forms import CaseFollowUpForm, CaseNoteForm, CreateTaskForm, IgnoreExceptionForm
-from .models import CaseActivity, CaseMessage, EmailAuditEvent, EmailException, ExceptionCase
+from .forms import CaseFollowUpForm, CaseNoteForm, CreateCaseTaskForm, CreateTaskForm, IgnoreExceptionForm
+from .models import CaseActivity, CaseMessage, EmailAuditEvent, EmailException, ExceptionCase, ZohoTaskCreation
 from .case_workflow import CaseOperationError, CaseTransitionError, add_case_note, assign_case, get_assignable_operators, take_case, transition_case, unassign_case, update_case_follow_up
 from .permissions import can_operate, can_view
 from .services import ingest_payload, record_audit
-from .zoho import create_exception_task, responsible_options, task_creation_available
+from .zoho import create_case_task, create_exception_task, ramo_options, responsible_options, task_creation_available
 
 logger = logging.getLogger("email_exceptions")
 
@@ -337,6 +337,20 @@ def case_detail(request, pk):
         ),
         pk=pk,
     )
+    case_task = ZohoTaskCreation.objects.filter(case=case).first() or ZohoTaskCreation.objects.filter(exception__case=case).first()
+    case_task_form = CreateCaseTaskForm()
+    case_task_available = bool(
+        can_operate(getattr(request, "user", None))
+        and task_creation_available()
+        and (not case_task or case_task.technical_status == "FAILED")
+    )
+    if case_task_available:
+        try:
+            case_task_form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options()]
+            case_task_form.fields["ramo"].choices = ramo_options()
+        except Exception:
+            case_task_form.fields["responsible"].choices = ()
+            case_task_form.fields["ramo"].choices = ()
     task_actions = {
         item.pk: _task_action_available(request, item)
         for item in case.exceptions.all()
@@ -420,7 +434,36 @@ def case_detail(request, pk):
         "assignable_operators": get_assignable_operators() if can_operate(getattr(request, "user", None)) else (),
         "follow_up_form": CaseFollowUpForm(initial={"next_action": case.next_action, "follow_up_at": case.follow_up_at}),
         "note_form": CaseNoteForm(),
+        "case_task": case_task,
+        "case_task_form": case_task_form,
+        "case_task_available": case_task_available,
     })
+
+
+@require_POST
+def create_case_task_view(request, pk):
+    if not can_operate(getattr(request, "user", None)):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+    case = get_object_or_404(ExceptionCase, pk=pk)
+    if not task_creation_available():
+        messages.error(request, "La creación de Tasks no está habilitada para este usuario o perfil.")
+        return redirect("email_exceptions:case_detail", pk=pk)
+    form = CreateCaseTaskForm(request.POST)
+    try:
+        form.fields["responsible"].choices = [(item.actual_value, item.display_value) for item in responsible_options()]
+        form.fields["ramo"].choices = ramo_options()
+    except Exception:
+        form.add_error(None, "No fue posible cargar los catálogos autorizados de Zoho.")
+    if not form.is_valid():
+        messages.error(request, "Seleccione un Responsable y un Ramo válidos.")
+        return redirect("email_exceptions:case_detail", pk=pk)
+    try:
+        task = create_case_task(case=case, actor=request.user, **form.cleaned_data)
+    except Exception:
+        messages.error(request, "No fue posible registrar la Task Zoho. Revise el estado del expediente.")
+    else:
+        messages.success(request, "Solicitud de Task registrada para el caso.")
+    return redirect("email_exceptions:case_detail", pk=pk)
 
 
 @require_POST

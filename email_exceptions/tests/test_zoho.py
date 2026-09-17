@@ -7,9 +7,9 @@ from django.contrib.auth.models import Permission
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from email_exceptions.models import EmailException, InboundEmail, ZohoTaskCreation
-from email_exceptions.zoho import create_exception_task
-from cotizacion_colectivos.services.task_publisher import PRODUCTION_WRITE_CONFIRMATION
+from email_exceptions.models import CaseActivity, CaseMessage, EmailException, ExceptionCase, InboundEmail, ZohoTaskCreation
+from email_exceptions.zoho import build_case_task_observations, build_case_task_subject, create_case_task, create_exception_task
+from cotizacion_colectivos.services.task_publisher import PRODUCTION_WRITE_CONFIRMATION, TaskPublicationUncertain
 
 
 class EmailExceptionZohoTests(TestCase):
@@ -26,6 +26,14 @@ class EmailExceptionZohoTests(TestCase):
             event_type="COMPROBANTE_PAGO", exception_reason="Revisar pago.",
             status=EmailException.PENDING,
         )
+
+    def case_for_task(self):
+        now = timezone.now()
+        case = ExceptionCase.objects.create(case_key="claim:TASK-1", organization="BEMSA", family="CARTERA", event_type="PAGO", opened_at=now, last_activity_at=now)
+        CaseMessage.objects.create(case=case, email=self.exception.primary_email, role=CaseMessage.Role.OPENING, correlation_method=CaseMessage.CorrelationMethod.NEW_CASE, correlation_confidence=CaseMessage.CorrelationConfidence.LOW, correlation_reason="new")
+        self.exception.case = case
+        self.exception.save(update_fields=("case",))
+        return case
 
     @override_settings(
         EMAIL_EXCEPTIONS_ENABLED=True,
@@ -168,3 +176,79 @@ class EmailExceptionZohoTests(TestCase):
         response = self.client.get("/operaciones/excepciones-correo/1/")
         self.assertEqual(response.status_code, 200)
         create_task.assert_not_called()
+
+
+class CaseLevelZohoTaskTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="case-operator", password="safe-password-123")
+        now = timezone.now()
+        self.email = InboundEmail.objects.create(source_mailbox="comunicaciones@segurosays.com", external_message_id="case-task-1", received_at=now, subject="Revisar comprobante")
+        self.case = ExceptionCase.objects.create(case_key="claim:CASE-TASK", organization="BEMSA", family="CARTERA", event_type="COMPROBANTE_PAGO", opened_at=now, last_activity_at=now, next_action="Solicitar soporte")
+        CaseMessage.objects.create(case=self.case, email=self.email, role=CaseMessage.Role.OPENING, correlation_method=CaseMessage.CorrelationMethod.NEW_CASE, correlation_confidence=CaseMessage.CorrelationConfidence.LOW, correlation_reason="new")
+        self.exception = EmailException.objects.create(primary_email=self.email, case=self.case, last_subject=self.email.subject, exception_reason="Validar comprobante", status=EmailException.PENDING)
+
+    def settings(self):
+        return dict(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
+
+    @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
+    @patch("email_exceptions.zoho.task_creation_available", return_value=True)
+    @patch("email_exceptions.zoho.get_task_publisher")
+    def test_case_task_uses_minimal_payload_and_is_idempotent(self, get_publisher, available):
+        publisher = Mock()
+        publisher.publish_email_exception.return_value = {"record_id": "1234567890"}
+        get_publisher.return_value = publisher
+        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        again = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        payload = publisher.publish_email_exception.call_args.args[0]
+        self.assertEqual(set(payload), {"Subject", "Responsable", "Ramo", "Caso_de_excepci_n", "Observaciones"})
+        self.assertEqual(task.pk, again.pk)
+        self.assertEqual(ZohoTaskCreation.objects.filter(case=self.case).count(), 1)
+        self.assertEqual(task.technical_status, "CREATED")
+        self.assertEqual(CaseActivity.objects.filter(case=self.case, event_type=CaseActivity.EventType.TASK_CREATED).count(), 1)
+
+    @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
+    @patch("email_exceptions.zoho.task_creation_available", return_value=True)
+    @patch("email_exceptions.zoho.get_task_publisher")
+    def test_uncertain_result_requires_reconciliation_and_does_not_retry(self, get_publisher, available):
+        publisher = Mock()
+        publisher.publish_email_exception.side_effect = TaskPublicationUncertain("uncertain")
+        get_publisher.return_value = publisher
+        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        task.refresh_from_db()
+        self.assertEqual(task.technical_status, "RECONCILE")
+        publisher.publish_email_exception.assert_called_once()
+        self.assertTrue(CaseActivity.objects.filter(case=self.case, event_type=CaseActivity.EventType.TASK_RECONCILE_REQUIRED).exists())
+
+    def test_builders_are_plain_text_and_bounded(self):
+        self.email.subject = "<script>alert(1)</script>" + "x" * 300
+        self.email.save(update_fields=("subject",))
+        self.assertLessEqual(len(build_case_task_subject(self.case)), 255)
+        observations = build_case_task_observations(self.case)
+        self.assertLessEqual(len(observations), 2000)
+        self.assertNotIn("<script>", observations)
+
+    @override_settings(DEBUG=True, RUNNING_TESTS=True, TOOLS_ACCESS_MODE="local_public")
+    @patch("email_exceptions.views.create_case_task")
+    @patch("email_exceptions.views.ramo_options", return_value=(("Arrendamiento", "Arrendamiento"),))
+    @patch("email_exceptions.views.responsible_options", return_value=(SimpleNamespace(actual_value="ana", display_value="Ana"),))
+    @patch("email_exceptions.views.task_creation_available", return_value=True)
+    def test_case_endpoint_is_post_only_and_validates_catalog_choices(self, available, responsables, ramos, publish):
+        self.user.user_permissions.add(Permission.objects.get(content_type__app_label="email_exceptions", codename="operate_email_exceptions"))
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(f"/operaciones/excepciones-correo/casos/{self.case.pk}/create-task/").status_code, 405)
+        response = self.client.post(f"/operaciones/excepciones-correo/casos/{self.case.pk}/create-task/", {"responsible": "ana", "ramo": "Arrendamiento"})
+        self.assertEqual(response.status_code, 302)
+        publish.assert_called_once_with(case=self.case, actor=self.user, responsible="ana", ramo="Arrendamiento")
+
+    @override_settings(EMAIL_EXCEPTIONS_ZOHO_TASK_WRITE_ENABLED=True, ZOHO_ACTIVE_PROFILE="sandbox", ZOHO_SANDBOX_WRITE_ENABLED=True, COLECTIVOS_TASK_PUBLISH_ENABLED=True)
+    @patch("email_exceptions.zoho.task_creation_available", return_value=True)
+    @patch("email_exceptions.zoho.get_task_publisher")
+    def test_certain_rejection_is_failed_and_retryable(self, get_publisher, available):
+        publisher = Mock()
+        publisher.publish_email_exception.side_effect = RuntimeError("rejected")
+        get_publisher.return_value = publisher
+        task = create_case_task(case=self.case, responsible="Ana", ramo="Arrendamiento", actor=self.user)
+        task.refresh_from_db()
+        self.assertEqual(task.technical_status, "FAILED")
+        self.assertEqual(task.error_category, "RuntimeError")

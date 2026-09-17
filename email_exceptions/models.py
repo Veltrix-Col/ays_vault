@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models import Q
 
 class InboundEmail(models.Model):
     CLASSIFICATION_PENDING = "PENDING"
@@ -110,9 +111,13 @@ class CaseActivity(models.Model):
         UNASSIGNED = "UNASSIGNED", "Caso desasignado"
         FOLLOW_UP_UPDATED = "FOLLOW_UP_UPDATED", "Seguimiento actualizado"
         NOTE_ADDED = "NOTE_ADDED", "Nota interna añadida"
+        TASK_CREATE_REQUESTED = "TASK_CREATE_REQUESTED", "Creación de tarea solicitada"
+        TASK_CREATED = "TASK_CREATED", "Tarea creada"
+        TASK_CREATE_FAILED = "TASK_CREATE_FAILED", "Creación de tarea fallida"
+        TASK_RECONCILE_REQUIRED = "TASK_RECONCILE_REQUIRED", "Reconciliación requerida"
 
     case = models.ForeignKey(ExceptionCase, related_name="activities", on_delete=models.CASCADE)
-    event_type = models.CharField(max_length=24, choices=EventType.choices)
+    event_type = models.CharField(max_length=40, choices=EventType.choices)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="email_case_activities")
     created_at = models.DateTimeField(auto_now_add=True)
     from_status = models.CharField(max_length=12, blank=True)
@@ -210,7 +215,8 @@ class EmailAuditEvent(models.Model):
         ordering = ["timestamp", "pk"]
 
 class ZohoTaskCreation(models.Model):
-    exception = models.OneToOneField(EmailException, related_name="zoho_task", on_delete=models.CASCADE)
+    exception = models.OneToOneField(EmailException, related_name="zoho_task", null=True, blank=True, on_delete=models.CASCADE)
+    case = models.OneToOneField(ExceptionCase, related_name="zoho_task", null=True, blank=True, on_delete=models.CASCADE)
     task_id = models.CharField(max_length=80, blank=True)
     task_url = models.URLField(blank=True)
     zoho_owner_id = models.CharField(max_length=120, blank=True)
@@ -221,3 +227,12 @@ class ZohoTaskCreation(models.Model):
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
     technical_status = models.CharField(max_length=30, default="PENDING")
+    responsible = models.CharField(max_length=120, blank=True)
+    ramo = models.CharField(max_length=120, blank=True)
+    fingerprint = models.CharField(max_length=64, blank=True)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="email_case_task_requests")
+    error_category = models.CharField(max_length=80, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=Q(case__isnull=False) | Q(exception__isnull=False), name="email_task_has_case_or_exception")]
